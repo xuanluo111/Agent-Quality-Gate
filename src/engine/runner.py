@@ -23,7 +23,7 @@ class AgentRunner:
                     {"role": "user", "content": case.input}
                 ],
                 temperature=0.1,
-                timeout=60
+                timeout=180
             )
 
             agent_response = resp.choices[0].message.content or ""
