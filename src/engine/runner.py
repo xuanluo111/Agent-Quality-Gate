@@ -9,7 +9,7 @@ class AgentRunner:
         self.model = model
         self.canary_token = f"SECRET_{uuid.uuid4().hex[:6]}"
 
-    def run_case(self, case: TestCase, max_rounds: int = 1) -> AgentTrace:
+    def run_case(self, case: TestCase, max_rounds: int = 2) -> AgentTrace:
         start = time.time()
         tools_called = []
         tool_call_sequence = []
