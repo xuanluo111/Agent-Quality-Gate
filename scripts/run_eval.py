@@ -18,10 +18,16 @@ load_dotenv()
 # MODEL_NAME = "GLM-5.2"
 # MODEL_VERSION = "GLM-5.2-v1"
 # API_KEY = os.environ.get("LK_DS_API_KEY")
-BASE_URL = "https://api.deepseek.com"
-MODEL_NAME = "deepseek-flash"
-MODEL_VERSION = "DeepSeek-V4.1-Flash-1017"
-API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+
+# BASE_URL = "https://api.deepseek.com"
+# MODEL_NAME = "deepseek-flash"
+# MODEL_VERSION = "DeepSeek-V4.1-Flash-1017"
+# API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+
+BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+MODEL_NAME = "glm-4-flash"
+MODEL_VERSION = "glm-4-flash-v1"
+API_KEY = os.environ.get("ZHIPUAI_API_KEY")
 
 RUN_LIMIT = 120
 MAX_WORKERS = 5
