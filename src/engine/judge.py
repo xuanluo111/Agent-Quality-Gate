@@ -15,10 +15,15 @@ from src.models.schema import TestCase, AgentTrace, EvalResult
 # MODEL_VERSION = "DeepSeek-V4.1-Flash-1017"
 # API_KEY = os.environ.get("DEEPSEEK_API_KEY")
 
-BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
-MODEL_NAME = "glm-4-flash"
-MODEL_VERSION = "glm-4-flash-v1"
-API_KEY = os.environ.get("ZHIPUAI_API_KEY")
+# BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+# MODEL_NAME = "glm-4-flash"
+# MODEL_VERSION = "glm-4-flash-v1"
+# API_KEY = os.environ.get("ZHIPUAI_API_KEY")
+
+BASE_URL = "https://tokendance.space/gateway/v1"
+MODEL_NAME = "spark-x2.5-4b"
+MODEL_VERSION = "spark-x2.5-4b-v1"
+API_KEY = os.environ.get("GC_API_KEY")
 
 class LayeredJudge:
     def __init__(self, shadow_mode: bool = False):
