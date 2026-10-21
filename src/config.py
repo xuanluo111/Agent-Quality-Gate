@@ -1,0 +1,238 @@
+import argparse
+import os
+import re
+import subprocess
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+SUITE_PATHS = {
+    "core": "cases/core_suite.jsonl",
+    "smoke": "cases/smoke.jsonl",
+    "regression": "cases/regression.jsonl",
+}
+
+
+def _env(*names: str, default: str = "") -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    return default
+
+
+def _slug(value: str, fallback: str = "run") -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip()).strip("-._")
+    return slug[:48] or fallback
+
+
+def git_sha() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+@dataclass
+class RunConfig:
+    base_url: str = field(default_factory=lambda: _env("AQG_BASE_URL"))
+    model: str = field(default_factory=lambda: _env("AQG_MODEL"))
+    model_version: str = field(default_factory=lambda: _env("AQG_MODEL_VERSION", "AQG_MODEL", default=""))
+    api_key: str = field(default_factory=lambda: _env("AQG_API_KEY", "GC_API_KEY"))
+
+    judge_base_url: str = field(default_factory=lambda: _env("AQG_JUDGE_BASE_URL"))
+    judge_model: str = field(default_factory=lambda: _env("AQG_JUDGE_MODEL"))
+    judge_api_key: str = field(default_factory=lambda: _env("AQG_JUDGE_API_KEY"))
+
+    local_base_url: str = field(default_factory=lambda: _env("AQG_LOCAL_BASE_URL"))
+    local_model: str = field(default_factory=lambda: _env("AQG_LOCAL_MODEL"))
+    local_api_key: str = field(default_factory=lambda: _env("AQG_LOCAL_API_KEY"))
+
+    dataset: str = "cases/core_suite.jsonl"
+    limit: int = 120
+    workers: int = 5
+    mode: str = "enforce"
+    seed: int = 42
+
+    max_rounds: int = 4
+    token_budget: int = 8000
+    max_tokens: int = 1024
+    temperature: float = 0.1
+    request_timeout: int = 300
+    judge_samples: int = 2
+    jcv_threshold: float = 0.6
+
+    strict_baseline: float = 80.0
+    max_high: int = 3
+    min_valid_rate: float = 90.0
+    output_root: str = "reports/runs"
+    workspace_root: str = "workspace"
+    run_id: str = ""
+    dry_run: bool = False
+    update_regression: bool = True
+
+    def __post_init__(self) -> None:
+        self.model_version = self.model_version or self.model
+        self.judge_base_url = self.judge_base_url or self.base_url
+        self.judge_model = self.judge_model or self.model
+        self.judge_api_key = self.judge_api_key or self.api_key
+        self.local_api_key = self.local_api_key or self.api_key
+        if not self.run_id:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            self.run_id = f"{stamp}-{_slug(self.model)}"
+        self.run_id = _slug(self.run_id)
+
+    @property
+    def judge_same_as_sut(self) -> bool:
+        return self.judge_model == self.model and self.judge_base_url == self.base_url
+
+    @property
+    def has_local_route(self) -> bool:
+        return bool(self.local_base_url and self.local_model)
+
+    def validate(self) -> None:
+        if self.mode not in {"enforce", "shadow"}:
+            raise ValueError(f"未知运行模式: {self.mode}")
+        if self.limit < 0:
+            raise ValueError("limit 不能为负数")
+        if self.workers < 1:
+            raise ValueError("workers 至少为 1")
+        if self.judge_samples < 1:
+            raise ValueError("judge_samples 至少为 1")
+        if not 0 <= self.min_valid_rate <= 100:
+            raise ValueError("min_valid_rate 需在 0-100 之间（有效率百分比）")
+        if not Path(self.dataset).is_file():
+            raise FileNotFoundError(f"数据集不存在: {self.dataset}")
+        if self.dry_run:
+            return
+        if not self.base_url or not self.model or not self.api_key:
+            raise ValueError(
+                "缺少被测模型配置：请设置 AQG_BASE_URL / AQG_MODEL / AQG_API_KEY（兼容 GC_API_KEY），"
+                "或使用 --dry-run 只做数据校验。"
+            )
+        if not self.judge_base_url or not self.judge_model or not self.judge_api_key:
+            raise ValueError("缺少裁判模型配置：AQG_JUDGE_BASE_URL / AQG_JUDGE_MODEL / AQG_JUDGE_API_KEY")
+
+    def run_dir(self) -> Path:
+        return Path(self.output_root) / self.run_id
+
+    def metadata(self) -> dict:
+        return {
+            "run_id": self.run_id,
+            "model": self.model,
+            "model_version": self.model_version,
+            "base_url": self.base_url,
+            "judge_model": self.judge_model,
+            "judge_base_url": self.judge_base_url,
+            "judge_same_as_sut": self.judge_same_as_sut,
+            "local_route_configured": self.has_local_route,
+            "mode": self.mode,
+            "seed": self.seed,
+            "dataset": self.dataset,
+            "limit": self.limit,
+            "workers": self.workers,
+            "max_rounds": self.max_rounds,
+            "token_budget": self.token_budget,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "judge_samples": self.judge_samples,
+            "jcv_threshold": self.jcv_threshold,
+            "strict_baseline": self.strict_baseline,
+            "max_high": self.max_high,
+            "min_valid_rate": self.min_valid_rate,
+            "git_sha": git_sha(),
+            "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+
+def add_run_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--suite", choices=sorted(SUITE_PATHS), help="内置数据集: core/smoke/regression")
+    parser.add_argument("--dataset", help="自定义 JSONL 数据集路径")
+    parser.add_argument("--limit", type=int, default=120, help="采样条数；0 表示全量")
+    parser.add_argument("--workers", type=int, default=5)
+    parser.add_argument("--mode", choices=["enforce", "shadow"], default="enforce")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--base-url")
+    parser.add_argument("--model")
+    parser.add_argument("--model-version")
+    parser.add_argument("--judge-base-url")
+    parser.add_argument("--judge-model")
+    parser.add_argument("--judge-samples", type=int, default=2)
+    parser.add_argument("--max-rounds", type=int, default=4)
+    parser.add_argument("--token-budget", type=int, default=8000)
+    parser.add_argument("--max-tokens", type=int, default=1024)
+    parser.add_argument("--temperature", type=float, default=0.1)
+    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--jcv-threshold", type=float, default=0.6)
+    parser.add_argument("--strict-baseline", type=float, default=80.0)
+    parser.add_argument("--max-high", type=int, default=3)
+    parser.add_argument(
+        "--min-valid-rate",
+        type=float,
+        default=90.0,
+        help="可信样本占比低于此百分比时判定为数据无效（环境故障，不评模型能力）",
+    )
+    parser.add_argument("--output-root", default="reports/runs")
+    parser.add_argument("--workspace-root", default="workspace")
+    parser.add_argument("--run-id")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--no-regression", action="store_true", help="本轮不把失败用例追加到 regression.jsonl")
+
+
+def config_from_args(args: argparse.Namespace) -> RunConfig:
+    if args.suite and args.dataset:
+        raise SystemExit("--suite 与 --dataset 只能二选一")
+    dataset = SUITE_PATHS.get(args.suite) if args.suite else args.dataset
+    config = RunConfig(dataset=dataset or "cases/core_suite.jsonl")
+    for attr in (
+        "limit",
+        "workers",
+        "mode",
+        "seed",
+        "max_rounds",
+        "token_budget",
+        "max_tokens",
+        "temperature",
+        "judge_samples",
+        "jcv_threshold",
+        "strict_baseline",
+        "max_high",
+        "min_valid_rate",
+        "output_root",
+        "workspace_root",
+        "dry_run",
+    ):
+        value = getattr(args, attr, None)
+        if value is not None:
+            setattr(config, attr, value)
+    config.request_timeout = args.timeout
+    config.update_regression = not args.no_regression
+    for attr in ("base_url", "model", "model_version", "judge_base_url", "judge_model"):
+        value = getattr(args, attr, None)
+        if value:
+            setattr(config, attr, value)
+    if args.model and not args.model_version:
+        config.model_version = args.model
+    if args.run_id:
+        config.run_id = args.run_id
+    config.__post_init__()
+    return config
+
+
+def config_as_dict(config: RunConfig) -> dict:
+    data = asdict(config)
+    for secret in ("api_key", "judge_api_key", "local_api_key"):
+        data[secret] = "***" if data.get(secret) else ""
+    return data

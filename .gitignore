@@ -1,6 +1,26 @@
 .env
+models.json
+.venv/
 __pycache__/
-*.pyc
-reports/*.json
-reports/*.md
+*.py[cod]
+.DS_Store
 .pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# 本地沙箱与运行产物
+workspace/
+reports/runs/
+reports/batch-*/
+reports/charts/
+reports/partial_results*.jsonl
+reports/latest.md
+reports/observability.json
+
+# 本地数据备份包，不入库
+.reports-backup-*.zip
+
+# 重判临时目录：备份与运行日志
+.rejudge_backup/
+.rejudge_logs/

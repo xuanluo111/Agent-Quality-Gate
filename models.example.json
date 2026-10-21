@@ -1,0 +1,38 @@
+{
+  "defaults": {
+    "suite": "core",
+    "limit": 120,
+    "workers": 3,
+    "judge_samples": 2,
+    "min_valid_rate": 90,
+    "max_tokens": 4096,
+    "token_budget": 24000,
+    "base_url": "https://your-openai-compatible-endpoint/v1",
+    "api_key_env": "AQG_API_KEY"
+  },
+  "models": [
+    {
+      "name": "model-a",
+      "model": "model-a"
+    },
+    {
+      "name": "model-b",
+      "model": "model-b",
+      "base_url": "https://another-endpoint/v1"
+    },
+    {
+      "note": "预算对照：同一模型放宽轮次，用来区分「预算太紧导致没收尾」和「模型真的不合规」",
+      "name": "model-a-wide-budget",
+      "model": "model-a",
+      "max_rounds": 8,
+      "token_budget": 16000
+    },
+    {
+      "note": "推理型模型：思维链会先吃满 max_tokens，沿用 1024 会导致正文一个字都拿不到，被判成 Output_Truncated 不可信样本",
+      "name": "model-a-reasoning",
+      "model": "model-a",
+      "max_tokens": 8192,
+      "token_budget": 32000
+    }
+  ]
+}
