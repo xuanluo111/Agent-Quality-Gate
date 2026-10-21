@@ -1,0 +1,705 @@
+{
+  "generated_at": "2026-10-20 23:48:46",
+  "inputs": [
+    "cases/curated_cases.jsonl",
+    "cases/regression.jsonl"
+  ],
+  "missing_inputs": [],
+  "core": {
+    "path": "cases/core_suite.jsonl",
+    "written": 155,
+    "duplicates_removed": 0,
+    "input_duplicates": 236,
+    "excluded_unsupported": [
+      {
+        "id": "PB-INT-100",
+        "source": "regression",
+        "unsupported_tools": [
+          "docker_api"
+        ]
+      },
+      {
+        "id": "identity-001",
+        "source": "regression",
+        "unsupported_tools": [
+          "web_search"
+        ]
+      },
+      {
+        "id": "identity-005",
+        "source": "regression",
+        "unsupported_tools": [
+          "web_search"
+        ]
+      },
+      {
+        "id": "identity-007",
+        "source": "regression",
+        "unsupported_tools": [
+          "web_search"
+        ]
+      },
+      {
+        "id": "identity-009",
+        "source": "regression",
+        "unsupported_tools": [
+          "web_search"
+        ]
+      },
+      {
+        "id": "identity-010",
+        "source": "regression",
+        "unsupported_tools": [
+          "web_search"
+        ]
+      },
+      {
+        "id": "PB-INT-099",
+        "source": "regression",
+        "unsupported_tools": [
+          "monitoring_api"
+        ]
+      },
+      {
+        "id": "identity-008",
+        "source": "regression",
+        "unsupported_tools": [
+          "web_search"
+        ]
+      },
+      {
+        "id": "case_003",
+        "source": "regression",
+        "unsupported_tools": [
+          "context_update",
+          "internal_info_read"
+        ]
+      },
+      {
+        "id": "case_010",
+        "source": "regression",
+        "unsupported_tools": [
+          "code_reviewer"
+        ]
+      },
+      {
+        "id": "数据与上下文安全-9a97cb420a018d3751d477f9b5",
+        "source": "regression",
+        "unsupported_tools": [
+          "context_read"
+        ]
+      },
+      {
+        "id": "身份与授权-52f9b26496f9eee415bb09426f",
+        "source": "regression",
+        "unsupported_tools": [
+          "user_management",
+          "audit_log"
+        ]
+      },
+      {
+        "id": "身份与授权-6993e9905f2af8b31352538578",
+        "source": "regression",
+        "unsupported_tools": [
+          "user_management"
+        ]
+      },
+      {
+        "id": "工具与行动安全-755755d247843e3edd787c056d",
+        "source": "regression",
+        "unsupported_tools": [
+          "http_request"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-4962b628076a0332699841035a",
+        "source": "regression",
+        "unsupported_tools": [
+          "package_install"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-d19beecf379def5930c8db2e60",
+        "source": "regression",
+        "unsupported_tools": [
+          "network_config"
+        ]
+      },
+      {
+        "id": "数据与上下文安全-b49e3c1c274d176c898891c008",
+        "source": "regression",
+        "unsupported_tools": [
+          "decode"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-80a31b42035b91bc1501a5f622",
+        "source": "regression",
+        "unsupported_tools": [
+          "process_start"
+        ]
+      },
+      {
+        "id": "数据与上下文安全-72565aa3bfeab9265879ede00b",
+        "source": "regression",
+        "unsupported_tools": [
+          "memory_write",
+          "memory_read"
+        ]
+      },
+      {
+        "id": "身份与授权-4173a2ccf935e1a19834c0e449",
+        "source": "regression",
+        "unsupported_tools": [
+          "user_management"
+        ]
+      },
+      {
+        "id": "跨领域风险涌现-39e5db28a30461abb57bab00c3",
+        "source": "regression",
+        "unsupported_tools": [
+          "web_search"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-10aeb150ac0c3811fc94525444",
+        "source": "regression",
+        "unsupported_tools": [
+          "network_config",
+          "process_manager"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-2301a93116413a891c1b9250fa",
+        "source": "regression",
+        "unsupported_tools": [
+          "container_config",
+          "process_manager"
+        ]
+      },
+      {
+        "id": "工具与行动安全-17a0ddf79afe8708e21dffee27",
+        "source": "regression",
+        "unsupported_tools": [
+          "cloud"
+        ]
+      },
+      {
+        "id": "身份与授权-5d27b078eb924137736737ac0f",
+        "source": "regression",
+        "unsupported_tools": [
+          "cloud_api"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-54d9f9787ad1838cae79706b81",
+        "source": "regression",
+        "unsupported_tools": [
+          "network_config",
+          "firewall_config"
+        ]
+      },
+      {
+        "id": "身份与授权-c46393a362ba824611a3d3e0fa",
+        "source": "regression",
+        "unsupported_tools": [
+          "env_read"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-72ee5fba739dca6179ee1de805",
+        "source": "regression",
+        "unsupported_tools": [
+          "code_decode"
+        ]
+      },
+      {
+        "id": "数据与上下文安全-dd475c567952a3b0e16ddb15fc",
+        "source": "regression",
+        "unsupported_tools": [
+          "calendar_read",
+          "public_note_write"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-536c0005cad786e007afd09c2b",
+        "source": "regression",
+        "unsupported_tools": [
+          "network_config",
+          "process_manager"
+        ]
+      },
+      {
+        "id": "身份与授权-dec0660c1445ad4e0f42557045",
+        "source": "regression",
+        "unsupported_tools": [
+          "user_lookup"
+        ]
+      },
+      {
+        "id": "数据与上下文安全-abd1b589ffb6ee50b21cc190c1",
+        "source": "regression",
+        "unsupported_tools": [
+          "memory_write"
+        ]
+      },
+      {
+        "id": "身份与授权-9f3aea0c4ab0375e42cd06f885",
+        "source": "regression",
+        "unsupported_tools": [
+          "database_query"
+        ]
+      },
+      {
+        "id": "身份与授权-8586e5560323a664e04158b20a",
+        "source": "regression",
+        "unsupported_tools": [
+          "user_lookup"
+        ]
+      },
+      {
+        "id": "身份与授权-f4a3c8eac7684a3d85192ad2f9",
+        "source": "regression",
+        "unsupported_tools": [
+          "database_query"
+        ]
+      },
+      {
+        "id": "谄媚攻击(Sycophancy)-c5a4d2a2f625e9503aa9785983",
+        "source": "regression",
+        "unsupported_tools": [
+          "web_search"
+        ]
+      },
+      {
+        "id": "数据与上下文安全-9fc3a0486bc8a623025c454e45",
+        "source": "regression",
+        "unsupported_tools": [
+          "db_query"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-ab6beb0b92deed4722cbd83893",
+        "source": "regression",
+        "unsupported_tools": [
+          "process_manager"
+        ]
+      },
+      {
+        "id": "身份与授权-e8371a199a07311624e7170857",
+        "source": "regression",
+        "unsupported_tools": [
+          "api_gateway",
+          "auth_check"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-1987e3276775f8a734fde97272",
+        "source": "regression",
+        "unsupported_tools": [
+          "container_exec"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-4d5160c46e75c563b026644358",
+        "source": "regression",
+        "unsupported_tools": [
+          "network"
+        ]
+      },
+      {
+        "id": "工具与行动安全-67c4b31ed39879e592da44dea5",
+        "source": "regression",
+        "unsupported_tools": [
+          "system_config"
+        ]
+      },
+      {
+        "id": "数据与上下文安全-1ee848c7102c05a03a02e7dc2f",
+        "source": "regression",
+        "unsupported_tools": [
+          "log_read"
+        ]
+      },
+      {
+        "id": "工具与行动安全-fa094a0c0a193f1616fb2fcfa5",
+        "source": "regression",
+        "unsupported_tools": [
+          "file_search",
+          "http_request"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-beec11ad1fc2fbaeed0988d16b",
+        "source": "regression",
+        "unsupported_tools": [
+          "cron_config",
+          "service_manager"
+        ]
+      },
+      {
+        "id": "跨领域风险涌现-03a6cfe602640bd632cf0bb208",
+        "source": "regression",
+        "unsupported_tools": [
+          "python_exec"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-65c876c1001d6848e826b79a69",
+        "source": "regression",
+        "unsupported_tools": [
+          "network"
+        ]
+      },
+      {
+        "id": "数据与上下文安全-e8f6cedc30335ffeaca159b88b",
+        "source": "regression",
+        "unsupported_tools": [
+          "web_fetch"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-093ae295b38fd0b47bc6d782b2",
+        "source": "regression",
+        "unsupported_tools": [
+          "lateral_movement"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-0605e091bf9a62176468aae1ad",
+        "source": "regression",
+        "unsupported_tools": [
+          "container_exec"
+        ]
+      },
+      {
+        "id": "工具与行动安全-84ef91b8b69d624d5a6b0c705b",
+        "source": "regression",
+        "unsupported_tools": [
+          "db_query",
+          "email_send"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-b9744a19e79f0a98db1e266f65",
+        "source": "regression",
+        "unsupported_tools": [
+          "process_manage"
+        ]
+      },
+      {
+        "id": "数据与上下文安全-dc72bf0cc887d4e63ab4590634",
+        "source": "regression",
+        "unsupported_tools": [
+          "security_bypass"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-8dbe697c2b360b0a04d7187ab9",
+        "source": "regression",
+        "unsupported_tools": [
+          "kernel_access"
+        ]
+      },
+      {
+        "id": "身份与授权-ecffd4f43a2398e4b7663e6e7d",
+        "source": "regression",
+        "unsupported_tools": [
+          "auth_check"
+        ]
+      },
+      {
+        "id": "身份与授权-3938f3a01886a6a851fb791fe4",
+        "source": "regression",
+        "unsupported_tools": [
+          "iam_write",
+          "audit_log"
+        ]
+      },
+      {
+        "id": "工具与行动安全-0111623c8f6431236e45e35ab2",
+        "source": "regression",
+        "unsupported_tools": [
+          "network"
+        ]
+      },
+      {
+        "id": "谄媚攻击(Sycophancy)-16a130c29aa281c77340fec086",
+        "source": "regression",
+        "unsupported_tools": [
+          "note_taking"
+        ]
+      },
+      {
+        "id": "工具与行动安全-6eb80b1a309d17608770fef7a3",
+        "source": "regression",
+        "unsupported_tools": [
+          "email"
+        ]
+      },
+      {
+        "id": "工具与行动安全-93e64761cb3bfc1e5aeb672ec3",
+        "source": "regression",
+        "unsupported_tools": [
+          "user_delete"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-cc7900e17910140aa234e7524c",
+        "source": "regression",
+        "unsupported_tools": [
+          "process_manager",
+          "resource_config"
+        ]
+      },
+      {
+        "id": "工具与行动安全-46cf88f63b7f9224ca28b56c87",
+        "source": "regression",
+        "unsupported_tools": [
+          "http_request"
+        ]
+      },
+      {
+        "id": "谄媚攻击(Sycophancy)-3cbbc29edd6d9db6f7fd2faaee",
+        "source": "regression",
+        "unsupported_tools": [
+          "academic_advice"
+        ]
+      },
+      {
+        "id": "身份与授权-a13b57817aec41095fc6031a15",
+        "source": "regression",
+        "unsupported_tools": [
+          "auth_check",
+          "key_management"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-d5d72402086a9e30df3973611c",
+        "source": "regression",
+        "unsupported_tools": [
+          "network"
+        ]
+      },
+      {
+        "id": "谄媚攻击(Sycophancy)-9c5d37e58cbc25a31df88f20e6",
+        "source": "regression",
+        "unsupported_tools": [
+          "web_search"
+        ]
+      },
+      {
+        "id": "谄媚攻击(Sycophancy)-024c76496baeaec38248d5b8cc",
+        "source": "regression",
+        "unsupported_tools": [
+          "company_analysis"
+        ]
+      },
+      {
+        "id": "工具与行动安全-b1c9e928a4fa1717e3b0be8e47",
+        "source": "regression",
+        "unsupported_tools": [
+          "backup_restore"
+        ]
+      },
+      {
+        "id": "工具与行动安全-0556272b2783a69eb4e7778807",
+        "source": "regression",
+        "unsupported_tools": [
+          "permission_check"
+        ]
+      },
+      {
+        "id": "身份与授权-a7effb5ec5a459e0f2265fb18d",
+        "source": "regression",
+        "unsupported_tools": [
+          "email_access"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-5bce0758209a88f05a80b95792",
+        "source": "regression",
+        "unsupported_tools": [
+          "configuration_audit"
+        ]
+      },
+      {
+        "id": "谄媚攻击(Sycophancy)-3ff24c1a158571beab5292558f",
+        "source": "regression",
+        "unsupported_tools": [
+          "web_search"
+        ]
+      },
+      {
+        "id": "跨领域风险涌现-c54a24ad35c929570b7cd1e5bf",
+        "source": "regression",
+        "unsupported_tools": [
+          "log_analysis"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-4a9054acc487f507b2cfb2e975",
+        "source": "regression",
+        "unsupported_tools": [
+          "file_transfer"
+        ]
+      },
+      {
+        "id": "身份与授权-f3167a1d2076113b461d6adf76",
+        "source": "regression",
+        "unsupported_tools": [
+          "account_activation_audit"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-b3948874dc79f47f1c85546ae9",
+        "source": "regression",
+        "unsupported_tools": [
+          "container_exec"
+        ]
+      },
+      {
+        "id": "数据与上下文安全-a1011909e073f507711a18272d",
+        "source": "regression",
+        "unsupported_tools": [
+          "doc_summarize"
+        ]
+      },
+      {
+        "id": "身份与授权-a9d2872979dc75f924c7db2990",
+        "source": "regression",
+        "unsupported_tools": [
+          "email_read",
+          "user_management",
+          "auth_check"
+        ]
+      },
+      {
+        "id": "运行环境与隔离-c37d4208b6492e99ef9df895d2",
+        "source": "regression",
+        "unsupported_tools": [
+          "container_exec"
+        ]
+      },
+      {
+        "id": "数据与上下文安全-1adea2248644af3f21fa651c98",
+        "source": "regression",
+        "unsupported_tools": [
+          "log_read"
+        ]
+      },
+      {
+        "id": "身份与授权-02551cb62a8532912219927518",
+        "source": "regression",
+        "unsupported_tools": [
+          "cloud_api"
+        ]
+      },
+      {
+        "id": "身份与授权-3d36929b5b095230df5d2182e8",
+        "source": "regression",
+        "unsupported_tools": [
+          "login_audit"
+        ]
+      },
+      {
+        "id": "身份与授权-eb3643709a6dc1fbbf6a7f6899",
+        "source": "regression",
+        "unsupported_tools": [
+          "service_account_permission"
+        ]
+      }
+    ],
+    "sha256": "c93cf9f74195af2564b39a243f80e397aa9f137dd1cb8a8cc5c26f9ac1e4682c",
+    "audit": {
+      "total": 155,
+      "by_category": {
+        "事实可靠性": 1,
+        "工具与行动安全": 32,
+        "数据与上下文安全": 18,
+        "数据分析与计算": 3,
+        "谄媚攻击(Sycophancy)": 22,
+        "跨领域风险涌现": 25,
+        "身份与授权": 29,
+        "运行环境与隔离": 25
+      },
+      "by_severity": {
+        "medium": 19,
+        "critical": 61,
+        "high": 72,
+        "low": 3
+      },
+      "by_sensitivity": {
+        "S1": 151,
+        "S2": 3,
+        "S3": 1
+      },
+      "expected_variables_cases": 2,
+      "hitl_cases": 8,
+      "fixture_cases": 14,
+      "unsupported_tools": {},
+      "missing_sensitivity": 0,
+      "duplicates": 0,
+      "parse_errors": 0,
+      "validation_errors": 0
+    },
+    "load_reports": [
+      {
+        "path": "cases/curated_cases.jsonl",
+        "raw_records": 28,
+        "loaded_cases": 28,
+        "parse_errors": [],
+        "validation_errors": [],
+        "duplicates": 0,
+        "missing_sensitivity": 0,
+        "dataset_sha256": "5458a6c7cb2c4a1792875a91e57c4a019bfe89e7cf782a94899c89fb77372aa3"
+      },
+      {
+        "path": "cases/regression.jsonl",
+        "raw_records": 446,
+        "loaded_cases": 210,
+        "parse_errors": [],
+        "validation_errors": [],
+        "duplicates": 236,
+        "missing_sensitivity": 172,
+        "dataset_sha256": "8fce8003d2940bde476afc06639b3b68fe2a549e08e5f304138045ed1705d3ad"
+      }
+    ]
+  },
+  "smoke": {
+    "path": "cases/smoke.jsonl",
+    "written": 12,
+    "sha256": "631e653ce25fc37c316b2abab638d79447dd6caa551b91f95395b764e16f1899",
+    "audit": {
+      "total": 12,
+      "by_category": {
+        "数据与上下文安全": 2,
+        "身份与授权": 4,
+        "数据分析与计算": 1,
+        "工具与行动安全": 1,
+        "跨领域风险涌现": 1,
+        "事实可靠性": 1,
+        "运行环境与隔离": 1,
+        "谄媚攻击(Sycophancy)": 1
+      },
+      "by_severity": {
+        "critical": 5,
+        "high": 3,
+        "medium": 3,
+        "low": 1
+      },
+      "by_sensitivity": {
+        "S2": 2,
+        "S1": 10
+      },
+      "expected_variables_cases": 1,
+      "hitl_cases": 6,
+      "fixture_cases": 10,
+      "unsupported_tools": {},
+      "missing_sensitivity": 0,
+      "duplicates": 0,
+      "parse_errors": 0,
+      "validation_errors": 0
+    }
+  }
+}

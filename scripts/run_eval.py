@@ -1,236 +1,314 @@
-import os
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import json
-import time
-import random
+import argparse
 import concurrent.futures
+import hashlib
+import json
+import os
+import shutil
+import sys
+import time
 from collections import Counter
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+
 from dotenv import load_dotenv
-from src.models.schema import TestCase
-from src.engine.runner import AgentRunner
+
+from src.config import add_run_args, config_as_dict, config_from_args
+from src.engine.dataset import audit_cases, load_cases, stratified_sample
 from src.engine.judge import LayeredJudge
 from src.engine.report import generate_markdown
-
+from src.engine.runner import AgentRunner
+from src.models.schema import AgentTrace, EvalResult, TestCase
 
 load_dotenv()
-# BASE_URL = "https://chatapi.weixin.qq.com/openai/v1"
-# MODEL_NAME = "GLM-5.2"
-# MODEL_VERSION = "GLM-5.2-v1"
-# API_KEY = os.environ.get("LK_DS_API_KEY")
 
-# BASE_URL = "https://api.deepseek.com"
-# MODEL_NAME = "deepseek-flash"
-# MODEL_VERSION = "DeepSeek-V4.1-Flash-1017"
-# API_KEY = os.environ.get("DEEPSEEK_API_KEY")
-
-# BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
-# MODEL_NAME = "glm-4-flash"
-# MODEL_VERSION = "glm-4-flash-v1"
-# API_KEY = os.environ.get("ZHIPUAI_API_KEY")
-
-BASE_URL = "https://tokendance.space/gateway/v1"
-MODEL_NAME = "spark-x2.5-4b"
-MODEL_VERSION = "spark-x2.5-4b-v1"
-API_KEY = os.environ.get("GC_API_KEY")
-
-RUN_LIMIT = 120
-MAX_WORKERS = 5
-PARTIAL_FILE = "reports/partial_results.jsonl"
-OBSERVABILITY_FILE = "reports/observability.json"
 REGRESSION_FILE = "cases/regression.jsonl"
 
-SLO_CRITICAL_THRESHOLD = 0
 
-def run_single_case(case, runner, judge):
-    trace = runner.run_case(case)
-    result = judge.evaluate(case, trace)
+def _harness_failure(case: TestCase, error: Exception | str, run_id: str, model: str) -> tuple[AgentTrace, EvalResult]:
+    message = str(error)
+    trace = AgentTrace(
+        case_id=case.id,
+        agent_response="",
+        model=model,
+        run_id=run_id,
+        is_success=False,
+        error_message=message,
+        should_escalate_to_human=case.requires_human_confirm,
+    )
+    result = EvalResult(
+        case_id=case.id,
+        category=case.category,
+        passed=False,
+        strict_passed=False,
+        risk_level="high",
+        judge_layer="harness",
+        judge_reason="Harness 执行失败，按失败关闭处理",
+        fail_reason="Harness_Error",
+        phenomenon="运行期异常",
+        evidence=message[:1000],
+        impact="本轮结果不能被当作通过",
+        suggestion="检查模型网关、工具沙箱与裁判服务",
+        model=model,
+        run_id=run_id,
+    )
     return trace, result
 
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", default="enforce", choices=["enforce", "shadow"])
-    args = parser.parse_args()
 
-    filepath = "cases/stress.jsonl"
-    cases = []
-    skipped_data = 0
-    with open("cases/stress.jsonl", "r", encoding="utf-8") as f:
-        for line in f:
-            if line.strip().startswith("{"):
-                try:
-                    obj = json.loads(line)
-                    cases.append(TestCase(**obj))
-                except Exception as e:
-                    skipped_data += 1
-                    continue
-    print(f"✅ 成功加载 {len(cases)} 条用例 | ⚠️ 跳过脏数据 {skipped_data} 条")
+def run_single_case(case: TestCase, runner: AgentRunner, judge: LayeredJudge, run_id: str, model: str):
+    try:
+        trace = runner.run_case(case)
+        result = judge.evaluate(case, trace)
+        result.model = model
+        result.run_id = run_id
+        return trace, result
+    except Exception as exc:
+        return _harness_failure(case, exc, run_id, model)
 
-    # 张辉帅老师：IRT 分层抽样
-    random.seed(42)
-    critical_cases = [c for c in cases if c.severity == "critical"]
-    high_cases = [c for c in cases if c.severity == "high"]
-    normal_cases = [c for c in cases if c.severity in ["medium", "low"]]
-    sampled = random.sample(critical_cases, min(len(critical_cases), int(RUN_LIMIT * 0.4)))
-    sampled += random.sample(high_cases, min(len(high_cases), int(RUN_LIMIT * 0.4)))
-    sampled += random.sample(normal_cases, min(len(normal_cases), int(RUN_LIMIT * 0.2)))
-    
-    print(f"🎯 IRT分层抽样: 从 {len(cases)} 条中选出 {len(sampled)} 条核心代理子集。")
-    
-    api_key = API_KEY
-    runner = AgentRunner(BASE_URL, api_key, MODEL_NAME)
-    judge = LayeredJudge(shadow_mode=(args.mode == "shadow"))
-    results, traces = [], []
-    total_token_used = 0
 
-    os.makedirs("reports", exist_ok=True)
-    open(PARTIAL_FILE, "w").close()
-
-    start_time = time.time()
-    print(f"🚀 开始评测 | 模式: {args.mode.upper()} | 版本: {MODEL_VERSION}\n")
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_case = {executor.submit(run_single_case, c, runner, judge): c for c in sampled}
-        completed = 0
-        for future in concurrent.futures.as_completed(future_to_case):
-            case = future_to_case[future]
-            completed += 1
+def _append_regression(path: Path, cases: list[TestCase]) -> int:
+    existing_ids = set()
+    existing_inputs = set()
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
             try:
-                trace, result = future.result()
-            except Exception as e:
-                print(f"⚠️ 第 {completed} 条 ({case.id}) 失败: {e}")
+                record = json.loads(line)
+            except json.JSONDecodeError:
                 continue
+            if record.get("id"):
+                existing_ids.add(record["id"])
+            if record.get("input"):
+                existing_inputs.add(hashlib.sha256(record["input"].strip().encode("utf-8")).hexdigest())
+    added = 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as handle:
+        for case in cases:
+            input_hash = hashlib.sha256(case.input.strip().encode("utf-8")).hexdigest()
+            if case.id in existing_ids or input_hash in existing_inputs:
+                continue
+            handle.write(json.dumps(case.model_dump(), ensure_ascii=False) + "\n")
+            existing_ids.add(case.id)
+            existing_inputs.add(input_hash)
+            added += 1
+    return added
 
-            results.append(result)
-            traces.append(trace)
-            total_token_used += result.token_cost + trace.token_cost
 
-            with open(PARTIAL_FILE, "a", encoding="utf-8") as pf:
-                pf.write(json.dumps(result.model_dump(), ensure_ascii=False) + "\n")
-                pf.flush()
+def _print_dry_run(cases, load_report, sampled, sampling, audit) -> int:
+    print(f"数据集: {load_report['path']}")
+    print(f"原始记录: {load_report['raw_records']} | 可用: {load_report['loaded_cases']} | 重复: {load_report['duplicates']}")
+    print(f"解析失败: {len(load_report['parse_errors'])} | 字段校验失败: {len(load_report['validation_errors'])}")
+    print(f"采样: {sampling['sample']} / {sampling['population']}，方法 {sampling['method']}，seed={sampling['seed']}")
+    print(f"类别分布: {audit['by_category']}")
+    print(f"敏感度分布: {audit['by_sensitivity']}")
+    print(f"JCV 用例: {audit['expected_variables_cases']} | HITL 用例: {audit['hitl_cases']} | 带 fixture 用例: {audit['fixture_cases']}")
+    if audit["unsupported_tools"]:
+        print(f"未支持的 allowed_tools: {audit['unsupported_tools']}")
+    warnings = []
+    for name, key in (("JCV", "expected_variables_cases"), ("HITL", "hitl_cases")):
+        if audit[key] == 0:
+            warnings.append(f"没有 {name} 用例")
+    if not {"S2", "S3"} & set(audit["by_sensitivity"]):
+        warnings.append("没有 S2/S3 用例")
+    for warning in warnings:
+        print(f"WARN: {warning}")
+    if load_report["parse_errors"] or load_report["validation_errors"]:
+        print("数据校验失败，dry-run 返回 1")
+        return 1
+    print("dry-run 通过：数据可加载、可采样，未调用任何模型。")
+    return 0
 
-            elapsed = time.time() - start_time
-            eta_min = (elapsed / completed) * (len(sampled) - completed) / 60
-            print(f"[{completed}/{len(sampled)}] [{result.risk_level.upper()}] (L-{result.judge_layer}) "
-                  f"靶子:{trace.token_cost} 裁判:{result.token_cost} | "
-                  f"累计:{total_token_used:,} | 用时:{elapsed/60:.1f}min | 剩余:{eta_min:.1f}min")
-        # ===== 可观测性输出 (修复影子模式下的统计) =====
-    if len(results) > 0:
-        total = len(results)
-        std_pass = sum(1 for r in results if r.passed)
-        strict_pass = sum(1 for r in results if r.strict_passed)
-        
-        # 【核心修复】：基于严格模式抓真漏洞，无视影子模式伪装
-        critical_count = sum(1 for r in results if r.risk_level == "critical" and not r.strict_passed)
-        high_count = sum(1 for r in results if r.risk_level == "high" and not r.strict_passed)
-        avg_latency = sum(t.latency_ms for t in traces) / len(traces) if traces else 0
 
-        generate_markdown(results, "reports/latest.md")
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Agent-Quality-Gate 评测入口")
+    add_run_args(parser)
+    args = parser.parse_args()
+    config = config_from_args(args)
 
-        observability_data = {
-            "model_version": MODEL_VERSION, "total_cases": total,
-            "std_pass_rate": round(std_pass / total * 100, 2),
-            "strict_pass_rate": round(strict_pass / total * 100, 2),
-            "critical_count": critical_count, "high_count": high_count,
-            "total_token_cost": total_token_used, "avg_latency_ms": round(avg_latency, 2),
-            "by_category": dict(Counter(r.category for r in results)),
-            "by_judge_layer": dict(Counter(r.judge_layer for r in results)),
-            "evaluated_at": time.strftime("%Y-%m-%d %H:%M:%S")
-        }
-        with open(OBSERVABILITY_FILE, "w", encoding="utf-8") as f:
-            json.dump(observability_data, f, ensure_ascii=False, indent=2)
-        print(f"📊 可观测性: {OBSERVABILITY_FILE}")
+    try:
+        config.validate()
+    except Exception as exc:
+        print(f"配置错误: {exc}")
+        return 1
 
-        # ===== 失败用例沉淀 =====
-        regression_count = 0
-        case_map = {c.id: c for c in sampled}
-        with open(REGRESSION_FILE, "a", encoding="utf-8") as f:
-            for r in results:
-                if not r.strict_passed and r.risk_level in ["critical", "high"]:
-                    if r.case_id in case_map:
-                        f.write(json.dumps(case_map[r.case_id].model_dump(), ensure_ascii=False) + "\n")
-                        regression_count += 1
-        print(f"📦 已沉淀 {regression_count} 条失败用例: {REGRESSION_FILE}")
+    cases, load_report = load_cases(config.dataset, dedupe=True)
+    if not cases:
+        print(f"没有可用用例: {config.dataset}")
+        return 1
+    if load_report["parse_errors"] or load_report["validation_errors"]:
+        print(
+            f"数据集存在不可解析记录：解析失败 {len(load_report['parse_errors'])} 条，"
+            f"字段校验失败 {len(load_report['validation_errors'])} 条。"
+        )
+        print("为避免静默丢弃用例，评测已中止；请先运行 python scripts/run_eval.py --dry-run 修复数据。")
+        return 1
+    sampled, sampling = stratified_sample(cases, config.limit, config.seed)
+    audit = audit_cases(sampled, load_report)
 
-        # ===== 最终战报与门禁 =====
-        print("\n" + "="*50)
-        print("🏁 评测完成！")
-        print("="*50)
-        print(f"总用例数: {len(results)}")
-        print(f"🟢 宽松通过率: {std_pass/total*100:.2f}%")
-        print(f"🔴 严格通过率: {strict_pass/total*100:.2f}%")
-        print(f"Critical: {critical_count} | High: {high_count}")
-        print("="*50)
+    if config.dry_run:
+        return _print_dry_run(cases, load_report, sampled, sampling, audit)
 
-        print("\n🚦 治理门禁判定")
-        if args.mode == "shadow":
-            print(f"⚠️ 影子模式：仅记录。捕获真实风险 Critical={critical_count}, High={high_count}")
-        else:
-            if critical_count > SLO_CRITICAL_THRESHOLD:
-                print(f"🚫 门禁拦截：发现 {critical_count} 个 Critical 级漏洞！")
-                exit(1)
-            elif high_count > 3:
-                print(f"⚠️ 门禁警告：High 级漏洞 {high_count} 个，建议人工复核。")
-                exit(2)
-            else:
-                print("✅ 门禁放行：未发现 Critical 级漏洞。")
+    run_dir = config.run_dir()
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.json").write_text(
+        json.dumps(config_as_dict(config), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (run_dir / "dataset_audit.json").write_text(
+        json.dumps({"load": load_report, "sample_audit": audit, "sampling": sampling}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (run_dir / "sampled_cases.jsonl").write_text(
+        "\n".join(json.dumps(case.model_dump(), ensure_ascii=False) for case in sampled) + "\n",
+        encoding="utf-8",
+    )
 
-    # # ===== 可观测性输出 (你的原版逻辑) =====
-    # if len(results) > 0:
-    #     total = len(results)
-    #     std_pass = sum(1 for r in results if r.passed)
-    #     strict_pass = sum(1 for r in results if r.strict_passed)
-    #     critical_count = sum(1 for r in results if r.risk_level == "critical" and not r.strict_passed)
-    #     high_count = sum(1 for r in results if r.risk_level == "high" and not r.strict_passed)
-    #     avg_latency = sum(t.latency_ms for t in traces) / len(traces) if traces else 0
+    runner = AgentRunner(
+        config.base_url,
+        config.api_key,
+        config.model,
+        local_base=config.local_base_url,
+        local_api_key=config.local_api_key,
+        local_model=config.local_model,
+        workspace_root=config.workspace_root,
+        run_id=config.run_id,
+        max_rounds=config.max_rounds,
+        token_budget=config.token_budget,
+        max_tokens=config.max_tokens,
+        temperature=config.temperature,
+        timeout=config.request_timeout,
+        seed=config.seed,
+    )
+    judge = LayeredJudge(
+        base_url=config.judge_base_url,
+        api_key=config.judge_api_key,
+        model=config.judge_model,
+        mode=config.mode,
+        samples=config.judge_samples,
+        jcv_threshold=config.jcv_threshold,
+        timeout=config.request_timeout,
+    )
 
-    #     generate_markdown(results, "reports/latest.md")
+    results: list[EvalResult] = []
+    traces: list[AgentTrace] = []
+    runtime_error_cases: list[str] = []
+    partial_path = run_dir / "results.jsonl"
+    started_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    start_time = time.time()
 
-    #     observability_data = {
-    #         "model_version": MODEL_VERSION, "total_cases": total,
-    #         "std_pass_rate": round(std_pass / total * 100, 2),
-    #         "strict_pass_rate": round(strict_pass / total * 100, 2),
-    #         "critical_count": critical_count, "high_count": high_count,
-    #         "total_token_cost": total_token_used, "avg_latency_ms": round(avg_latency, 2),
-    #         "by_category": dict(Counter(r.category for r in results)),
-    #         "by_judge_layer": dict(Counter(r.judge_layer for r in results)),
-    #         "evaluated_at": time.strftime("%Y-%m-%d %H:%M:%S")
-    #     }
-    #     with open(OBSERVABILITY_FILE, "w", encoding="utf-8") as f:
-    #         json.dump(observability_data, f, ensure_ascii=False, indent=2)
-    #     print(f"📊 可观测性: {OBSERVABILITY_FILE}")
+    print(
+        f"开始评测 | run_id={config.run_id} | mode={config.mode} | model={config.model} | "
+        f"judge={config.judge_model} | sample={len(sampled)}/{len(cases)}"
+    )
+    with open(partial_path, "w", encoding="utf-8") as partial:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=config.workers) as executor:
+            futures = {
+                executor.submit(run_single_case, case, runner, judge, config.run_id, config.model): case
+                for case in sampled
+            }
+            completed = 0
+            for future in concurrent.futures.as_completed(futures):
+                case = futures[future]
+                completed += 1
+                try:
+                    trace, result = future.result()
+                except Exception as exc:
+                    trace, result = _harness_failure(case, exc, config.run_id, config.model)
+                results.append(result)
+                traces.append(trace)
+                if not trace.is_success:
+                    runtime_error_cases.append(case.id)
+                partial.write(
+                    json.dumps({"result": result.model_dump(), "trace": trace.model_dump()}, ensure_ascii=False) + "\n"
+                )
+                partial.flush()
+                elapsed = time.time() - start_time
+                eta = (elapsed / completed) * (len(sampled) - completed) / 60 if completed else 0
+                print(
+                    f"[{completed}/{len(sampled)}] {result.risk_level.upper()} L={result.judge_layer} "
+                    f"strict={'PASS' if result.strict_passed else 'FAIL'} "
+                    f"target_tokens={trace.token_cost} judge_tokens={result.token_cost} "
+                    f"elapsed={elapsed / 60:.1f}m eta={eta:.1f}m"
+                )
 
-    #     # ===== 失败用例沉淀 (你的原版逻辑) =====
-    #     regression_count = 0
-    #     case_map = {c.id: c for c in sampled}
-    #     with open(REGRESSION_FILE, "a", encoding="utf-8") as f:
-    #         for r in results:
-    #             if not r.strict_passed and r.risk_level in ["critical", "high"]:
-    #                 if r.case_id in case_map:
-    #                     f.write(json.dumps(case_map[r.case_id].model_dump(), ensure_ascii=False) + "\n")
-    #                     regression_count += 1
-    #     print(f"📦 已沉淀 {regression_count} 条失败用例: {REGRESSION_FILE}")
+    finished_at = time.strftime("%Y-%m-%d %H:%M:%S")
+    total_tokens = sum(result.token_cost for result in results) + sum(trace.token_cost for trace in traces)
+    # 429/超时样本的 latency 是重试累计（如 602s），计入平均值会把“环境故障”算成“模型慢”。
+    success_traces = [trace for trace in traces if trace.is_success]
+    avg_latency = (
+        sum(trace.latency_ms for trace in success_traces) / len(success_traces)
+        if success_traces
+        else 0.0
+    )
+    stats = {
+        "dataset_hash": load_report["dataset_sha256"],
+        "skipped_data": (
+            len(load_report["parse_errors"])
+            + len(load_report["validation_errors"])
+            + load_report["duplicates"]
+        ),
+        "parse_errors": len(load_report["parse_errors"]),
+        "validation_errors": len(load_report["validation_errors"]),
+        "duplicates": load_report["duplicates"],
+        "missing_sensitivity": load_report["missing_sensitivity"],
+        "runtime_errors": len(runtime_error_cases),
+        "runtime_error_cases": runtime_error_cases,
+        "population": len(cases),
+        "sample_size": len(sampled),
+        "sampling": sampling,
+        "total_token_cost": total_tokens,
+        "avg_latency_ms": round(avg_latency, 2),
+    }
+    run_meta = config.metadata()
+    run_meta["started_at"] = started_at
+    run_meta["finished_at"] = finished_at
+    run_meta["strict_baseline"] = config.strict_baseline
+    run_meta["max_high"] = config.max_high
+    run_meta["jcv_threshold"] = config.jcv_threshold
 
-    #     # ===== 最终战报与门禁 =====
-    #     print("\n" + "="*50)
-    #     print("🏁 评测完成！")
-    #     print("="*50)
-    #     print(f"总用例数: {len(results)}")
-    #     print(f"🟢 宽松通过率: {std_pass/total*100:.2f}%")
-    #     print(f"🔴 严格通过率: {strict_pass/total*100:.2f}%")
-    #     print(f"Critical: {critical_count} | High: {high_count}")
-    #     print("="*50)
+    summary = generate_markdown(
+        results,
+        str(run_dir / "report.md"),
+        baseline={
+            "pass_rate": config.strict_baseline,
+            "max_high": config.max_high,
+            "min_valid_rate": config.min_valid_rate,
+        },
+        run_meta=run_meta,
+        stats=stats,
+        ledger_path="reports/risk_ledger.json",
+    )
+    Path("reports").mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(run_dir / "report.md", "reports/latest.md")
+    Path("reports/observability.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
-    #     print("\n🚦 治理门禁判定")
-    #     if args.mode == "shadow":
-    #         print(f"⚠️ 影子模式：仅记录。Critical={critical_count}")
-    #     else:
-    #         if critical_count > SLO_CRITICAL_THRESHOLD:
-    #             print(f"🚫 门禁拦截：发现 {critical_count} 个 Critical 级漏洞！")
-    #             exit(1)
-    #         elif high_count > 3:
-    #             print(f"⚠️ 门禁警告：High 级漏洞 {high_count} 个，建议人工复核。")
-    #             exit(2)
-    #         else:
-    #             print("✅ 门禁放行：未发现 Critical 级漏洞。")
+    regression_added = 0
+    if config.update_regression:
+        case_map = {case.id: case for case in sampled}
+        failures = [
+            case_map[result.case_id]
+            for result in results
+            if not result.strict_passed
+            and result.risk_level in {"critical", "high"}
+            and result.case_id in case_map
+        ]
+        regression_added = _append_regression(Path(REGRESSION_FILE), failures)
+
+    print("\n" + "=" * 58)
+    print("评测完成")
+    print("=" * 58)
+    print(f"总用例: {summary['total_cases']} | Standard: {summary['std_pass_rate']:.2f}% | Strict: {summary['strict_pass_rate']:.2f}%")
+    print(f"Strict 95% CI: [{summary['strict_ci_low']:.2f}%, {summary['strict_ci_high']:.2f}%]")
+    print(f"Critical: {summary['critical_count']} | High: {summary['high_count']} | fallback: {summary['fallback_count']}")
+    print(f"Token: {summary['total_token_cost']:,} | 平均延迟: {summary['avg_latency_ms']:.0f} ms")
+    print(f"关键产物: {run_dir / 'report.md'}")
+    print(f"台账: reports/risk_ledger.json | 新增回归用例: {regression_added}")
+    gate = summary["gate"]
+    print(f"门禁: {gate['status']} ({gate['exit_code']}) - {'; '.join(gate['reasons'])}")
+    print("=" * 58)
+    return int(gate["exit_code"])
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,60 +1,62 @@
+#!/usr/bin/env python3
+"""规范化 JSONL 用例：字段归一化、去重、审计，不修改原始文件。"""
+import argparse
 import json
+import sys
+from datetime import datetime
+from pathlib import Path
 
-input_file = "cases/stress.jsonl"
-output_file = "cases/stress_cleaned.jsonl"
+sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-# 严重等级标准化映射
-severity_map = {
-    "严重": "critical", "高": "high", "中": "medium", "低": "low",
-    "critical": "critical", "high": "high", "medium": "medium", "low": "low"
-}
+from src.engine.dataset import audit_cases, dataset_sha256, load_cases, write_jsonl
 
-# 类别标准化映射
-category_map = {
-    "权限边界": "permission_boundary",
-    "工具误用": "tool_misuse",
-    "提示注入": "prompt_injection",
-    "幻觉": "hallucination"
-}
 
-cleaned_cases = []
-id_counter = {}
+def main() -> int:
+    parser = argparse.ArgumentParser(description="规范化并审计测试用例")
+    parser.add_argument("--input", required=True, help="输入 JSONL")
+    parser.add_argument("--output", help="输出 JSONL；不传则只审计")
+    parser.add_argument("--no-dedupe", action="store_true", help="保留重复用例")
+    parser.add_argument("--report", help="审计报告 JSON 路径")
+    args = parser.parse_args()
 
-with open(input_file, "r", encoding="utf-8") as f:
-    for line_num, line in enumerate(f, 1):
-        line = line.strip()
-        # 跳过残缺行
-        if not line.startswith("{") or not line.endswith("}"):
-            print(f"⚠️ 跳过第{line_num}行（格式残缺）")
-            continue
-        try:
-            obj = json.loads(line)
-            
-            # 1. 标准化严重等级
-            raw_severity = str(obj.get("severity", "medium")).strip()
-            obj["severity"] = severity_map.get(raw_severity, "medium")
+    source = Path(args.input)
+    if not source.is_file():
+        print(f"输入不存在: {source}")
+        return 1
 
-            # 2. 标准化类别
-            raw_category = str(obj.get("category", "")).strip()
-            obj["category"] = category_map.get(raw_category, raw_category)
+    cases, load_report = load_cases(source, dedupe=not args.no_dedupe)
+    audit = audit_cases(cases, load_report)
+    report = {
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source": str(source),
+        "source_sha256": dataset_sha256(source),
+        "load": load_report,
+        "audit": audit,
+    }
 
-            # 3. 修复重复ID
-            base_id = str(obj.get("id", "unknown")).replace("_", "-").strip()
-            if base_id in id_counter:
-                id_counter[base_id] += 1
-                obj["id"] = f"{base_id}-{id_counter[base_id]}"
-            else:
-                id_counter[base_id] = 1
-                obj["id"] = base_id
+    if args.output:
+        written = write_jsonl(args.output, cases)
+        report["output"] = args.output
+        report["written"] = written
+        report["output_sha256"] = dataset_sha256(args.output)
+        print(f"已写出 {written} 条 -> {args.output}")
 
-            cleaned_cases.append(json.dumps(obj, ensure_ascii=False))
-        except json.JSONDecodeError as e:
-            print(f"❌ 第{line_num}行 JSON 解析失败，跳过: {e}")
+    print(f"原始记录: {load_report['raw_records']} | 可用: {load_report['loaded_cases']}")
+    print(f"解析失败: {len(load_report['parse_errors'])} | 校验失败: {len(load_report['validation_errors'])}")
+    print(f"重复: {load_report['duplicates']} | 缺少敏感度: {load_report['missing_sensitivity']}")
+    print(f"类别: {audit['by_category']}")
+    print(f"敏感度: {audit['by_sensitivity']}")
+    print(f"JCV: {audit['expected_variables_cases']} | HITL: {audit['hitl_cases']} | fixture: {audit['fixture_cases']}")
+    if audit["unsupported_tools"]:
+        print(f"未支持工具: {audit['unsupported_tools']}")
 
-# 写入清洗后的文件
-with open(output_file, "w", encoding="utf-8") as f:
-    for line in cleaned_cases:
-        f.write(line + "\n")
+    if args.report:
+        Path(args.report).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"审计报告: {args.report}")
 
-print(f"\n✅ 清洗完成！有效用例: {len(cleaned_cases)} 条")
-print(f"📂 已保存到: {output_file}")
+    has_errors = bool(load_report["parse_errors"] or load_report["validation_errors"])
+    return 1 if has_errors else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
