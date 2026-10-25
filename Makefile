@@ -59,4 +59,6 @@ visualize:
 	$(PY) scripts/visualize_reports.py
 
 clean:
-	rm -rf .pytest_cache reports/runs reports/charts workspace
+	rm -rf .pytest_cache reports/runs reports/batch-* workspace
+	@echo "保留 reports/charts（入库快照）与 reports/risk_ledger.json（入库台账）"
+	@echo "只清运行数据请用：git clean -Xdf reports/"
