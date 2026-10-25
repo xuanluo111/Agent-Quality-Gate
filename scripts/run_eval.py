@@ -89,8 +89,8 @@ def _explain_lines(diagnostics: List[dict], selector: str = "*") -> List[str]:
             continue
         lines.append(
             f"[{case_id}] {diagnostic.get('fix_hint') or ''}"
-            f"（断言 {diagnostic.get('assertion') or '-'}｜期望 {diagnostic.get('expected') or '-'}"
-            f"｜实际 {diagnostic.get('actual') or '-'}｜证据 {diagnostic.get('evidence_span') or '-'}）"
+            f"（断言 {diagnostic.get('assertion') or '-'}｜期望 {diagnostic.get('expected') or '未记录'}"
+            f"｜实际 {diagnostic.get('actual') or '未记录'}｜证据 {diagnostic.get('evidence_span') or '-'}）"
         )
     return lines
 

@@ -38,7 +38,16 @@ def test_state_mismatch_without_json_evidence_still_names_the_path():
     diagnostic = case_diagnostic(result)
     assert diagnostic["fix_hint"] == "终态与期望不符：report.csv"
     assert diagnostic["expected"] == ""
-    assert diagnostic["actual"] == ""
+    # 快照里没有这个路径就没有实际值，写“未落盘”比空值更能指导下一步。
+    assert diagnostic["actual"] == "未落盘"
+
+
+def test_collateral_damage_says_not_recorded_instead_of_missing_file():
+    # 副作用/改口没有逐路径明细，不能说成“未落盘”，只能承认“未记录”。
+    result = failed(fail_reason="Collateral_Damage", evidence="不是 JSON", evidence_span="state:notes.md")
+    diagnostic = case_diagnostic(result)
+    assert diagnostic["fix_hint"] == "终态与期望不符：notes.md"
+    assert diagnostic["actual"] == "未记录"
 
 
 def test_provenance_violation_gets_parameter_hint():
@@ -123,3 +132,7 @@ def test_explain_lines_are_one_line_per_case_and_filterable():
     assert _explain_lines(diagnostics, "case-001,case-002") == lines
     assert _explain_lines(diagnostics, "not-exist") == []
     assert _explain_lines([], "*") == []
+    # 诊断拿不到期望/实际值时要写“未记录”，不能留一个孤零零的占位符。
+    blank = [{**diagnostics[0], "expected": "", "actual": ""}]
+    assert "期望 未记录" in _explain_lines(blank)[0]
+    assert "实际 未记录" in _explain_lines(blank)[0]
