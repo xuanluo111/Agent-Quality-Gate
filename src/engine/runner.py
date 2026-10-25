@@ -152,6 +152,18 @@ class AgentRunner:
             if journal_path
             else self.workspace_root / str(run_id) / JOURNAL_FILENAME
         )
+        # 取消请求：只登记时间，不中断正在进行的模型调用（那属于信号处理，不在本层）。
+        self._cancel_requested_at: Optional[str] = None
+
+    def request_cancel(self) -> Optional[str]:
+        """显式取消入口：登记请求时间，由 run_case 在下一个轮次边界真正停下。
+
+        返回登记的时间戳；重复调用以第一次为准，不刷新时间（否则会把“早就请求了”
+        记成“刚刚请求的”，报告里就分不清是模型太慢还是请求来得太晚）。
+        """
+        if self._cancel_requested_at is None:
+            self._cancel_requested_at = time.strftime("%Y-%m-%d %H:%M:%S")
+        return self._cancel_requested_at
 
     def _completion(self, client: Any, model: str, messages: list, tools: list):
         kwargs = {
@@ -223,6 +235,9 @@ class AgentRunner:
         # 首个真正执行过的工具调用就撞上“目标不存在/无权限”：用例前置条件不成立。
         executed_calls = 0
         precondition_failed = False
+        # 取消的两个时间点：请求了与真的停了是两件事，分开记。
+        cancel_requested_at: Optional[str] = None
+        stopped_at: Optional[str] = None
 
         workspace = self.workspace_root / self.run_id / safe_case_slug(case.id)
         if attempt:
@@ -293,6 +308,12 @@ class AgentRunner:
 
         try:
             for step in range(self.max_rounds):
+                # 取消只在轮次边界生效：不打断正在进行的模型调用，避免把半个响应
+                # 当作模型输出；已请求取消就立即停，并记下“真的停在第几轮”。
+                if self._cancel_requested_at:
+                    cancel_requested_at = self._cancel_requested_at
+                    stopped_at = time.strftime("%Y-%m-%d %H:%M:%S")
+                    break
                 if token_cost >= self.token_budget:
                     is_token_exceeded = True
                     break
@@ -426,6 +447,11 @@ class AgentRunner:
                     is_step_exceeded = True
                     final_response = content
 
+            # 请求可能落在最后一次调用之后：登记了时间但没能在边界停下。
+            # 这种样本的终止不是模型行为，上层据此归为 unknown 而不是“答错”。
+            if self._cancel_requested_at and not cancel_requested_at:
+                cancel_requested_at = self._cancel_requested_at
+
             # 推理型模型的思维链会先吃满 max_tokens，正文一个字都没输出就被截断；
             # 这种样本没有测到模型的真实行为，归为配置问题而不是能力失败。
             output_truncated = bool(finish_reason == "length" and not saw_content and not tool_calls_audit)
@@ -450,7 +476,7 @@ class AgentRunner:
             completion = infer_completion(
                 assertion_results,
                 has_spec=bool(case.state_assertions or case.expected_final_state),
-                stopped=is_token_exceeded or is_step_exceeded,
+                stopped=is_token_exceeded or is_step_exceeded or bool(stopped_at),
             )
             return AgentTrace(
                 case_id=case.id,
@@ -481,6 +507,8 @@ class AgentRunner:
                 state_diff=diff_states(state_before, state_after),
                 assertion_results=assertion_results,
                 completion=completion,
+                cancel_requested_at=cancel_requested_at,
+                stopped_at=stopped_at,
                 attempt=attempt,
                 model=model,
                 run_id=self.run_id,
@@ -514,6 +542,8 @@ class AgentRunner:
                 state_before=state_before,
                 state_after=state_after,
                 state_diff=diff_states(state_before, state_after),
+                cancel_requested_at=cancel_requested_at or self._cancel_requested_at,
+                stopped_at=stopped_at,
                 attempt=attempt,
                 model=model,
                 run_id=self.run_id,
