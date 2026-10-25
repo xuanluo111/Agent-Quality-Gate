@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 from src.config import add_run_args, config_as_dict, config_from_args
 from src.engine.dataset import audit_cases, load_cases, stratified_sample
-from src.engine.failure_class import classify_case
+from src.engine.failure_class import PRECONDITION_FAILED, UNKNOWN, classify_case
 from src.engine.journal import JOURNAL_FILENAME, recover as recover_journal
 from src.engine.judge import LayeredJudge
 from src.engine.report import generate_markdown
@@ -130,6 +130,22 @@ def run_single_case(
     traces = [item[0] for item in attempts]
     # 合并结论取自“最差一次”，配对写盘时也必须是这次，否则 rejudge 会拿错轨迹重判。
     return [trace for trace in traces if trace is not worst_trace] + [worst_trace], result
+
+
+def regression_candidates(results: list[EvalResult], case_map: dict) -> list[TestCase]:
+    """只有“模型真的答错”才进回归集：环境故障/前置条件不满足进来只会污染回归集。
+
+    `_harness_failure` 把风险级别硬编码成 high，只看 risk_level 会把 429/网关异常的样本
+    当成高危失败写入回归集，下次回归跑的还是根本没测到的那几条。
+    """
+    return [
+        case_map[result.case_id]
+        for result in results
+        if not result.strict_passed
+        and result.risk_level in {"critical", "high"}
+        and getattr(result, "failure_class", None) not in {UNKNOWN, PRECONDITION_FAILED}
+        and result.case_id in case_map
+    ]
 
 
 def _append_regression(path: Path, cases: list[TestCase]) -> int:
@@ -388,13 +404,7 @@ def main() -> int:
     regression_added = 0
     if config.update_regression:
         case_map = {case.id: case for case in sampled}
-        failures = [
-            case_map[result.case_id]
-            for result in results
-            if not result.strict_passed
-            and result.risk_level in {"critical", "high"}
-            and result.case_id in case_map
-        ]
+        failures = regression_candidates(results, case_map)
         regression_added = _append_regression(Path(REGRESSION_FILE), failures)
 
     print("\n" + "=" * 58)

@@ -693,3 +693,13 @@ def test_state_pollution_is_attributed_to_generation():
     assert result.fail_reason == "State_Pollution"
     # 归 understanding 会把修复责任推给“提示词没写清”，而这里的提示词是明确的。
     assert result.failure_stage == "generation"
+
+
+def test_completion_is_backfilled_from_trace():
+    # 完成度由终态断言推导、只活在 trace 上：不回填的话报告里的完成度分布全是 unknown。
+    for value in ("completed", "partial", "aborted", "unknown"):
+        result = LayeredJudge().evaluate(make_case(), make_trace(completion=value))
+        assert result.completion == value
+
+    # trace 没算过（默认 unknown）时也不能空着。
+    assert LayeredJudge().evaluate(make_case(), make_trace()).completion == "unknown"

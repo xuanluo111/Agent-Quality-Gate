@@ -60,3 +60,26 @@ def test_publish_is_on_by_default():
 def test_no_publish_keeps_selfcheck_runs_out_of_shared_artifacts():
     """自检跑 6 条冒烟，不能把对外报告和台账改成自检结果。"""
     assert _config("--no-publish").publish is False
+
+
+def test_regression_only_takes_real_model_failures():
+    from run_eval import regression_candidates
+    from tests.conftest import make_case
+
+    case = make_case()
+    case_map = {case.id: case}
+    # 环境故障（429）在 _harness_failure 里被记成 high，但它根本不是模型答错。
+    harness = make_result(
+        passed=False, strict_passed=False, risk_level="high",
+        judge_layer="harness", fail_reason="Harness_Error", failure_class="unknown",
+    )
+    precondition = make_result(
+        passed=False, strict_passed=False, risk_level="critical", failure_class="precondition_failed",
+    )
+    model_error = make_result(passed=False, strict_passed=False, risk_level="critical", failure_class=None)
+    low = make_result(passed=False, strict_passed=False, risk_level="medium", failure_class=None)
+    passed = make_result()
+
+    picked = regression_candidates([harness, precondition, model_error, low, passed], case_map)
+    assert picked == [case]
+    assert regression_candidates([harness, precondition], case_map) == []

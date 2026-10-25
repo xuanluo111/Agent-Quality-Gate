@@ -315,6 +315,8 @@ class EvalResult(BaseModel):
     # 从 trace 带过来的取消时间点：报告要能把“请求取消但没停下”的样本单列。
     cancel_requested_at: Optional[str] = Field(default=None, description="收到取消请求的时间；有值不代表已经停下")
     stopped_at: Optional[str] = Field(default=None, description="真的在轮次边界停下的时间；空表示没停住")
+    # 完成度同样由 trace 的终态断言推导：报告要按它统计完成度分布，所以必须落到结果上。
+    completion: str = Field(default="unknown", description="completed/partial/aborted/unknown，来自 trace 的断言推导")
 
     jcv_score: Optional[float] = Field(default=None, description="Jaccard 相似度；未执行 JCV 时为 None")
     data_valid: bool = Field(default=True, description="该样本是否真正测到了被测模型；Runner/网关异常时为 False")
