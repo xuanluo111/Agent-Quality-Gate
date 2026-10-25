@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 from src.config import add_run_args, config_as_dict, config_from_args
 from src.engine.dataset import audit_cases, load_cases, stratified_sample
+from src.engine.journal import JOURNAL_FILENAME, recover as recover_journal
 from src.engine.judge import LayeredJudge
 from src.engine.report import generate_markdown
 from src.engine.runner import AgentRunner
@@ -199,6 +200,12 @@ def main() -> int:
         "\n".join(json.dumps(case.model_dump(), ensure_ascii=False) for case in sampled) + "\n",
         encoding="utf-8",
     )
+
+    # 开跑前先收尾上次遗留的 intent：此时还没有任何用例在写，标 unknown 才安全。
+    journal_file = Path(config.workspace_root) / config.run_id / JOURNAL_FILENAME
+    orphaned = recover_journal(journal_file)
+    if orphaned:
+        print(f"[journal] 上次中断遗留 {len(orphaned)} 条未完成操作，已标记为 unknown")
 
     runner = AgentRunner(
         config.base_url,
