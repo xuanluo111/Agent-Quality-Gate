@@ -76,11 +76,16 @@ def case_diagnostic(item: EvalResult) -> Optional[dict]:
         if not path and span.startswith("state:"):
             path = span.split(":", 1)[1]
         if path:
+            actual = _text(record.get("actual"))
+            if not actual:
+                # 终态断言没过却没有实际值：快照里这个路径根本不存在（不存在就没有哈希/正文），
+                # 直接写“未落盘”比一个空值好执行；副作用/改口的证据没有明细，只能写“未记录”。
+                actual = "未落盘" if item.fail_reason == STATE_MISMATCH_REASON else "未记录"
             return {
                 "case_id": item.case_id,
                 "assertion": f"state:{path}",
                 "expected": _text(record.get("expected")),
-                "actual": _text(record.get("actual")),
+                "actual": actual,
                 "evidence_span": span or f"state:{path}",
                 "fix_hint": f"终态与期望不符：{path}",
             }
