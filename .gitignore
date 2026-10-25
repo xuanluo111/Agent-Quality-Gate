@@ -26,3 +26,7 @@ reports/observability.json
 # 重判临时目录：备份与运行日志
 .rejudge_backup/
 .rejudge_logs/
+
+# 覆盖率产物：本地跑 pytest --cov 时生成，不进库
+.coverage
+coverage.json
