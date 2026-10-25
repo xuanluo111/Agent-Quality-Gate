@@ -342,7 +342,7 @@ reports/
     └── *.png                    # 柱状图、折线图、比例图、三原色图板
 ```
 
-单用例工具工作目录位于 `workspace/<run_id>/<case_slug>/`。除 `risk_ledger.json` 与 `charts/` 外，运行产物默认被 `.gitignore` 忽略：`runs/` 是逐次重跑不断堆积的原始数据（含 `results.jsonl` 轨迹），`latest.md` / `observability.json` 每次“会发布”的运行都会覆盖，所以都不入库。`charts/` 入库是为了 clone 后能直接看图和离线打开看板；它是一份快照，当前对应 `reports/runs/` 下的 9 份报告（`20261024-230655` 七模型批次 + 两次 dots 补跑），重新批量后要重新生成并提交。
+单用例工具工作目录位于 `workspace/<run_id>/<case_slug>/`。除 `risk_ledger.json` 与 `charts/` 外，运行产物默认被 `.gitignore` 忽略：`runs/` 是逐次重跑不断堆积的原始数据（含 `results.jsonl` 轨迹），`latest.md` / `observability.json` 每次“会发布”的运行都会覆盖，所以都不入库。`charts/` 入库是为了 clone 后能直接看图和离线打开看板；它是一份快照，当前对应 `reports/runs/` 下的 7 份报告（`20261025-100521` 七模型批次），重新批量后要重新生成并提交。清理运行数据用 `git clean -Xdf reports/`：它只删被忽略的 `runs/`、`batch-*/`、`latest.md`、`observability.json`，不会碰已入库的 `charts/` 与 `risk_ledger.json`——直接 `rm -rf reports/*` 会把台账历史一起清掉（台账只能从空文件重新累积，历史那几百条就只剩 git 里的那一份）。
 
 ## 可视化
 
