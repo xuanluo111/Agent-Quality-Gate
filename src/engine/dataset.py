@@ -4,7 +4,7 @@ import math
 import random
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from pydantic import ValidationError
 
@@ -54,17 +54,11 @@ def load_cases(path: str | Path, dedupe: bool = True) -> Tuple[List[TestCase], d
             validation_errors.append({"line": index, "error": str(exc)})
 
     duplicates = 0
+    conflicts: List[str] = []
     if dedupe:
-        seen_ids, seen_inputs, unique = set(), set(), []
-        for case in cases:
-            input_hash = hashlib.sha256(case.input.strip().encode("utf-8")).hexdigest()
-            if case.id in seen_ids or input_hash in seen_inputs:
-                duplicates += 1
-                continue
-            seen_ids.add(case.id)
-            seen_inputs.add(input_hash)
-            unique.append(case)
-        cases = unique
+        cases, dedupe_report = dedupe_cases_detailed(cases)
+        duplicates = dedupe_report["duplicates"]
+        conflicts = dedupe_report["conflicts"]
 
     # 单轮输入下没有“改口前”，correction_round>1 只会把前 N-1 次工具调用排除在污染
     # 扫描之外：如果交付物的写入正好落在被豁免的步数里，脏值就漏判了。
@@ -88,6 +82,7 @@ def load_cases(path: str | Path, dedupe: bool = True) -> Tuple[List[TestCase], d
         "validation_errors": validation_errors,
         "warnings": warnings,
         "duplicates": duplicates,
+        "duplicate_conflicts": conflicts,
         "missing_sensitivity": missing_sensitivity,
         "dataset_sha256": dataset_sha256(path),
     }
@@ -113,17 +108,87 @@ def write_jsonl(path: str | Path, cases: Iterable[TestCase]) -> int:
     return count
 
 
-def dedupe_cases(cases: Iterable[TestCase]) -> Tuple[List[TestCase], int]:
+def dedupe_cases_detailed(cases: Iterable[TestCase]) -> Tuple[List[TestCase], dict]:
+    """按 id 保留首条去重，并逐条说清丢了哪一行、丢的是不是同一份内容。
+
+    只回一个数字是不够的：同 id 但内容不同的两条是两套场景，去重只能保一条，
+    另一套就此消失。这种情况必须单列成 `conflicts` 让人去改 id，而不是静默吞掉。
+    """
     items = list(cases)
-    seen_ids, seen_inputs, unique = set(), set(), []
-    for case in items:
+    seen_ids: Dict[str, TestCase] = {}
+    seen_inputs: Dict[str, TestCase] = {}
+    unique: List[TestCase] = []
+    dropped: List[dict] = []
+    for line, case in enumerate(items, 1):
         input_hash = hashlib.sha256(case.input.strip().encode("utf-8")).hexdigest()
-        if case.id in seen_ids or input_hash in seen_inputs:
+        if case.id in seen_ids:
+            kept, reason = seen_ids[case.id], "duplicate_id"
+        elif input_hash in seen_inputs:
+            kept, reason = seen_inputs[input_hash], "duplicate_input"
+        else:
+            seen_ids[case.id] = case
+            seen_inputs[input_hash] = case
+            unique.append(case)
             continue
-        seen_ids.add(case.id)
-        seen_inputs.add(input_hash)
-        unique.append(case)
-    return unique, len(items) - len(unique)
+        dropped.append(
+            {
+                "line": line,
+                "id": case.id,
+                "reason": reason,
+                "kept_id": kept.id,
+                "identical": case.model_dump() == kept.model_dump(),
+            }
+        )
+    # 只有同 id 且内容不同才算冲突：同内容重复是脏数据，不同内容是不同的用例。
+    conflicts = sorted({item["id"] for item in dropped if item["reason"] == "duplicate_id" and not item["identical"]})
+    report = {
+        "total": len(items),
+        "unique": len(unique),
+        "duplicates": len(dropped),
+        "duplicate_ids": sorted({item["id"] for item in dropped if item["reason"] == "duplicate_id"}),
+        "conflicts": conflicts,
+        "dropped": dropped,
+    }
+    return unique, report
+
+
+def dedupe_cases(cases: Iterable[TestCase]) -> Tuple[List[TestCase], int]:
+    unique, report = dedupe_cases_detailed(cases)
+    return unique, report["duplicates"]
+
+
+def duplicate_id_report(path: str | Path) -> dict:
+    """直接数原始行里的重复 id：`load_cases` 会去重，看不出去重前的文件有多脏。
+
+    只读不改，所以既能当写入前后的校验，也能在自检里当断言。
+    """
+    path = Path(path)
+    counts: Dict[str, int] = {}
+    rows = 0
+    missing_id = 0
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        rows += 1
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            missing_id += 1
+            continue
+        case_id = record.get("id")
+        if not case_id:
+            missing_id += 1
+            continue
+        counts[str(case_id)] = counts.get(str(case_id), 0) + 1
+    duplicates = {case_id: count for case_id, count in counts.items() if count > 1}
+    return {
+        "path": str(path),
+        "rows": rows,
+        "unique_ids": len(counts),
+        "duplicate_ids": duplicates,
+        "duplicates": sum(count - 1 for count in duplicates.values()),
+        "missing_id": missing_id,
+    }
 
 
 def stratified_sample(cases: List[TestCase], limit: int, seed: int) -> Tuple[List[TestCase], dict]:

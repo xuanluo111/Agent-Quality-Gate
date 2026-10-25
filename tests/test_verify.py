@@ -85,3 +85,31 @@ def test_step_dataset_keeps_manifest_timestamp_when_content_unchanged(tmp_path, 
 
     assert step.ok is True, step.detail
     assert manifest.read_bytes() == original
+
+
+def test_step_dataset_fails_when_a_suite_keeps_duplicate_ids(tmp_path, monkeypatch):
+    """去重没生效时自检必须报错：否则 `--suite regression` 会默默把同一条用例再评一遍。"""
+    import json
+    from types import SimpleNamespace
+
+    import scripts.verify as verify
+
+    cases = tmp_path / "cases"
+    cases.mkdir()
+    tags = ["feature:state", "feature:provenance", "feature:correction"]
+    duplicate = json.dumps({"id": "a", "tags": tags}) + "\n"
+    (cases / "curated_cases.jsonl").write_text('{"id": "a"}\n', encoding="utf-8")
+    (cases / "core_suite.jsonl").write_text(duplicate * 2, encoding="utf-8")
+    (cases / "smoke.jsonl").write_text(duplicate, encoding="utf-8")
+    (cases / "suite_manifest.json").write_text(
+        json.dumps({"generated_at": "2026-01-01 00:00:00", "core": {"written": 2}, "smoke": {"written": 1}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(verify, "ROOT", tmp_path)
+    monkeypatch.setattr(verify, "_run", lambda args, timeout=1800: SimpleNamespace(returncode=0, stdout="", stderr=""))
+
+    step = verify.step_dataset()
+
+    assert step.ok is False
+    assert "core_suite.jsonl" in step.detail and "重复 id" in step.detail

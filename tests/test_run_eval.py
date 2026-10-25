@@ -83,3 +83,21 @@ def test_regression_only_takes_real_model_failures():
     picked = regression_candidates([harness, precondition, model_error, low, passed], case_map)
     assert picked == [case]
     assert regression_candidates([harness, precondition], case_map) == []
+
+
+def test_regression_append_never_writes_the_same_id_twice(tmp_path):
+    from run_eval import _append_regression
+
+    from tests.conftest import make_case
+
+    path = tmp_path / "regression.jsonl"
+    case = make_case()
+
+    assert _append_regression(path, [case]) == 1
+    # 同一个失败用例再跑一轮不能再追加：文件每多一行，`--suite regression` 就多烧一次调用。
+    assert _append_regression(path, [case]) == 0
+    # 同 id 但内容是另一套场景也不行：id 是去重的唯一依据，得先去改 id 再入库。
+    assert _append_regression(path, [make_case(input="另一个场景")]) == 0
+
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(lines) == 1

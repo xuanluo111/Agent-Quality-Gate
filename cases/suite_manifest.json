@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-25 15:33:54",
+  "generated_at": "2026-10-25 20:38:14",
   "inputs": [
     "cases/curated_cases.jsonl",
     "cases/regression.jsonl"
@@ -9,7 +9,7 @@
     "path": "cases/core_suite.jsonl",
     "written": 161,
     "duplicates_removed": 4,
-    "input_duplicates": 236,
+    "input_duplicates": 0,
     "excluded_unsupported": [
       {
         "id": "PB-INT-100",
@@ -652,19 +652,21 @@
         "validation_errors": [],
         "warnings": [],
         "duplicates": 0,
+        "duplicate_conflicts": [],
         "missing_sensitivity": 0,
         "dataset_sha256": "f847164e183364d1a4e819d6020bd009f63f9a09b5d4ab6d177c049f94cb13bb"
       },
       {
         "path": "cases/regression.jsonl",
-        "raw_records": 450,
+        "raw_records": 214,
         "loaded_cases": 214,
         "parse_errors": [],
         "validation_errors": [],
         "warnings": [],
-        "duplicates": 236,
-        "missing_sensitivity": 172,
-        "dataset_sha256": "089349724ca690b9d15dda7f0519c60700ba7604b73731d95ebe9588978bb2f6"
+        "duplicates": 0,
+        "duplicate_conflicts": [],
+        "missing_sensitivity": 117,
+        "dataset_sha256": "a3a2014a17512671208ea3955e8e18f8989a2bef6739bea1096a1add22e4580b"
       }
     ]
   },

@@ -25,6 +25,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 DATASET_FILES = ("curated_cases.jsonl", "core_suite.jsonl", "smoke.jsonl")
+# 去重前的原始文件也要查：load_cases 会静默去重，脏数据只会在文件里越积越多。
+ID_UNIQUE_FILES = ("curated_cases.jsonl", "regression.jsonl", "core_suite.jsonl", "smoke.jsonl")
 REQUIRED_CAPABILITY_TAGS = ("feature:state", "feature:provenance", "feature:correction")
 REQUIRED_SECTIONS = (
     "## 三、故障事件聚合",
@@ -245,6 +247,22 @@ def step_dataset() -> Step:
     front = {tag for row in smoke_rows[:6] for tag in (row.get("tags") or [])}
     if missing_capability_tags(front):
         return Step("数据集重建", False, f"smoke 前 6 条未覆盖新能力: {sorted(front)}")
+
+    # 重建后仍然重复 id = 去重没生效：`--suite regression` 会把同一条用例再评一遍。
+    from src.engine.dataset import duplicate_id_report
+
+    for name in ID_UNIQUE_FILES:
+        path = ROOT / "cases" / name
+        if not path.is_file():
+            continue
+        report = duplicate_id_report(path)
+        if report["duplicates"]:
+            preview = ", ".join(sorted(report["duplicate_ids"])[:8])
+            return Step(
+                "数据集重建",
+                False,
+                f"{name} 有 {report['duplicates']} 条重复 id（{preview}），先跑 build_suite --dedupe-inputs",
+            )
     # 内容文件与自检前一致 = 这轮只是校验，不是真的重建，把时间戳改回去。
     if manifest_before is not None and all(
         _sha256(ROOT / "cases" / name) == digest for name, digest in before.items()
@@ -253,7 +271,7 @@ def step_dataset() -> Step:
     return Step(
         "数据集重建",
         True,
-        f"core {manifest['core']['written']} 条 | smoke {manifest['smoke']['written']} 条 | 构建确定 | 新能力在 smoke 前 6 条",
+        f"core {manifest['core']['written']} 条 | smoke {manifest['smoke']['written']} 条 | 构建确定 | 新能力在 smoke 前 6 条 | id 唯一",
     )
 
 

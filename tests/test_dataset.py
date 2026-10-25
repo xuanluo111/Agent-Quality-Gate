@@ -7,6 +7,8 @@ from src.engine.dataset import (
     audit_cases,
     build_suite,
     dedupe_cases,
+    dedupe_cases_detailed,
+    duplicate_id_report,
     load_cases,
     read_jsonl,
     select_smoke,
@@ -77,6 +79,59 @@ def test_dedupe_cases_handles_generators():
     unique, duplicates = dedupe_cases(case for case in cases)
     assert len(unique) == 2
     assert duplicates == 1
+
+
+def test_dedupe_keeps_first_and_flags_conflicting_ids():
+    first = TestCase(**row("a", "one"))
+    same = TestCase(**row("a", "one"))
+    different = TestCase(**row("a", "另一套场景"))
+
+    unique, report = dedupe_cases_detailed([first, same, different])
+
+    # 保留首条：留下的是文件里第一条的场景，后面的同 id 条目一律丢弃。
+    assert [case.id for case in unique] == ["a"]
+    assert unique[0].input == "one"
+    assert report["duplicates"] == 2
+    assert report["duplicate_ids"] == ["a"]
+    # 同内容重复只是脏数据；同 id 不同内容意味着另一套场景被丢掉，必须单列出来给人改 id。
+    assert report["conflicts"] == ["a"]
+    assert [item["identical"] for item in report["dropped"]] == [True, False]
+
+
+def test_dedupe_reports_same_input_under_different_ids():
+    unique, report = dedupe_cases_detailed(
+        [TestCase(**row("a", "同一句输入")), TestCase(**row("b", "同一句输入"))]
+    )
+
+    assert [case.id for case in unique] == ["a"]
+    assert report["dropped"][0]["reason"] == "duplicate_input"
+    # 内容相同、id 不同不是“场景冲突”，只是换了名字的重复用例。
+    assert report["duplicate_ids"] == []
+    assert report["conflicts"] == []
+
+
+def test_duplicate_id_report_counts_raw_rows(tmp_path):
+    path = tmp_path / "cases.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(row("a", "one")),
+                json.dumps(row("a", "two")),
+                json.dumps(row("b", "three")),
+                '{"input": "没有 id"}',
+                "坏行",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = duplicate_id_report(path)
+
+    assert (report["rows"], report["unique_ids"], report["duplicates"]) == (5, 2, 1)
+    assert report["duplicate_ids"] == {"a": 2}
+    # 坏行/缺 id 既不算唯一也不算重复，得单独计数，不然分母对不上。
+    assert report["missing_id"] == 2
 
 
 def test_stratified_sample_covers_categories():
@@ -235,3 +290,32 @@ def test_build_suite_excludes_unsupported_and_tags_sources(tmp_path):
     sources = {line["id"]: line["source"] for line in lines}
     assert sources == {"c1": "curated", "l1": "legacy"}
     assert all(any(tag.startswith("source:") for tag in line["tags"]) for line in lines)
+
+
+def test_dedupe_file_keeps_first_line_verbatim(tmp_path):
+    from build_suite import dedupe_file
+
+    path = tmp_path / "regression.jsonl"
+    first = json.dumps(row("a", "one"), ensure_ascii=False)
+    second = json.dumps(row("b", "two"), ensure_ascii=False)
+    path.write_text(
+        "\n".join(
+            [
+                first,
+                second,
+                json.dumps(row("a", "one"), ensure_ascii=False),
+                json.dumps(row("a", "改过的另一套场景"), ensure_ascii=False),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    result = dedupe_file(path)
+
+    assert result["dropped"] == 2
+    # 同 id 但内容不同 → 冲突：保留首条的另一套场景就没了，得靠人改 id。
+    assert result["conflicts"] == ["a"]
+    # 保留的行逐字原样写回（不重新序列化），顺序不变。
+    assert path.read_text(encoding="utf-8").splitlines() == [first, second]
+    assert duplicate_id_report(path)["duplicates"] == 0
