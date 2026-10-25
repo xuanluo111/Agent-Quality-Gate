@@ -9,6 +9,11 @@ JudgeLayer = Literal["rule", "trajectory", "jcv_audit", "llm", "local_fallback",
 # 失败环节：用于把“答错”拆成可归属的流水线阶段。
 FailureStage = Literal["understanding", "planning", "generation", "validation", "iteration"]
 StateOp = Literal["exists", "not_exists", "equals", "contains", "sha256"]
+# 断言期望值的同义写法：`absent` 就是 `not_exists`，词表里叫 expect，字段名仍是 op。
+STATE_OP_ALIASES = {"absent": "not_exists", "not-exists": "not_exists", "notexists": "not_exists"}
+
+# completion：由终态断言推导，禁止用 Agent 回复里的话当证据。
+COMPLETION_STATES = ("completed", "partial", "aborted", "unknown")
 
 # Runner 拿不到收尾答复时的占位文本；裁判与报告都按这个前缀识别“没测到答复”而不是“答错了”。
 NO_FINAL_RESPONSE_PREFIX = "[NO_FINAL_RESPONSE]"
@@ -104,11 +109,21 @@ class StateAssertion(BaseModel):
     path: str = Field(..., min_length=1, description="工作区相对路径")
     op: StateOp = Field(..., description="exists/not_exists/equals/contains/sha256")
     value: Optional[str] = Field(default=None, description="期望值；exists/not_exists 可省略")
+    weight: float = Field(default=1.0, ge=0.0, description="该条断言在完成度里的权重")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_expect_alias(cls, data: object) -> object:
+        """允许用例写 `expect: exists|absent|sha256|contains`，内部仍存到 op。"""
+        if isinstance(data, dict) and not data.get("op") and data.get("expect"):
+            return {**data, "op": data["expect"]}
+        return data
 
     @field_validator("op", mode="before")
     @classmethod
     def _normalize_op(cls, value: object) -> str:
-        return str(value or "").strip().lower()
+        raw = str(value or "").strip().lower()
+        return STATE_OP_ALIASES.get(raw, raw)
 
     @model_validator(mode="after")
     def _require_value(self) -> "StateAssertion":
@@ -232,6 +247,10 @@ class AgentTrace(BaseModel):
     state_before: Dict[str, str] = Field(default_factory=dict)
     state_after: Dict[str, str] = Field(default_factory=dict)
     state_diff: Dict[str, List[str]] = Field(default_factory=dict)
+    # 逐条终态断言的判定明细：{assertion, passed, expected, actual, evidence_span}。
+    assertion_results: List[dict] = Field(default_factory=list)
+    # completed / partial / aborted / unknown，由断言结果推导，不看回复措辞。
+    completion: str = Field(default="unknown", description="任务完成度，未知时不填 completed")
     attempt: int = Field(default=0, description="repeat 场景下的第几次独立尝试（0 起）")
 
     model: str = ""
