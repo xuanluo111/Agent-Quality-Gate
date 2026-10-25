@@ -18,8 +18,10 @@ reports/partial_results*.jsonl
 reports/latest.md
 reports/observability.json
 
-# 本地数据备份包，不入库
+# 本地数据备份包与归档目录，不入库
 .reports-backup-*.zip
+.reports-archive-*/
+.workspace-archive-*/
 
 # 重判临时目录：备份与运行日志
 .rejudge_backup/
