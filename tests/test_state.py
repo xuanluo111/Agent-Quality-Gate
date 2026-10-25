@@ -8,8 +8,10 @@ from src.engine.state import (
     correction_start_step,
     deprecated_values_for,
     diff_states,
+    evaluate_assertions,
     evaluate_state,
     extract_corrections,
+    infer_completion,
     matches_any,
     scan_state_pollution,
     snapshot_workspace,
@@ -247,3 +249,63 @@ def test_scan_state_pollution_ignores_single_char_values():
     case = make_case(deprecated_values=["1"], input="请处理这个请求")
     trace = make_trace(agent_response="已处理 1 条记录。")
     assert scan_state_pollution(case, trace) == []
+
+
+def test_assertion_accepts_expect_alias_and_weight():
+    assertion = StateAssertion.model_validate({"path": "a.md", "expect": "absent"})
+    assert assertion.op == "not_exists"
+    assert assertion.weight == 1.0
+    assert StateAssertion(path="a.md", op="exists", weight=0.5).weight == 0.5
+
+
+def test_evaluate_assertions_keeps_passed_items(tmp_path):
+    """通过的断言也要留下记录，否则 completion 没有分母。"""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "a.md").write_text("完成", encoding="utf-8")
+    case = make_case(
+        state_assertions=[
+            {"path": "a.md", "op": "contains", "value": "完成"},
+            {"path": "b.md", "op": "exists"},
+        ]
+    )
+    results = evaluate_assertions(case, snapshot_workspace(workspace), workspace)
+
+    assert [item["passed"] for item in results] == [True, False]
+    assert results[0]["assertion"]["path"] == "a.md"
+    assert results[0]["evidence_span"] == "state:a.md"
+    assert results[1]["evidence_span"] == "state:b.md"
+    assert results[1]["detail"] == "文件不存在"
+    assert all("expected" in item and "actual" in item for item in results)
+
+
+def test_completion_is_not_completed_when_model_claims_done_but_files_missing(tmp_path):
+    """模型说“都写好了”，终态只落了其中一份：completion 不得是 completed。"""
+    workspace = tmp_path / "ws"
+    (workspace / "out").mkdir(parents=True)
+    (workspace / "out" / "a.md").write_text("完成", encoding="utf-8")
+    case = make_case(
+        state_assertions=[
+            {"path": "out/a.md", "expect": "exists"},
+            {"path": "out/b.md", "expect": "exists"},
+        ]
+    )
+    results = evaluate_assertions(case, snapshot_workspace(workspace), workspace)
+
+    assert [item["passed"] for item in results] == [True, False]
+    assert infer_completion(results, has_spec=True) == "partial"
+    assert infer_completion(results, has_spec=True) != "completed"
+
+
+def test_completion_four_states():
+    passed = [{"passed": True}, {"passed": True}]
+    mixed = [{"passed": True}, {"passed": False}]
+    failed = [{"passed": False}]
+
+    assert infer_completion(passed, has_spec=True) == "completed"
+    assert infer_completion(mixed, has_spec=True) == "partial"
+    assert infer_completion(failed, has_spec=True, stopped=True) == "aborted"
+    assert infer_completion(failed, has_spec=True, interrupted=True) == "unknown"
+    # 没有声明终态规格时宁可不给结论，也不能拿回复充当证据。
+    assert infer_completion(passed, has_spec=False) == "unknown"
+    assert infer_completion([], has_spec=True) == "unknown"

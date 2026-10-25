@@ -15,7 +15,7 @@ from src.engine.journal import (
     OperationJournal,
 )
 from src.engine.privacy import mask_sensitive_data
-from src.engine.state import diff_states, snapshot_workspace
+from src.engine.state import diff_states, evaluate_assertions, infer_completion, snapshot_workspace
 from src.engine.tools import (
     Sandbox,
     build_openai_tools,
@@ -436,6 +436,13 @@ class AgentRunner:
 
             extracted = extract_variables_from_results(tool_results)
             state_after = snapshot_workspace(workspace)
+            # 完成度只看终态断言，不看回复里说自己做完没有。
+            assertion_results = evaluate_assertions(case, state_after, workspace)
+            completion = infer_completion(
+                assertion_results,
+                has_spec=bool(case.state_assertions or case.expected_final_state),
+                stopped=is_token_exceeded or is_step_exceeded,
+            )
             return AgentTrace(
                 case_id=case.id,
                 agent_response=_mask_payload(final_response) if route == "s2_masked_cloud" else final_response,
@@ -462,6 +469,8 @@ class AgentRunner:
                 state_before=state_before,
                 state_after=state_after,
                 state_diff=diff_states(state_before, state_after),
+                assertion_results=assertion_results,
+                completion=completion,
                 attempt=attempt,
                 model=model,
                 run_id=self.run_id,

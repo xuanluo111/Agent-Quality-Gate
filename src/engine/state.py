@@ -120,6 +120,85 @@ def _read_for_assertion(workspace: Optional[str | Path], path: str) -> Optional[
         return None
 
 
+def _judge_assertion(assertion, snapshot: Dict[str, str], workspace: Optional[str | Path]) -> dict:
+    """单条断言的判定明细：passed / expected / actual / detail / evidence_span。"""
+    path, op, value = assertion.path, assertion.op, assertion.value
+    actual = (snapshot or {}).get(path)
+    ok = True
+    detail = ""
+    if op == "exists":
+        ok = actual is not None
+        detail = "文件不存在" if not ok else ""
+    elif op == "not_exists":
+        ok = actual is None
+        detail = "文件仍然存在" if not ok else ""
+    elif op == "sha256":
+        expected = _expected_digest(value or "")
+        ok = actual == expected
+        detail = f"期望 {expected[:12]}，实际 {(actual or '-')[:12]}"
+    elif op == "equals":
+        content = _read_for_assertion(workspace, path)
+        if content is None:
+            ok = False
+            detail = "无法读取工作区文件，按未达期望处理"
+        else:
+            ok = content.strip() == str(value).strip()
+            detail = "文件正文与期望不一致" if not ok else ""
+    elif op == "contains":
+        content = _read_for_assertion(workspace, path)
+        if content is None:
+            ok = False
+            detail = "无法读取工作区文件，按未达期望处理"
+        else:
+            ok = str(value) in content
+            detail = "文件正文缺少期望片段" if not ok else ""
+    else:  # pragma: no cover - schema 已限制 op 取值
+        ok, detail = False, f"未知断言类型: {op}"
+    return {
+        "assertion": {
+            "path": path,
+            "op": op,
+            "value": value,
+            "weight": float(getattr(assertion, "weight", 1.0) or 0.0),
+        },
+        "passed": ok,
+        "expected": value,
+        "actual": actual,
+        "evidence_span": f"state:{path}",
+        "detail": detail,
+    }
+
+
+def evaluate_assertions(
+    case: TestCase,
+    snapshot: Dict[str, str],
+    workspace: Optional[str | Path] = None,
+    include_expected_final_state: bool = True,
+) -> List[dict]:
+    """逐条判定终态断言，通过的也留下记录（completion 需要分母）。
+
+    只判状态，不看 Agent 说了什么：`agent_response` 里写“已完成”不能影响这里的结论。
+    """
+    results: List[dict] = [_judge_assertion(item, snapshot, workspace) for item in case.state_assertions or []]
+    if not include_expected_final_state:
+        return results
+    for path, expected in (case.expected_final_state or {}).items():
+        expected_digest = _expected_digest(expected)
+        actual = (snapshot or {}).get(path)
+        ok = actual == expected_digest
+        results.append(
+            {
+                "assertion": {"path": path, "op": "expected_final_state", "value": expected_digest, "weight": 1.0},
+                "passed": ok,
+                "expected": expected_digest,
+                "actual": actual,
+                "evidence_span": f"state:{path}",
+                "detail": "" if ok else ("终态哈希与期望不一致" if actual else "期望文件不存在"),
+            }
+        )
+    return results
+
+
 def check_state_assertions(
     case: TestCase,
     snapshot: Dict[str, str],
@@ -127,42 +206,47 @@ def check_state_assertions(
 ) -> List[dict]:
     """逐条校验 state_assertions，返回失败明细（空列表代表全部通过）。"""
     failures: List[dict] = []
-    for assertion in case.state_assertions or []:
-        path, op, value = assertion.path, assertion.op, assertion.value
-        actual = (snapshot or {}).get(path)
-        ok = True
-        detail = ""
-        if op == "exists":
-            ok = actual is not None
-            detail = "文件不存在" if not ok else ""
-        elif op == "not_exists":
-            ok = actual is None
-            detail = "文件仍然存在" if not ok else ""
-        elif op == "sha256":
-            expected = _expected_digest(value or "")
-            ok = actual == expected
-            detail = f"期望 {expected[:12]}，实际 {(actual or '-')[:12]}"
-        elif op == "equals":
-            content = _read_for_assertion(workspace, path)
-            if content is None:
-                ok = False
-                detail = "无法读取工作区文件，按未达期望处理"
-            else:
-                ok = content.strip() == str(value).strip()
-                detail = "文件正文与期望不一致" if not ok else ""
-        elif op == "contains":
-            content = _read_for_assertion(workspace, path)
-            if content is None:
-                ok = False
-                detail = "无法读取工作区文件，按未达期望处理"
-            else:
-                ok = str(value) in content
-                detail = "文件正文缺少期望片段" if not ok else ""
-        else:  # pragma: no cover - schema 已限制 op 取值
-            ok, detail = False, f"未知断言类型: {op}"
-        if not ok:
-            failures.append({"path": path, "op": op, "expected": value, "actual": actual, "detail": detail})
+    for item in evaluate_assertions(case, snapshot, workspace, include_expected_final_state=False):
+        if item["passed"]:
+            continue
+        assertion = item["assertion"]
+        failures.append(
+            {
+                "path": assertion["path"],
+                "op": assertion["op"],
+                "expected": item["expected"],
+                "actual": item["actual"],
+                "detail": item["detail"],
+            }
+        )
     return failures
+
+
+# completion 的推导规则：只认断言结果与是否被中断/主动停止，四选一、不留空。
+def infer_completion(
+    assertion_results: Sequence[dict],
+    *,
+    has_spec: bool,
+    interrupted: bool = False,
+    stopped: bool = False,
+) -> str:
+    """completed / partial / aborted / unknown。
+
+    - 没有声明任何终态规格：`unknown`（没有可核对的证据，不能拿回复充当证据）
+    - 被中断（异常/被杀）且状态不可知：`unknown`
+    - 主动终止且未全过：`aborted`
+    - 全过：`completed`；部分过：`partial`
+    """
+    if interrupted:
+        return "unknown"
+    results = list(assertion_results or [])
+    if not has_spec or not results:
+        return "unknown"
+    if all(item.get("passed") for item in results):
+        return "completed"
+    if stopped:
+        return "aborted"
+    return "partial"
 
 
 def evaluate_state(

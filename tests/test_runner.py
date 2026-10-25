@@ -291,3 +291,49 @@ def test_runner_uses_separate_workspace_per_attempt(tmp_path):
     assert first.execution_workspace != second.execution_workspace
     workspace_root = tmp_path / "workspace" / "test-run"
     assert any(path.name.endswith("-a1") for path in workspace_root.iterdir())
+
+
+def test_runner_completion_ignores_agent_claim(tmp_path):
+    """模型说已写好，但工作区没有文件：completion 不能是 completed。"""
+    case = make_case(
+        id="claim-done",
+        allowed_tools=[],
+        fixtures={},
+        state_assertions=[{"path": "out.md", "op": "exists"}],
+    )
+    runner = build_runner(tmp_path, [text_response("我已经把 out.md 写好了。")])
+    trace = runner.run_case(case)
+
+    assert trace.completion != "completed"
+    assert trace.completion == "partial"
+    assert [item["passed"] for item in trace.assertion_results] == [False]
+    assert trace.assertion_results[0]["evidence_span"] == "state:out.md"
+
+
+def test_runner_completion_is_completed_when_assertions_hold(tmp_path):
+    case = make_case(
+        id="really-done",
+        allowed_tools=["write_file"],
+        fixtures={},
+        state_assertions=[{"path": "out.md", "op": "contains", "value": "完成"}],
+    )
+    runner = build_runner(
+        tmp_path,
+        [
+            tool_response("write_file", json.dumps({"path": "out.md", "content": "完成"})),
+            text_response("完成。"),
+        ],
+    )
+    trace = runner.run_case(case)
+
+    assert trace.completion == "completed"
+    assert trace.assertion_results[0]["passed"] is True
+
+
+def test_runner_completion_is_unknown_without_assertions(tmp_path):
+    case = make_case(id="no-spec", allowed_tools=[], fixtures={})
+    runner = build_runner(tmp_path, [text_response("全部完成。")])
+    trace = runner.run_case(case)
+
+    assert trace.completion == "unknown"
+    assert trace.assertion_results == []
