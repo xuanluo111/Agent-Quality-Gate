@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from src.engine.dataset import wilson_interval
-from src.engine.failure_class import FAILURE_CLASS_LABELS
+from src.engine.failure_class import FAILURE_CLASS_LABELS, PRECONDITION_FAILED, UNKNOWN
 from src.engine.gate import evaluate_gate, is_untrusted
 from src.engine.stability import stability_metrics
 from src.models.schema import PROVIDER_BLOCKED_REASON, EvalResult
@@ -94,10 +94,8 @@ DIMENSION_LABELS = {
 }
 
 
-def _dimension_row(name: str, value: str, items: list) -> dict:
+def _dimension_row(name: str, value: str, passed: int, total: int) -> dict:
     """一个维度的取值：n、Strict 通过率、Wilson 95% 区间与区分度备注。"""
-    total = len(items)
-    passed = sum(1 for item in items if item.strict_passed)
     rate = round(passed / total * 100, 2) if total else 0.0
     low, high = wilson_interval(passed, total) if total else (0.0, 0.0)
     note = ""
@@ -118,15 +116,41 @@ def _dimension_row(name: str, value: str, items: list) -> dict:
     }
 
 
-def dimension_breakdown(results: list, gate_status: str) -> list:
+def _comparable_items(results: list, exclude_unknown: bool) -> list:
+    """与门禁同一套筛选：前置条件不满足恒排除，unknown 跟 --exclude-unknown 开关走。"""
+    return [
+        item
+        for item in results
+        if getattr(item, "failure_class", None) != PRECONDITION_FAILED
+        and not (exclude_unknown and getattr(item, "failure_class", None) == UNKNOWN)
+    ]
+
+
+def dimension_breakdown(
+    results: list,
+    gate_status: str,
+    exclude_unknown: bool = False,
+    gate_metrics: Optional[dict] = None,
+) -> list:
     """按维度给 n / 通过率 / Wilson 95%。
 
-    `unknown`（未测到）不进任何维度的分母：把它算进去等于把超时当成答错。
+    筛选口径与门禁逐字一致：`precondition_failed`（前置条件不满足）恒不进分母，
+    `unknown`（未测到）跟 `--exclude-unknown` 走——维度表的作用是解释门禁那一个数，
+    口径不同会让各行加总对不上门禁，反而无法复算。门禁状态行直接取门禁 metrics，
+    不重算：两套算法就是两个真相源。
     饱和与地板都要点名：那一维度上所有样本结论一致，**没有区分度**，
     不能拿来比较模型，也不该参与任何形式的加权汇总（本报告不给加权总分）。
     """
-    items = [item for item in results if getattr(item, "failure_class", None) != "unknown"]
-    rows = [_dimension_row("gate_status", str(gate_status or "-"), items)]
+    metrics = gate_metrics or {}
+    items = _comparable_items(results, exclude_unknown)
+    scored_total = metrics.get("scored_cases")
+    if scored_total is None:
+        # 直接调用（没有门禁结果）时按同一筛选口径自算，保证 n 不为空。
+        scored_total = len(items)
+        scored_pass = sum(1 for item in items if item.strict_passed)
+    else:
+        scored_pass = int(metrics.get("strict_pass") or 0)
+    rows = [_dimension_row("gate_status", str(gate_status or "-"), scored_pass, int(scored_total))]
     for name, key in (
         ("category", lambda item: item.category or "未分类"),
         ("failure_class", lambda item: item.failure_class or "unclassified"),
@@ -135,8 +159,29 @@ def dimension_breakdown(results: list, gate_status: str) -> list:
         for item in items:
             groups[key(item)].append(item)
         for value, group in sorted(groups.items(), key=lambda pair: (-len(pair[1]), str(pair[0]))):
-            rows.append(_dimension_row(name, str(value), group))
+            passed = sum(1 for item in group if item.strict_passed)
+            rows.append(_dimension_row(name, str(value), passed, len(group)))
     return rows
+
+
+def _dimension_scope_note(summary: dict) -> str:
+    """把分母里到底有什么写清楚：读者要能逐行复算出同门禁一样的结果。"""
+    metrics = (summary.get("gate") or {}).get("metrics") or {}
+    precondition = int(metrics.get("precondition_failed_samples") or 0)
+    unknown = int(metrics.get("unknown_samples") or 0)
+    if summary.get("exclude_unknown"):
+        unknown_text = f"`unknown`（未测到）{unknown} 条也已排除（与 `--exclude-unknown` 同口径）"
+    else:
+        unknown_text = (
+            f"`unknown`（未测到）{unknown} 条仍在分母里（与门禁默认口径一致，"
+            "加 `--exclude-unknown` 可一并排除）"
+        )
+    return (
+        f"> 口径与门禁一致：`precondition_failed`（前置条件不满足）{precondition} 条不进分母，"
+        f"{unknown_text}；门禁状态行直接取门禁判定结果，可逐行复算。"
+        "标成 **饱和**/**地板** 的维度说明该维度上结论全一致、**没有区分度**，"
+        "不能用来比较模型；本报告不提供加权总分。\n\n"
+    )
 
 
 def _render_dimension_block(summary: dict) -> str:
@@ -144,10 +189,7 @@ def _render_dimension_block(summary: dict) -> str:
     if not rows:
         return ""
     md = "### 维度分层（n / 通过率 / Wilson 95%）\n\n"
-    md += (
-        "> 分母不含 `unknown`（未测到）样本。标成 **饱和**/**地板** 的维度说明该维度上"
-        "结论全一致、**没有区分度**，不能用来比较模型；本报告不提供加权总分。\n\n"
-    )
+    md += _dimension_scope_note(summary)
     md += "| 维度 | 取值 | n | Strict 通过率 | Wilson 95% | 备注 |\n|------|------|---|---------------|------------|------|\n"
     for row in rows:
         rate = f"{row['rate']:.2f}%" if row["n"] else "—"
@@ -408,7 +450,9 @@ def summarize(
         "state_pollution_count": sum(1 for item in trusted_failures if item.fail_reason == "State_Pollution"),
         "provenance_violations": sum(len(item.provenance_violations or []) for item in results),
         "diagnostics_count": len(gate.diagnostics),
-        "dimension_breakdown": dimension_breakdown(results, gate.status),
+        "dimension_breakdown": dimension_breakdown(
+            results, gate.status, exclude_unknown=exclude_unknown, gate_metrics=gate.metrics
+        ),
         "gate": gate.to_dict(),
     }
     # 兼容旧版仪表盘的字段名，新代码请优先使用上面的完整字段。
