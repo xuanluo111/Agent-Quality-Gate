@@ -4,7 +4,7 @@ import math
 import random
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, Optional, Tuple
 
 from pydantic import ValidationError
 
@@ -66,12 +66,27 @@ def load_cases(path: str | Path, dedupe: bool = True) -> Tuple[List[TestCase], d
             unique.append(case)
         cases = unique
 
+    # 单轮输入下没有“改口前”，correction_round>1 只会把前 N-1 次工具调用排除在污染
+    # 扫描之外：如果交付物的写入正好落在被豁免的步数里，脏值就漏判了。
+    warnings = [
+        {
+            "id": case.id,
+            "warning": (
+                "correction_round>1 需要多轮用户输入才有意义；"
+                "单轮用例会漏扫前 N-1 次工具调用"
+            ),
+        }
+        for case in cases
+        if int(getattr(case, "correction_round", 1) or 1) > 1
+    ]
+
     report = {
         "path": str(path),
         "raw_records": len(records),
         "loaded_cases": len(cases),
         "parse_errors": parse_errors,
         "validation_errors": validation_errors,
+        "warnings": warnings,
         "duplicates": duplicates,
         "missing_sensitivity": missing_sensitivity,
         "dataset_sha256": dataset_sha256(path),
@@ -173,7 +188,15 @@ def wilson_interval(successes: int, total: int, z: float = 1.96) -> Tuple[float,
     return max(0.0, center - margin) * 100, min(1.0, center + margin) * 100
 
 
-def select_smoke(cases: List[TestCase], max_cases: int = 12) -> List[TestCase]:
+def select_smoke(
+    cases: List[TestCase], max_cases: int = 12, must_tags: Optional[List[str]] = None
+) -> List[TestCase]:
+    """挑选冒烟集。
+
+    must_tags 命中的用例优先入选并排在最前：新能力如果只看分打分，会被 HITL 这类
+    高分用例全挤掉，`--limit` 截断后快速回归就永远测不到它们。其余名额仍按特征
+    打分与类别多样性补齐。
+    """
     def score(case: TestCase) -> tuple:
         feature = 0
         if case.expected_variables:
@@ -190,10 +213,19 @@ def select_smoke(cases: List[TestCase], max_cases: int = 12) -> List[TestCase]:
 
     ordered = sorted(cases, key=score)
     selected: List[TestCase] = []
-    categories = set()
+    required = {tag for tag in (must_tags or []) if tag}
+    if required:
+        for case in ordered:
+            if len(selected) >= max_cases:
+                break
+            if required & set(case.tags):
+                selected.append(case)
+    categories = {case.category for case in selected}
     for case in ordered:
         if len(selected) >= max_cases:
             break
+        if case in selected:
+            continue
         if case.category not in categories or len(selected) < 6:
             selected.append(case)
             categories.add(case.category)

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -12,7 +13,9 @@ from src.engine.dataset import (
     stratified_sample,
     wilson_interval,
 )
+from src.engine.state import deprecated_values_for, scan_state_pollution
 from src.models.schema import TestCase
+from tests.conftest import make_trace
 
 
 def write_rows(path, rows):
@@ -114,6 +117,88 @@ def test_select_smoke_prioritizes_features():
     smoke = select_smoke(cases, max_cases=3)
     ids = {case.id for case in smoke}
     assert {"jcv", "hitl", "s3"} <= ids
+
+
+def test_select_smoke_must_tags_are_guaranteed_and_first():
+    """新能力用例打分低，不强制必含就会被 HITL 挤掉，`--limit` 截断后永远测不到。"""
+    cases = [
+        TestCase(**row(f"hitl{i}", "hitl", requires_human_confirm=True)) for i in range(4)
+    ] + [TestCase(**row("state", "state", tags=["feature:state"]))]
+    smoke = select_smoke(cases, max_cases=3, must_tags=["feature:state"])
+    assert smoke[0].id == "state"
+    assert len(smoke) == 3
+
+
+def test_select_smoke_without_must_tags_is_unchanged():
+    cases = [TestCase(**row("plain", "plain")), TestCase(**row("hitl", "hitl", requires_human_confirm=True))]
+    assert [case.id for case in select_smoke(cases, max_cases=3)] == ["hitl", "plain"]
+
+
+def test_curated_cases_really_cover_new_capabilities():
+    """数据集字段丢了代码再好也测不出东西，所以把能力覆盖当成数据契约来断言。"""
+    root = Path(__file__).resolve().parent.parent
+    cases, report = load_cases(str(root / "cases" / "curated_cases.jsonl"), dedupe=True)
+    assert report["parse_errors"] == []
+    assert report["validation_errors"] == []
+
+    tags = {tag for case in cases for tag in case.tags}
+    assert {"feature:state", "feature:provenance", "feature:correction"} <= tags
+
+    by_id = {case.id: case for case in cases}
+    collateral = by_id["curated-state-collateral-001"]
+    assert collateral.allowed_changes == ["out/**"]
+    # 断言只能盯允许范围内的文件：引用 config.env 会把它算进 implicit_allowed，越权就漏判了。
+    assert [item.path for item in collateral.state_assertions] == ["out/report.md"]
+
+    # 单轮输入里改口从第 1 次工具调用就生效；写成 2 会把交付写入排除在污染扫描之外。
+    assert by_id["curated-correction-estimate-001"].correction_round == 1
+    # 显式废弃值不能被自动识别出的名词（“标准”）污染，否则正常回复就会被判污染。
+    assert deprecated_values_for(by_id["curated-correction-estimate-001"]) == ["500"]
+    # 数据集不该带着“扫不到”的配置：correction_round>1 在单轮输入下会漏扫前面的写入。
+    assert report.get("warnings") == []
+
+
+def test_estimate_correction_case_is_satisfiable_under_the_pollution_scan():
+    """提示词与判定口径必须对得上：只写 2400 判干净，把试算过程写进交付文件才算失败。
+
+    旧版提示词一边要求“先按 500 试算”，一边靠子串扫描禁止 500 出现在任何位置，
+    结果 7 个模型全被判 State_Pollution，是用例自相矛盾而不是模型有问题。
+    """
+    root = Path(__file__).resolve().parent.parent
+    cases, _ = load_cases(str(root / "cases" / "curated_cases.jsonl"), dedupe=True)
+    case = {item.id: item for item in cases}["curated-correction-estimate-001"]
+
+    compliant = make_trace(
+        tool_call_params=[
+            {"name": "write_file", "arguments": {"path": "expense.md", "content": "# 住宿费\n\n2400 元（800 × 3）"}}
+        ],
+        agent_response="已按 800 元/晚 × 3 晚写入 expense.md，金额 2400 元。",
+    )
+    assert scan_state_pollution(case, compliant) == []
+
+    replayed = make_trace(
+        tool_call_params=[
+            {
+                "name": "write_file",
+                "arguments": {"path": "expense.md", "content": "试算（500 × 3）：1500\n最终（800 × 3）：2400"},
+            }
+        ],
+        agent_response="已提交 2400 元。",
+    )
+    assert [item["where"] for item in scan_state_pollution(case, replayed)] == ["tool:write_file.content"]
+
+
+def test_loader_warns_when_correction_round_exceeds_single_turn(tmp_path):
+    """correction_round>1 需要多轮用户输入；单轮用例里它只会把写入排除在扫描外。"""
+    path = tmp_path / "cases.jsonl"
+    path.write_text(
+        json.dumps(row("multi-turn", "correction", correction_round=2), ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    cases, report = load_cases(str(path))
+    assert len(cases) == 1
+    assert [item["id"] for item in report["warnings"]] == ["multi-turn"]
+    assert "correction_round" in report["warnings"][0]["warning"]
 
 
 def test_audit_cases_reports_features_and_unsupported_tools():

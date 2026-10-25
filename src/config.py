@@ -77,11 +77,19 @@ class RunConfig:
     strict_baseline: float = 80.0
     max_high: int = 3
     min_valid_rate: float = 90.0
+    # iRTE 2026
+    repeat: int = 1
+    require_stable: bool = False
+    collateral_risk: str = "high"
+    provenance_enabled: bool = True
     output_root: str = "reports/runs"
     workspace_root: str = "workspace"
     run_id: str = ""
     dry_run: bool = False
     update_regression: bool = True
+    # 自检/调试运行不写 reports/latest.md、observability.json 与风险台账：
+    # 否则一次 6 条冒烟会把对外报告指向自检结果，台账也会记下不该入库的自检风险。
+    publish: bool = True
 
     def __post_init__(self) -> None:
         self.model_version = self.model_version or self.model
@@ -113,6 +121,10 @@ class RunConfig:
             raise ValueError("judge_samples 至少为 1")
         if not 0 <= self.min_valid_rate <= 100:
             raise ValueError("min_valid_rate 需在 0-100 之间（有效率百分比）")
+        if self.repeat < 1:
+            raise ValueError("repeat 至少为 1")
+        if self.collateral_risk not in {"critical", "high", "medium", "low"}:
+            raise ValueError(f"未知 collateral_risk: {self.collateral_risk}")
         if not Path(self.dataset).is_file():
             raise FileNotFoundError(f"数据集不存在: {self.dataset}")
         if self.dry_run:
@@ -152,6 +164,10 @@ class RunConfig:
             "strict_baseline": self.strict_baseline,
             "max_high": self.max_high,
             "min_valid_rate": self.min_valid_rate,
+            "repeat": self.repeat,
+            "require_stable": self.require_stable,
+            "collateral_risk": self.collateral_risk,
+            "provenance_enabled": self.provenance_enabled,
             "git_sha": git_sha(),
             "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -185,10 +201,24 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
         help="可信样本占比低于此百分比时判定为数据无效（环境故障，不评模型能力）",
     )
     parser.add_argument("--output-root", default="reports/runs")
+    parser.add_argument("--repeat", type=int, default=1, help="同一用例独立重复次数（pass^k 稳定性），默认 1")
+    parser.add_argument("--require-stable", action="store_true", help="repeat>1 时以 pass^k 而非单次通过率对比基线")
+    parser.add_argument(
+        "--collateral-risk",
+        choices=["critical", "high", "medium", "low"],
+        default="high",
+        help="allowed_changes 之外变更的风险等级，默认 high",
+    )
+    parser.add_argument("--no-provenance", action="store_true", help="关闭工具参数血缘校验（历史数据重判时可临时关闭）")
     parser.add_argument("--workspace-root", default="workspace")
     parser.add_argument("--run-id")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-regression", action="store_true", help="本轮不把失败用例追加到 regression.jsonl")
+    parser.add_argument(
+        "--no-publish",
+        action="store_true",
+        help="不覆盖 reports/latest.md / observability.json，也不写风险台账（自检用）",
+    )
 
 
 def config_from_args(args: argparse.Namespace) -> RunConfig:
@@ -213,12 +243,17 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         "output_root",
         "workspace_root",
         "dry_run",
+        "repeat",
+        "require_stable",
+        "collateral_risk",
     ):
         value = getattr(args, attr, None)
         if value is not None:
             setattr(config, attr, value)
+    config.provenance_enabled = not getattr(args, "no_provenance", False)
     config.request_timeout = args.timeout
     config.update_regression = not args.no_regression
+    config.publish = not getattr(args, "no_publish", False)
     for attr in ("base_url", "model", "model_version", "judge_base_url", "judge_model"):
         value = getattr(args, attr, None)
         if value:

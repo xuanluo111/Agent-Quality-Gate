@@ -1,7 +1,7 @@
 import json
 
 import visualize_reports
-from src.engine.report import generate_markdown, summarize, update_risk_ledger
+from src.engine.report import gate_brief, generate_markdown, summarize, update_risk_ledger
 from tests.conftest import make_result
 
 
@@ -473,6 +473,46 @@ def test_summarize_separates_truncation_from_gateway_errors():
     assert summary["valid_cases"] == 1
 
 
+def blocked_result(case_id: str = "blocked"):
+    return make_result(
+        case_id=case_id,
+        passed=False,
+        strict_passed=False,
+        risk_level="medium",
+        judge_layer="harness",
+        fail_reason="Provider_Blocked",
+        data_valid=False,
+    )
+
+
+def test_summarize_counts_provider_blocks_apart_from_gateway_errors():
+    """网关内容审核拦截不是网关故障：单独计数，且不拖低有效率。"""
+    results = [make_result(case_id="ok"), blocked_result()]
+    summary = summarize(results, run_meta=run_meta(), stats=stats(), strict_baseline=80)
+    assert summary["provider_blocked_count"] == 1
+    assert summary["gateway_error_count"] == 0
+    assert summary["harness_error_count"] == 1
+    # 分母里只有“送得到模型”的那条，所以有效率不会因拦截而崩。
+    assert summary["measurable_cases"] == 1
+    assert summary["valid_rate"] == 100.0
+
+
+def test_markdown_says_provider_block_is_not_a_pass(tmp_path):
+    """报告要把拦截写成“没测到、不能当通过”，而不是并进网关故障。"""
+    report_path = tmp_path / "report.md"
+    generate_markdown(
+        [make_result(case_id="ok"), blocked_result()],
+        str(report_path),
+        run_meta=run_meta(),
+        stats=stats(),
+        ledger_path=str(tmp_path / "ledger.json"),
+    )
+    text = report_path.read_text(encoding="utf-8")
+    assert "网关内容审核拦截" in text
+    assert "不能当通过" in text
+    assert "网关/Runner 异常 0 条" in text
+
+
 def test_markdown_names_max_tokens_as_the_fix(tmp_path):
     """报告里要直接说清是 max_tokens 配太小，否则读的人还会去找网关。"""
     report_path = tmp_path / "report.md"
@@ -499,3 +539,53 @@ def test_markdown_names_max_tokens_as_the_fix(tmp_path):
     assert "输出被 max_tokens 截断" in text
     assert "调大 max_tokens" in text
     assert "环境故障（Key/配额/网关/裁判/max_tokens 过小）" in text
+
+
+def test_gate_brief_separates_capability_from_data_failure():
+    """同样是 blocked：裁判兜底是样本不可信，Critical 才是能力不达标。"""
+    assert gate_brief({"status": "passed", "reasons": []}) == "passed"
+    assert (
+        gate_brief({"status": "blocked", "reasons": ["2 条判定由裁判兜底完成（失败关闭）"]})
+        == "blocked（裁判兜底 2）"
+    )
+    assert (
+        gate_brief(
+            {
+                "status": "blocked",
+                "reasons": [
+                    "存在 4 个 Critical 级严格失败",
+                    "Strict 通过率 83.33% 低于基线 80%",
+                ],
+            }
+        )
+        == "blocked（Critical 4，Strict 83.33%）"
+    )
+    assert gate_brief({"status": "invalid", "reasons": ["仅 100/120 条样本可信"]}) == "invalid"
+
+
+def test_visualization_skips_selfcheck_runs_by_default(tmp_path):
+    """verify-* 是 6 条能力用例的自检运行，不能和被评模型同轴对比。"""
+    reports_dir = tmp_path / "reports"
+    ledger = str(reports_dir / "risk_ledger.json")
+    for name in ("run-1", "verify-20261024"):
+        run_dir = reports_dir / "runs" / name
+        run_dir.mkdir(parents=True)
+        meta = dict(run_meta(), run_id=name)
+        generate_markdown(
+            sample_results(),
+            str(run_dir / "report.md"),
+            run_meta=meta,
+            stats=stats(),
+            ledger_path=ledger,
+        )
+
+    reports, skipped = visualize_reports.load_reports(reports_dir)
+    assert [report["run_id"] for report in reports] == ["run-1"]
+    assert [item["kind"] for item in skipped] == ["selfcheck"]
+    # 自检跳过是“主动排除”，不能被描述成解析失败。
+    warning = [item for item in visualize_reports.build_warnings(reports, skipped) if "已排除自检运行" in item]
+    assert warning, visualize_reports.build_warnings(reports, skipped)
+
+    reports, skipped = visualize_reports.load_reports(reports_dir, include_selfcheck=True)
+    assert {report["run_id"] for report in reports} == {"run-1", "verify-20261024"}
+    assert skipped == []

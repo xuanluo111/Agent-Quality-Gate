@@ -194,6 +194,45 @@ def safe_case_slug(case_id: str) -> str:
     return f"{slug}-{digest}"
 
 
+def scan_shell(raw: str) -> Tuple[List[str], Dict[str, int]]:
+    """按引号外的 ; && | 切分命令，并统计引号外出现过的连接符与重定向符。
+
+    引号内的竖线只是普通字符：`echo "a|b"` 不是管道，
+    否则第二段 `b` 会被当成命令名，报“沙箱未实现命令: b”。
+    重定向只记录不切分：`2>/dev/null` 的目标不是命令。
+    """
+    parts: List[str] = []
+    current: List[str] = []
+    found: Dict[str, int] = {}
+    quote = ""
+    index = 0
+    while index < len(raw):
+        char = raw[index]
+        if quote:
+            current.append(char)
+            if char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char
+            current.append(char)
+        elif char in "<>":
+            found[char] = found.get(char, 0) + 1
+            current.append(char)
+        elif char in ";&|":
+            if char == "&" and index + 1 < len(raw) and raw[index + 1] == "&":
+                found["&&"] = found.get("&&", 0) + 1
+                index += 1
+            else:
+                found[char] = found.get(char, 0) + 1
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+        index += 1
+    parts.append("".join(current))
+    return parts, found
+
+
 class Sandbox:
     """路径隔离 + 命令白名单的进程内工具执行器。
 
@@ -263,10 +302,13 @@ class Sandbox:
         raw = str(command or "").strip()
         if not raw:
             raise SandboxViolation("命令不能为空")
+        # 先按引号外的连接符切分：程序识别、元字符判断、执行都基于同一份分段，
+        # 避免把 `echo "a|b"` 里的竖线当成管道。
+        segments, found = scan_shell(raw)
         # 先识别每一段的程序：未实现的命令是能力缺口，
         # 不能因为模型顺手加了 `| head` 就升级成策略违规。
         programs = []
-        for segment in re.split(r"&&|[|;`]|\$\(|\$\{", raw):
+        for segment in segments:
             tokens = segment.strip().split()
             if tokens:
                 programs.append(tokens[0])
@@ -280,23 +322,28 @@ class Sandbox:
         unknown = [p for p in programs if p not in SIMPLE_PROGRAMS and p not in SAFE_PIPE_PROGRAMS]
         if unknown:
             raise SandboxUnsupported(f"沙箱未实现命令: {unknown[0]}")
-        # 注入类元字符仍是违规尝试；管道/重定向只是沙箱没提供的能力。
-        if any(token in raw for token in ("`", "$(", "${", ";")):
-            raise SandboxViolation("命令包含拼接或命令替换，已拒绝执行")
-        if "|" in raw:
+        # 命令替换可以绕过白名单读到隐藏内容，仍是违规；
+        # 分号只是多命令写法，和 && 一样分段执行即可。
+        if any(token in raw for token in ("`", "$(", "${")):
+            raise SandboxViolation("命令包含命令替换，已拒绝执行")
+        if found.get("|"):
             raise SandboxUnsupported("沙箱未实现管道，请拆成多条只读命令")
-        if "<" in raw:
+        if found.get("&"):
+            raise SandboxUnsupported("沙箱未实现后台执行")
+        if found.get("<"):
             raise SandboxUnsupported("沙箱未实现输入重定向")
-        if ">" in raw:
+        if found.get(">"):
             # `2>/dev/null`、`2>&1` 只是丢弃/合并输出，没有副作用；
             # 其余 `>` 是写文件，属于越界尝试。
             if re.search(r"\d*>&?\d|2>/dev/null", raw):
                 raise SandboxUnsupported("沙箱未实现输出重定向")
             raise SandboxViolation("命令包含写重定向，已拒绝执行")
-        segments = [segment.strip() for segment in raw.split("&&")]
-        if any(not segment for segment in segments):
+        # `;` 与 `&&` 都是多命令连接符：危险程序在前面的分段解析里已经被拦住，
+        # 这里应该顺序执行，而不是把“用分号连写三条 echo”记成注入尝试。
+        cleaned = [segment.strip() for segment in segments]
+        if any(not segment for segment in cleaned):
             raise SandboxViolation("命令包含空片段")
-        return "\n".join(self._run_segment(segment) for segment in segments)
+        return "\n".join(self._run_segment(segment) for segment in cleaned)
 
     def _run_segment(self, segment: str) -> str:
         try:

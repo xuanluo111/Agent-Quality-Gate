@@ -21,6 +21,8 @@ CRIT_HIGH_RE = re.compile(r"Critical\s*/\s*High\*\*[:：]\s*(\d+)\s*/\s*(\d+)")
 DICT_LINE_RE = re.compile(r"-\s*\*\*(类别分布|裁判层级分布)\*\*[:：]\s*`([^`]+)`")
 
 ECHARTS_CDN = "https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"
+# 自检运行（scripts/verify.py 生成的 run_id）默认不进对外看板：样本只有几条。
+SELFCHECK_PREFIX = "verify-"
 JUDGE_LAYER_ORDER = ["rule", "trajectory", "jcv_audit", "llm", "local_fallback"]
 JUDGE_LAYER_COLORS = {
     "rule": "#2EC4B6",
@@ -173,6 +175,8 @@ def parse_summary(path: Path, reports_dir: Path) -> dict:
         "harness_errors": int((gate.get("metrics") or {}).get("harness_errors", 0) or 0),
         "untrusted_samples": int(data.get("untrusted_samples", 0) or 0),
         "output_truncated_count": int(data.get("output_truncated_count", 0) or 0),
+        "provider_blocked_count": int(data.get("provider_blocked_count", 0) or 0),
+        "measurable_cases": int(data.get("measurable_cases", total) or 0),
         "valid_rate": float(data.get("valid_rate", 100.0) or 0.0),
         "strict_rate_on_valid_only": float(data.get("strict_pass_rate_valid_only", 0.0) or 0.0),
         "fail_reasons": {str(key): int(value) for key, value in fail_reasons.items()},
@@ -184,11 +188,25 @@ def parse_summary(path: Path, reports_dir: Path) -> dict:
     }
 
 
-def load_reports(reports_dir: Path) -> tuple[list[dict], list[dict]]:
+def load_reports(reports_dir: Path, include_selfcheck: bool = False) -> tuple[list[dict], list[dict]]:
+    """读取 runs/*/summary.json。
+
+    默认排除 `verify-*` 自检运行：那几份是 6 条能力用例的冒烟结果，画进对比图会把
+    “某个模型在 120 条上的得分”和“某个模型在 6 条上的得分”摆在同一个坐标轴里。
+    """
     reports, skipped = [], []
     summaries = sorted((reports_dir / "runs").glob("*/summary.json"))
     if summaries:
         for path in summaries:
+            if not include_selfcheck and path.parent.name.startswith(SELFCHECK_PREFIX):
+                skipped.append(
+                    {
+                        "file": str(path.relative_to(reports_dir)),
+                        "reason": "自检运行（run_id 以 verify- 开头），默认不计入对外看板；用 --include-selfcheck 纳入",
+                        "kind": "selfcheck",
+                    }
+                )
+                continue
             try:
                 reports.append(parse_summary(path, reports_dir))
             except Exception as exc:
@@ -272,14 +290,25 @@ def build_warnings(reports: list[dict], skipped: list[dict]) -> list[str]:
         )
     harness_total = sum(report.get("harness_errors", 0) for report in reports)
     truncated_total = sum(report.get("output_truncated_count", 0) for report in reports)
+    blocked_total = sum(int(report.get("provider_blocked_count") or 0) for report in reports)
     if truncated_total:
         warnings.append(
             f"共有 {truncated_total} 条用例输出被 max_tokens 截断（推理链吃满输出上限，正文与工具调用都没拿到）；"
             "这是配置问题不是模型能力问题，已按不可信样本处理，调大 max_tokens 后需重跑。"
         )
-    if harness_total - truncated_total > 0:
+    if blocked_total:
+        detail = "、".join(
+            f'{report["display"]} {int(report.get("provider_blocked_count") or 0)} 条'
+            for report in reports
+            if int(report.get("provider_blocked_count") or 0)
+        )
         warnings.append(
-            f"共有 {harness_total - truncated_total} 条用例因 Harness/网关异常未完成评测，已按失败关闭处理。"
+            f"共有 {blocked_total} 条用例被云厂商内容安全审核拦截（{detail}）：prompt 没送到模型，"
+            "既不是模型失败也不是网关故障，已从有效率分母剔除并单列；横比请看“可测样本”口径。"
+        )
+    if harness_total - truncated_total - blocked_total > 0:
+        warnings.append(
+            f"共有 {harness_total - truncated_total - blocked_total} 条用例因 Harness/网关异常未完成评测，已按失败关闭处理。"
         )
     invalid_reports = [report for report in reports if report.get("gate_status") == "invalid"]
     if invalid_reports:
@@ -327,7 +356,10 @@ def build_warnings(reports: list[dict], skipped: list[dict]) -> list[str]:
             f"{len(small_samples)} 份报告的样本量小于 30，Wilson 置信区间较宽，结论易受单条用例影响。"
         )
     for item in skipped:
-        warnings.append(f"已跳过 {item['file']}：{item['reason']}。")
+        if item.get("kind") == "selfcheck":
+            warnings.append(f"已排除自检运行 {item['file']}：{item['reason']}。")
+        else:
+            warnings.append(f"已跳过 {item['file']}：{item['reason']}。")
     return warnings
 
 
@@ -958,6 +990,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="解析 Agent-Quality-Gate 报告并生成 HTML/PNG 图表")
     parser.add_argument("--reports-dir", default="reports", help="报告目录，默认 reports")
     parser.add_argument("--output-dir", default="reports/charts", help="图表输出目录，默认 reports/charts")
+    parser.add_argument("--include-selfcheck", action="store_true", help="把 verify-* 自检运行也画进图表（默认排除）")
     args = parser.parse_args()
 
     reports_dir = Path(args.reports_dir)
@@ -967,7 +1000,7 @@ def main() -> int:
         return 1
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    reports, skipped = load_reports(reports_dir)
+    reports, skipped = load_reports(reports_dir, include_selfcheck=args.include_selfcheck)
     if not reports:
         print("没有解析到可用的新格式报告。")
         return 1

@@ -79,6 +79,42 @@ def test_gate_blocked_when_samples_are_trusted():
     assert decision.metrics["valid_rate"] == 100.0
 
 
+def blocked_result(index: int):
+    return make_result(
+        case_id=f"blocked-{index}",
+        passed=False,
+        strict_passed=False,
+        risk_level="medium",
+        judge_layer="harness",
+        fail_reason="Provider_Blocked",
+        data_valid=False,
+    )
+
+
+def test_provider_blocked_samples_leave_the_validity_denominator():
+    """被网关内容审核拦截的样本永远测不到，不能算成“有效率低”去判 invalid。"""
+    results = [result() for _ in range(8)] + [blocked_result(index) for index in range(2)]
+    decision = evaluate_gate(results, strict_baseline=50)
+    assert decision.metrics["provider_blocked_samples"] == 2
+    assert decision.metrics["measurable_cases"] == 8
+    assert decision.metrics["valid_rate"] == 100.0
+    # 但没测到的样本也不能当通过：结论仍是 blocked，只是原因分开了。
+    assert decision.status == "blocked"
+    assert any("2 条用例被网关内容安全审核拦截" in reason for reason in decision.reasons)
+
+
+def test_provider_blocked_only_run_is_not_reported_as_environment_fault():
+    """全被拦截时没有可测样本：有效率归 0 判 invalid，但不能说是“环境故障”。"""
+    decision = evaluate_gate([blocked_result(index) for index in range(3)], strict_baseline=50)
+    assert decision.metrics["measurable_cases"] == 0
+    assert decision.metrics["valid_rate"] == 0.0
+    assert decision.status == "invalid"
+    assert any("网关内容审核拦截 3 条" in reason for reason in decision.reasons)
+    # 不能说成“修复 Key”，那会把人往错方向推。
+    assert any("换" in reason and "网关" in reason for reason in decision.reasons)
+    assert not any("修复 Key/配额/网关/裁判" in reason for reason in decision.reasons)
+
+
 def test_gate_invalid_only_when_below_min_valid_rate():
     """少量环境故障仍是 blocked（失败关闭），只有大面积故障才升级为数据无效。"""
     mostly_valid = [result() for _ in range(19)] + [
