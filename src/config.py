@@ -80,6 +80,7 @@ class RunConfig:
     # iRTE 2026
     repeat: int = 1
     require_stable: bool = False
+    exclude_unknown: bool = False
     collateral_risk: str = "high"
     provenance_enabled: bool = True
     output_root: str = "reports/runs"
@@ -204,6 +205,11 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repeat", type=int, default=1, help="同一用例独立重复次数（pass^k 稳定性），默认 1")
     parser.add_argument("--require-stable", action="store_true", help="repeat>1 时以 pass^k 而非单次通过率对比基线")
     parser.add_argument(
+        "--exclude-unknown",
+        action="store_true",
+        help="把 unknown（超时/截断/预算耗尽/进程被杀）样本从通过率分母中摘除；默认单列但保留分母",
+    )
+    parser.add_argument(
         "--collateral-risk",
         choices=["critical", "high", "medium", "low"],
         default="high",
@@ -245,6 +251,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         "dry_run",
         "repeat",
         "require_stable",
+        "exclude_unknown",
         "collateral_risk",
     ):
         value = getattr(args, attr, None)

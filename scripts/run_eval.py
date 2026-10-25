@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 
 from src.config import add_run_args, config_as_dict, config_from_args
 from src.engine.dataset import audit_cases, load_cases, stratified_sample
+from src.engine.failure_class import classify_case
 from src.engine.journal import JOURNAL_FILENAME, recover as recover_journal
 from src.engine.judge import LayeredJudge
 from src.engine.report import generate_markdown
@@ -91,8 +92,13 @@ def run_single_case(
             result = judge.evaluate(case, trace)
             result.model = model
             result.run_id = run_id
+            # 误报归属：规则层/环境信号在 trace 与 journal 里，不在裁判输出里。
+            result.failure_class = classify_case(
+                result, trace, journal_path=getattr(runner, "journal_path", None), case=case
+            )
         except Exception as exc:
             trace, result = _harness_failure(case, exc, run_id, model)
+            result.failure_class = classify_case(result, trace, case=case)
         attempts.append((trace, result))
     if len(attempts) == 1:
         trace, result = attempts[0]
@@ -334,6 +340,7 @@ def main() -> int:
             "max_high": config.max_high,
             "min_valid_rate": config.min_valid_rate,
             "require_stable": config.require_stable,
+            "exclude_unknown": config.exclude_unknown,
         },
         run_meta=run_meta,
         stats=stats,

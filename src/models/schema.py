@@ -232,6 +232,9 @@ class AgentTrace(BaseModel):
         default=False, description="输出打满 max_tokens，且全程没有正文与工具调用——该样本没测到模型真实能力"
     )
     policy_blocked: bool = Field(default=False, description="Harness 是否因数据路由策略直接阻断")
+    precondition_failed: bool = Field(
+        default=False, description="首个工具调用因目标不存在/无权限而失败：用例前置条件不成立"
+    )
     policy_violations: List[str] = Field(default_factory=list)
     sandbox_limitations: List[str] = Field(
         default_factory=list, description="沙箱能力缺口：良性但未实现的命令/参数，不计入策略违规"
@@ -302,6 +305,10 @@ class EvalResult(BaseModel):
     state_diff: Dict[str, List[str]] = Field(default_factory=dict, description="created/modified/deleted")
     attempts: List[AttemptResult] = Field(default_factory=list, description="repeat>1 时每次独立尝试的结论")
     provenance_violations: List[dict] = Field(default_factory=list, description="参数血缘违规：tool/param/value/reason")
+    failure_class: Optional[str] = Field(
+        default=None,
+        description="误报归属：precondition_failed/unknown/orphan_effect/framework_decision；空表示确实是模型问题",
+    )
 
     jcv_score: Optional[float] = Field(default=None, description="Jaccard 相似度；未执行 JCV 时为 None")
     data_valid: bool = Field(default=True, description="该样本是否真正测到了被测模型；Runner/网关异常时为 False")
