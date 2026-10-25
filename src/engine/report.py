@@ -328,6 +328,7 @@ def summarize(
         "fabricated_parameter_count": sum(1 for item in trusted_failures if item.fail_reason == "Fabricated_Parameter"),
         "state_pollution_count": sum(1 for item in trusted_failures if item.fail_reason == "State_Pollution"),
         "provenance_violations": sum(len(item.provenance_violations or []) for item in results),
+        "diagnostics_count": len(gate.diagnostics),
         "gate": gate.to_dict(),
     }
     # 兼容旧版仪表盘的字段名，新代码请优先使用上面的完整字段。
@@ -688,6 +689,26 @@ def generate_markdown(
         f"\n- 未归属到四类的 Strict 失败（确实算模型问题）：{summary['unclassified_failure_count']} 条\n"
         f"- 任务完成度 `completion` 分布：`{summary['completion_counts']}`（由终态断言推导）\n\n"
     )
+
+    diagnostics = list(gate.get("diagnostics") or [])
+    md += "### 可自纠诊断（gate.diagnostics）\n\n"
+    if not diagnostics:
+        md += "> 本轮没有形成断言/参数级诊断（缺终态断言或证据定位），需看第四节根因分析。\n\n"
+    else:
+        md += (
+            "> `fix_hint` 只有三类文案：终态与期望不符 / 参数与 schema 不符 / 证据缺失。"
+            "完整列表在 `summary.json` 的 `gate.diagnostics`，也可用 `--explain` 直接打印。\n\n"
+        )
+        md += "| 用例 | 断言 | 期望 | 实际 | 证据 | 修复建议 |\n|------|------|------|------|------|----------|\n"
+        for diagnostic in diagnostics[:20]:
+            md += (
+                f"| `{diagnostic.get('case_id', '')}` | `{diagnostic.get('assertion') or '-'}` | "
+                f"{diagnostic.get('expected') or '-'} | {diagnostic.get('actual') or '-'} | "
+                f"`{diagnostic.get('evidence_span') or '-'}` | {diagnostic.get('fix_hint') or '-'} |\n"
+            )
+        if len(diagnostics) > 20:
+            md += f"\n> 仅列前 20 条，共 {len(diagnostics)} 条。\n"
+        md += "\n"
 
     md += """---
 

@@ -1,10 +1,24 @@
+import json
 from collections import Counter
 from dataclasses import asdict, dataclass, field
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 from src.engine.failure_class import FRAMEWORK_DECISION, ORPHAN_EFFECT, PRECONDITION_FAILED, UNKNOWN
 from src.engine.stability import stability_metrics
-from src.models.schema import OUTPUT_TRUNCATED_REASON, PROVIDER_BLOCKED_REASON, EvalResult
+from src.models.schema import (
+    COLLATERAL_DAMAGE_REASON,
+    OUTPUT_TRUNCATED_REASON,
+    PROVIDER_BLOCKED_REASON,
+    STATE_MISMATCH_REASON,
+    STATE_POLLUTION_REASON,
+    EvalResult,
+)
+
+# 与 judge.DEFAULT_EVIDENCE_SPAN 一致：裁判没给出证据定位时填的就是它。
+# 这里不 import judge，避免为了一个常量把 openai 依赖拉进门禁层。
+_NO_EVIDENCE_SPAN = "round:0"
+# 这些失败类型的裁判证据里带 path/expected/actual，能直接收敛成“哪条断言没过”。
+_STATE_REASONS = {STATE_MISMATCH_REASON, COLLATERAL_DAMAGE_REASON, STATE_POLLUTION_REASON}
 
 
 @dataclass
@@ -14,6 +28,7 @@ class GateDecision:
     enforced: bool
     reasons: List[str] = field(default_factory=list)
     metrics: dict = field(default_factory=dict)
+    diagnostics: List[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -28,6 +43,74 @@ def _is_untrusted(item: EvalResult) -> bool:
 is_untrusted = _is_untrusted
 
 
+def _evidence_record(item: EvalResult) -> dict:
+    """裁判把断言明细写成 JSON 塞进 evidence；解析不出来就当没有明细。"""
+    try:
+        parsed = json.loads(item.evidence or "")
+    except (TypeError, ValueError):
+        return {}
+    if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+        return parsed[0]
+    return {}
+
+
+def _text(value: object) -> str:
+    """保留 False/0 这类合法期望值，不能因为 falsy 就当空。"""
+    return "" if value is None else str(value)
+
+
+def case_diagnostic(item: EvalResult) -> Optional[dict]:
+    """把一条失败收敛成一行可执行建议。
+
+    fix_hint 只允许三类文案，避免诊断退化成自由发挥的日志：
+    终态与期望不符（断言级）、参数与 schema 不符（字段级）、证据缺失（无从定位）。
+    三类都落不下来时返回 None——不编造诊断，报告里仍有完整根因分析。
+    """
+    if item.strict_passed:
+        return None
+    span = str(item.evidence_span or "")
+    record = _evidence_record(item)
+
+    if item.fail_reason in _STATE_REASONS or span.startswith("state:"):
+        path = str(record.get("path") or "")
+        if not path and span.startswith("state:"):
+            path = span.split(":", 1)[1]
+        if path:
+            return {
+                "case_id": item.case_id,
+                "assertion": f"state:{path}",
+                "expected": _text(record.get("expected")),
+                "actual": _text(record.get("actual")),
+                "evidence_span": span or f"state:{path}",
+                "fix_hint": f"终态与期望不符：{path}",
+            }
+
+    if item.provenance_violations:
+        violation = item.provenance_violations[0] or {}
+        field = str(violation.get("param") or violation.get("tool") or "")
+        if field:
+            tool = str(violation.get("tool") or "")
+            return {
+                "case_id": item.case_id,
+                "assertion": f"param:{field}",
+                "expected": "参数值必须能在输入或工具结果中找到来源",
+                "actual": _text(violation.get("value")),
+                "evidence_span": span or (f"tool:{tool}" if tool else ""),
+                "fix_hint": f"参数与 schema 不符：{field}",
+            }
+
+    if not span or span == _NO_EVIDENCE_SPAN:
+        return {
+            "case_id": item.case_id,
+            "assertion": str(item.fail_reason or ""),
+            "expected": "",
+            "actual": "",
+            "evidence_span": span,
+            "fix_hint": f"证据缺失：{span or 'unknown'}",
+        }
+    return None
+
+
 def evaluate_gate(
     results: Iterable[EvalResult],
     strict_baseline: float = 80.0,
@@ -39,6 +122,19 @@ def evaluate_gate(
 ) -> GateDecision:
     items = list(results)
     total = len(items)
+    # 可自纠诊断：只对可信失败收敛（环境故障、前置条件不满足不给人改模型的建议），
+    # 且只接受三类固定文案；收敛不了的留空，不编造。
+    diagnostics = [
+        diagnostic
+        for diagnostic in (
+            case_diagnostic(item)
+            for item in items
+            if not item.strict_passed
+            and not _is_untrusted(item)
+            and item.failure_class != PRECONDITION_FAILED
+        )
+        if diagnostic
+    ]
     # 四类误报：先分类再算分，否则会把“没测到”当成“答错了”。
     class_counts = Counter(item.failure_class for item in items if getattr(item, "failure_class", None))
     unknown_samples = class_counts.get(UNKNOWN, 0)
@@ -113,7 +209,7 @@ def evaluate_gate(
     }
 
     if total == 0:
-        return GateDecision("blocked", 1, mode != "shadow", ["没有可评测样本"], metrics)
+        return GateDecision("blocked", 1, mode != "shadow", ["没有可评测样本"], metrics, diagnostics)
 
     if not scored:
         return GateDecision(
@@ -122,6 +218,7 @@ def evaluate_gate(
             mode != "shadow",
             ["本轮没有可计分样本：全部失败都是前置条件不满足（未测到），不能当作模型能力结论"],
             metrics,
+            diagnostics,
         )
 
     if mode == "shadow":
@@ -134,6 +231,7 @@ def evaluate_gate(
                 f"可信样本 {valid_cases}/{total}（有效率 {valid_rate:.2f}%）",
             ],
             metrics,
+            diagnostics,
         )
 
     # 数据本身不可信时，通过率高低都无意义，优先于能力判定给出独立状态。
@@ -163,6 +261,7 @@ def evaluate_gate(
                 remedy,
             ],
             metrics,
+            diagnostics,
         )
 
     reasons: List[str] = []
@@ -195,7 +294,7 @@ def evaluate_gate(
     if fallback > 0:
         reasons.append(f"{fallback} 条判定由裁判兜底完成（失败关闭）")
     if reasons:
-        return GateDecision("blocked", 1, True, reasons, metrics)
+        return GateDecision("blocked", 1, True, reasons, metrics, diagnostics)
 
     if high > max_high:
         return GateDecision(
@@ -204,5 +303,6 @@ def evaluate_gate(
             True,
             [f"High 级严格失败 {high} 个，超过阈值 {max_high}"],
             metrics,
+            diagnostics,
         )
-    return GateDecision("passed", 0, True, ["未发现 Critical，Strict 通过率达到基线"], metrics)
+    return GateDecision("passed", 0, True, ["未发现 Critical，Strict 通过率达到基线"], metrics, diagnostics)
