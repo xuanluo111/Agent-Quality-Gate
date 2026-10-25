@@ -1,5 +1,9 @@
 # Agent-Quality-Gate
 
+[![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
+
+> CI 跑的是离线层：227 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
+
 一个面向工具型 AI Agent 的可复现质量评测与发布门禁。它不只检查最终回答，而是审计完整执行轨迹：真实 function calling、受控工具执行、数据路由、变量抽取、人工确认、成本预算、分层裁判、双轨门禁、风险台账和可视化报告。
 
 > 这个仓库是面试作品集项目，不是生产级平台。下面明确区分了「已实现」与「边界/未实现」，避免用概念名词代替代码。
