@@ -75,6 +75,26 @@ def _attempts_payload(traces: List[AgentTrace]) -> List[dict]:
     return payload
 
 
+def _explain_lines(diagnostics: List[dict], selector: str = "*") -> List[str]:
+    """把 gate.diagnostics 摊成一行一案的可执行建议，不带完整 trace。
+
+    selector 为 `*` 时全部输出；否则按逗号分隔的 case id 过滤（可只追一个用例）。
+    """
+    selected = [item.strip() for item in str(selector or "*").split(",") if item.strip()]
+    wanted = None if not selected or selected == ["*"] else set(selected)
+    lines: List[str] = []
+    for diagnostic in diagnostics or []:
+        case_id = str(diagnostic.get("case_id") or "")
+        if wanted is not None and case_id not in wanted:
+            continue
+        lines.append(
+            f"[{case_id}] {diagnostic.get('fix_hint') or ''}"
+            f"（断言 {diagnostic.get('assertion') or '-'}｜期望 {diagnostic.get('expected') or '-'}"
+            f"｜实际 {diagnostic.get('actual') or '-'}｜证据 {diagnostic.get('evidence_span') or '-'}）"
+        )
+    return lines
+
+
 def run_single_case(
     case: TestCase, runner: AgentRunner, judge: LayeredJudge, run_id: str, model: str, repeat: int = 1
 ):
@@ -166,6 +186,13 @@ def _print_dry_run(cases, load_report, sampled, sampling, audit) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Agent-Quality-Gate 评测入口")
     add_run_args(parser)
+    parser.add_argument(
+        "--explain",
+        nargs="?",
+        const="*",
+        metavar="CASE_ID",
+        help="跑完后只打印可自纠诊断（一案一行），不打印完整 trace；可传 case id（逗号分隔）",
+    )
     args = parser.parse_args()
     config = config_from_args(args)
 
@@ -383,6 +410,14 @@ def main() -> int:
     print(f"台账: {ledger_note} | 新增回归用例: {regression_added}")
     gate = summary["gate"]
     print(f"门禁: {gate['status']} ({gate['exit_code']}) - {'; '.join(gate['reasons'])}")
+    if args.explain is not None:
+        lines = _explain_lines(gate.get("diagnostics") or [], args.explain)
+        print("-" * 58)
+        print("可自纠诊断（--explain，仅断言/参数/证据级结论）")
+        if lines:
+            print("\n".join(lines))
+        else:
+            print("本轮没有可自纠的失败：失败用例拿不到断言或参数级证据，请看报告第四节根因分析")
     print("=" * 58)
     return int(gate["exit_code"])
 
