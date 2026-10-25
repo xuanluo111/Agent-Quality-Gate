@@ -112,6 +112,9 @@ def run_single_case(
             result = judge.evaluate(case, trace)
             result.model = model
             result.run_id = run_id
+            # 取消信息只存在于 trace：带进结果，报告才能把“请求了没停下”的样本单列。
+            result.cancel_requested_at = trace.cancel_requested_at
+            result.stopped_at = trace.stopped_at
             # 误报归属：规则层/环境信号在 trace 与 journal 里，不在裁判输出里。
             result.failure_class = classify_case(
                 result, trace, journal_path=getattr(runner, "journal_path", None), case=case

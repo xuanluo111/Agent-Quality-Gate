@@ -254,6 +254,9 @@ class AgentTrace(BaseModel):
     assertion_results: List[dict] = Field(default_factory=list)
     # completed / partial / aborted / unknown，由断言结果推导，不看回复措辞。
     completion: str = Field(default="unknown", description="任务完成度，未知时不填 completed")
+    # 取消拆两个时间点：请求了不等于停下了，只有 stopped_at 非空才算真的停住。
+    cancel_requested_at: Optional[str] = Field(default=None, description="收到取消请求的时间；有值不代表已经停下")
+    stopped_at: Optional[str] = Field(default=None, description="真的在轮次边界停下的时间；空表示没停住")
     attempt: int = Field(default=0, description="repeat 场景下的第几次独立尝试（0 起）")
 
     model: str = ""
@@ -309,6 +312,9 @@ class EvalResult(BaseModel):
         default=None,
         description="误报归属：precondition_failed/unknown/orphan_effect/framework_decision；空表示确实是模型问题",
     )
+    # 从 trace 带过来的取消时间点：报告要能把“请求取消但没停下”的样本单列。
+    cancel_requested_at: Optional[str] = Field(default=None, description="收到取消请求的时间；有值不代表已经停下")
+    stopped_at: Optional[str] = Field(default=None, description="真的在轮次边界停下的时间；空表示没停住")
 
     jcv_score: Optional[float] = Field(default=None, description="Jaccard 相似度；未执行 JCV 时为 None")
     data_valid: bool = Field(default=True, description="该样本是否真正测到了被测模型；Runner/网关异常时为 False")

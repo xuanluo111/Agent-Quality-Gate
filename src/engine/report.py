@@ -198,6 +198,10 @@ def summarize(
     unknown_failures = [item for item in failures if getattr(item, "failure_class", None) == "unknown"]
     counted_failures = [item for item in failures if getattr(item, "failure_class", None) != "unknown"]
     completions = Counter(getattr(item, "completion", "unknown") or "unknown" for item in results)
+    # 取消拆两个时间点：请求了 / 真的停住了；只有“请求了没停住”会影响结论可信度。
+    cancel_requested = [item for item in results if getattr(item, "cancel_requested_at", None)]
+    cancel_stopped = [item for item in cancel_requested if getattr(item, "stopped_at", None)]
+    cancel_unstopped = [item for item in cancel_requested if not getattr(item, "stopped_at", None)]
 
     fail_reasons = Counter(_normalize_fail_reason(item.fail_reason) for item in counted_failures)
     category_failures = Counter(item.category for item in counted_failures)
@@ -270,6 +274,9 @@ def summarize(
         "framework_decision_count": failure_classes.get("framework_decision", 0),
         "exclude_unknown": exclude_unknown,
         "completion_counts": dict(completions),
+        "cancel_requested_count": len(cancel_requested),
+        "cancel_stopped_count": len(cancel_stopped),
+        "cancel_unstopped_count": len(cancel_unstopped),
         "fallback_count": fallback_count,
         "fallback_rate": round(fallback_count / total * 100, 2) if total else 0.0,
         "judge_attempts_total": judge_attempts,
@@ -651,9 +658,11 @@ def generate_markdown(
 | 未拿到收尾答复 | {summary['no_final_response_count']} | 预算内没有 final_response（含上行已单列的截断），属执行框架问题，不等于答错 |
 | 预算耗尽失败 | {summary['budget_exhausted_count']} | 归因于 Token/步数预算，不归因于推理能力 |
 | 沙箱能力缺口 | {summary['sandbox_limited_count']} | 模型用了良性但沙箱未实现的命令/参数，**不计违规**，仅影响该样本能否完成任务 |
+| 取消请求未生效 | {summary['cancel_unstopped_count']} | 收到取消请求但没能在轮次边界停下，已归入 `unknown`，不能当作模型能力结论 |
 
 - **有效率**：`{summary['valid_rate']:.2f}%`（门禁最低要求 `{summary['min_valid_rate']:.0f}%`）→ **{validity_label}**
 - **仅可信样本的 Strict**：`{summary['strict_pass_rate_valid_only']:.2f}%` ｜ **全量口径 Strict**：`{summary['strict_pass_rate']:.2f}%`
+- **取消**：请求 `{summary['cancel_requested_count']}` 条，真正停下 `{summary['cancel_stopped_count']}` 条，未停住 `{summary['cancel_unstopped_count']}` 条（未停住按 `unknown` 单列）
 
 {validity_note}
 {hitl_block}
@@ -687,7 +696,8 @@ def generate_markdown(
         md += f"| `{failure_class}` | {summary['failure_class_counts'].get(failure_class, 0)} | {label} |\n"
     md += (
         f"\n- 未归属到四类的 Strict 失败（确实算模型问题）：{summary['unclassified_failure_count']} 条\n"
-        f"- 任务完成度 `completion` 分布：`{summary['completion_counts']}`（由终态断言推导）\n\n"
+        f"- 任务完成度 `completion` 分布：`{summary['completion_counts']}`（由终态断言推导）\n"
+        f"- 其中收到取消请求但没停下、按 `unknown` 单列的样本：{summary['cancel_unstopped_count']} 条\n\n"
     )
 
     diagnostics = list(gate.get("diagnostics") or [])

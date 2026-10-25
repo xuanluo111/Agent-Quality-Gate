@@ -6,6 +6,8 @@
   这不是模型判断错，也不算 blocked。
 - `unknown`：超时、输出截断、token/步数预算耗尽、进程被杀——样本没测到真实能力，
   按「未测」单列，不进通过率分母（默认不改变既有口径，由 `--exclude-unknown` 打开）。
+  取消也归这里：只有 `stopped_at` 非空才算真的停下；只有 `cancel_requested_at`
+  说明请求没能在轮次边界生效，终止点不是模型行为。
 - `orphan_effect`：终态里有变更，但 journal 里没有对应的 done 记录——副作用无主，
   不能凭它判模型干过什么。
 - `framework_decision`：同一 operation 有多次 attempt 且终态缺失，更像 Harness 自己的
@@ -76,9 +78,13 @@ def _is_unknown(result: EvalResult, trace) -> bool:
         return True
     if not result.data_valid:
         return True
-    if trace is not None and not result.strict_passed:
-        if getattr(trace, "output_truncated", False) or getattr(trace, "is_token_exceeded", False):
+    if trace is not None:
+        # 请求了取消却没在轮次边界停下：终止点不由模型行为决定，结论不可信。
+        if getattr(trace, "cancel_requested_at", None) and not getattr(trace, "stopped_at", None):
             return True
+        if not result.strict_passed:
+            if getattr(trace, "output_truncated", False) or getattr(trace, "is_token_exceeded", False):
+                return True
     return False
 
 
