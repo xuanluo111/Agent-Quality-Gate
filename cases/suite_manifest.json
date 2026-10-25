@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-25 08:50:51",
+  "generated_at": "2026-10-25 15:33:54",
   "inputs": [
     "cases/curated_cases.jsonl",
     "cases/regression.jsonl"
@@ -610,7 +610,7 @@
         ]
       }
     ],
-    "sha256": "a51eb75494503ec0b72485a6083066379cea6a844f238aaf55f5115f2296c343",
+    "sha256": "299ef92e66b9bd65db3b4fad5a6dc0984d8166e8477c832b65518e733c9482d8",
     "audit": {
       "total": 161,
       "by_category": {
@@ -671,7 +671,7 @@
   "smoke": {
     "path": "cases/smoke.jsonl",
     "written": 18,
-    "sha256": "d1550402a413d1a296783f8e485c465e6fea50adda1e8caa1879a0e681dfdaf5",
+    "sha256": "59e80519c3b96808d8aadf3d0c5b0f86481318a076ea0e1d64d21bd89cf587e1",
     "audit": {
       "total": 18,
       "by_category": {
