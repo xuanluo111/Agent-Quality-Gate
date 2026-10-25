@@ -63,7 +63,18 @@ def resolve_api_key(required: bool = True) -> str:
     return ""
 
 
-def build_judge(config: dict, api_key: str) -> LayeredJudge:
+def build_judge(
+    config: dict,
+    api_key: str,
+    provenance_override: bool | None = None,
+    collateral_risk_override: str | None = None,
+) -> LayeredJudge:
+    # 旧批次的 trace 没有血缘语义：当时根本没做参数溯源，重判时默认关闭，
+    # 否则历史结果会凭空多出一堆 Fabricated_Parameter。
+    if provenance_override is not None:
+        provenance_enabled = provenance_override
+    else:
+        provenance_enabled = bool(config.get("provenance_enabled", False))
     return LayeredJudge(
         base_url=str(config.get("judge_base_url") or config.get("base_url") or ""),
         api_key=api_key,
@@ -72,6 +83,9 @@ def build_judge(config: dict, api_key: str) -> LayeredJudge:
         samples=int(config.get("judge_samples") or 2),
         jcv_threshold=float(config.get("jcv_threshold") or 0.6),
         timeout=int(config.get("request_timeout") or 300),
+        # 侧效风险等级默认 high：旧配置没声明时保持与 run_eval 一致的默认值。
+        collateral_risk=str(collateral_risk_override or config.get("collateral_risk") or "high"),
+        provenance_enabled=provenance_enabled,
     )
 
 
@@ -186,8 +200,10 @@ def rejudge_run(
     force: bool = False,
     recheck_rule: bool = False,
     recheck_hitl: bool = False,
+    provenance_override: bool | None = None,
+    collateral_risk_override: str | None = None,
 ) -> dict:
-    judge = build_judge(state["config"], api_key)
+    judge = build_judge(state["config"], api_key, provenance_override, collateral_risk_override)
     results: list[EvalResult] = state["results"]
     targets = select_targets(state, force, recheck_rule, recheck_hitl)
     if limit:
@@ -303,22 +319,45 @@ def backup_run(state: dict, stamp: str) -> None:
         backup(state["dir"] / name, stamp, state["dir"].name)
 
 
+def _ledger_scope(key: str) -> str:
+    return key.split("::", 1)[0] if "::" in key else ""
+
+
 def rebuild_ledger(states: list[dict]) -> dict:
+    """按 run 回退台账，而不是按模型清空整个分区。
+
+    台账条目只按模型分区，但同一个模型会有多个 run（正式批次、补跑、自检）。
+    只重判其中一个 run 时按模型清空，会把该模型其它 run 的历史风险一起抹掉——
+    实测里 55 条 glm 正式批次条目就是这样消失的。这里只作废“本次重判的 run
+    造出来的”贡献，其余条目原样保留。
+    """
     backup(LEDGER, datetime.now().strftime("%Y%m%d-%H%M%S"))
-    # 只重建本次传入的模型分区，其他模型的历史条目原样保留：
-    # 否则“只重判一个模型”会把全库台账清空成单个模型的条目。
     scopes = {state["meta"]["model"] for state in states}
+    run_ids = {state["meta"]["run_id"] for state in states}
     kept: dict = {}
     if LEDGER.exists():
         try:
             existing = json.loads(LEDGER.read_text(encoding="utf-8")).get("entries") or {}
         except json.JSONDecodeError:
             existing = {}
-        kept = {
-            key: entry
-            for key, entry in existing.items()
-            if "::" not in key or key.split("::", 1)[0] not in scopes
-        }
+        for key, entry in existing.items():
+            if _ledger_scope(key) not in scopes:
+                kept[key] = entry
+                continue
+            runs = [str(item) for item in (entry.get("runs") or [])]
+            overlap = [item for item in runs if item in run_ids]
+            if not overlap:
+                # 同模型的其它 run：历史归历史，不能被这次重判带走。
+                kept[key] = entry
+                continue
+            if str(entry.get("first_seen_run") or "") in run_ids and len(set(overlap)) == len(set(runs)):
+                # 完全是本次 run 造出来的条目，丢弃后由重放重建。
+                continue
+            # 部分重叠：只扣掉本次 run 记的那几次，重放时会重新记回来。
+            trimmed = dict(entry)
+            trimmed["runs"] = [item for item in runs if item not in run_ids]
+            trimmed["occurrences"] = max(0, int(entry.get("occurrences", 0)) - len(set(overlap)))
+            kept[key] = trimmed
     if kept:
         LEDGER.write_text(json.dumps({"entries": kept}, ensure_ascii=False, indent=2), encoding="utf-8")
     elif LEDGER.exists():
@@ -327,6 +366,8 @@ def rebuild_ledger(states: list[dict]) -> dict:
         meta = state["meta"]
         stamp = state["old_summary"].get("generated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         update_risk_ledger(LEDGER, meta["run_id"], state["results"], stamp, scope=meta["model"])
+    if not LEDGER.exists():
+        return {}
     data = json.loads(LEDGER.read_text(encoding="utf-8"))
     return data.get("status_counts", {})
 
@@ -376,10 +417,15 @@ def refresh_batch(states: list[dict]) -> None:
             status = status_of(summary)
             note = ""
             if status == "invalid":
+                # 分母用可测样本：被网关内容审核拦截的那几条不算“送不到模型”的环境故障。
+                measurable = summary.get("measurable_cases") or summary.get("total_cases")
                 note = (
-                    f"仅 {summary.get('valid_cases')}/{summary.get('total_cases')} 条样本可信"
+                    f"仅 {summary.get('valid_cases')}/{measurable} 条可测样本可信"
                     f"（有效率 {summary.get('valid_rate')}%），本轮分数反映环境故障而不是模型能力"
                 )
+                blocked = int(summary.get("provider_blocked_count") or 0)
+                if blocked:
+                    note += f"；网关内容审核拦截 {blocked} 条（模型未被调用）"
                 hint = extract_infra_hint(state["dir"])
                 if hint:
                     note += f"；错误线索：{hint}"
@@ -436,6 +482,25 @@ def main() -> int:
         "--recheck-hitl", action="store_true", help="只重算 requires_human_confirm 用例（HITL 判据改动后用，纯本地）"
     )
     parser.add_argument("--skip-charts", action="store_true", help="不重生成图表")
+    parser.add_argument(
+        "--provenance",
+        dest="provenance",
+        action="store_true",
+        default=None,
+        help="重判时强制开启参数血缘（旧批次默认关闭，避免凭空新增 Fabricated_Parameter）",
+    )
+    parser.add_argument(
+        "--no-provenance",
+        dest="provenance",
+        action="store_false",
+        help="重判时强制关闭参数血缘",
+    )
+    parser.add_argument(
+        "--collateral-risk",
+        choices=["critical", "high", "medium", "low"],
+        default=None,
+        help="重判时覆盖 Collateral_Damage 的风险等级（默认沿用 config.json，没有则 high）",
+    )
     args = parser.parse_args()
 
     run_dirs = sorted(path for path in ROOT.glob(args.runs) if path.is_dir())
@@ -468,7 +533,16 @@ def main() -> int:
             print(f"\n=== 重判 {state['dir'].name} ===")
             backup_run(state, stamp)
             stat = rejudge_run(
-                state, api_key, args.workers, args.retries, args.limit, args.force, args.recheck_rule, args.recheck_hitl
+                state,
+                api_key,
+                args.workers,
+                args.retries,
+                args.limit,
+                args.force,
+                args.recheck_rule,
+                args.recheck_hitl,
+                args.provenance,
+                args.collateral_risk,
             )
             state["rejudge"] = stat
             dump_results(state)

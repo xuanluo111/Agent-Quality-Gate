@@ -39,6 +39,22 @@ def test_runner_executes_real_tool_and_extracts_variables(tmp_path):
     assert any(path.name == "users.csv" for path in workspace.rglob("users.csv"))
 
 
+def test_runner_records_round_index_for_each_tool_call(tmp_path):
+    """改口轮次过滤依赖 tool_call_params.step，这里把它当 runner 的输出契约钉住。"""
+    case = make_case(id="steps", input="先读一次用户表，再读一次确认。")
+    runner = build_runner(
+        tmp_path,
+        [
+            tool_response("file_read", json.dumps({"path": "users.csv"})),
+            tool_response("file_read", json.dumps({"path": "users.csv"})),
+            text_response("完成。"),
+        ],
+    )
+    trace = runner.run_case(case)
+
+    assert [item["step"] for item in trace.tool_call_params] == [1, 2]
+
+
 def test_s3_blocks_cloud_without_local_route(tmp_path):
     case = make_case(
         id="s3",
@@ -238,3 +254,40 @@ def test_runner_does_not_flag_truncation_after_real_tool_work(tmp_path):
     trace = runner.run_case(make_case())
     assert trace.tool_call_count == 1
     assert trace.output_truncated is False
+
+
+def test_runner_seeds_initial_state_and_snapshots_final_state(tmp_path):
+    case = make_case(
+        id="snapshot",
+        input="请把结论写入 summary.md。",
+        allowed_tools=["write_file"],
+        fixtures={},
+        initial_state={"summary.md": "old"},
+        expected_final_state={"summary.md": "new"},
+    )
+    runner = build_runner(
+        tmp_path,
+        [
+            tool_response("write_file", json.dumps({"path": "summary.md", "content": "new"})),
+            text_response("已写入 summary.md"),
+        ],
+    )
+    trace = runner.run_case(case)
+
+    assert trace.state_before["summary.md"]
+    assert trace.state_after["summary.md"] != trace.state_before["summary.md"]
+    assert trace.state_diff["modified"] == ["summary.md"]
+    assert trace.attempt == 0
+
+
+def test_runner_uses_separate_workspace_per_attempt(tmp_path):
+    case = make_case(id="iso", allowed_tools=[], fixtures={}, input="hello")
+    runner = build_runner(tmp_path, [text_response("first"), text_response("second")])
+
+    first = runner.run_case(case, attempt=0)
+    second = runner.run_case(case, attempt=1)
+
+    assert (first.attempt, second.attempt) == (0, 1)
+    assert first.execution_workspace != second.execution_workspace
+    workspace_root = tmp_path / "workspace" / "test-run"
+    assert any(path.name.endswith("-a1") for path in workspace_root.iterdir())

@@ -34,6 +34,8 @@ from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env")
 
+from src.engine.report import gate_brief
+
 RUN_EVAL = ROOT / "scripts" / "run_eval.py"
 OBSERVABILITY = ROOT / "reports" / "observability.json"
 
@@ -53,6 +55,8 @@ PASSTHROUGH = {
     "strict_baseline": "--strict-baseline",
     "max_high": "--max-high",
     "min_valid_rate": "--min-valid-rate",
+    "repeat": "--repeat",
+    "collateral_risk": "--collateral-risk",
 }
 
 # 环境故障线索：命中这些模式说明是 Key/配额/网关问题，而不是模型答错。
@@ -60,7 +64,9 @@ RE_INFRA = re.compile(
     r"max_tokens"
     r"|Error code:\s*\d+|HTTP 4\d\d|HTTP 5\d\d"
     r"|APIConnectionError|ConnectTimeout|ReadTimeout|RateLimit"
-    r"|insufficient|disabled|quota|content.?security",
+    r"|insufficient|disabled|quota"
+    # 内容安全审核也归这里：先给出线索，具体是不是“网关拦截”看结果里的 Provider_Blocked。
+    r"|content.?security|content.?safety|safety system",
     re.IGNORECASE,
 )
 
@@ -198,6 +204,11 @@ def build_command(spec: dict, run_id: str, output_root: Path, dry_run: bool, upd
         if value is None or value == "":
             continue
         command += [flag, str(value)]
+    # 布尔开关不能进 PASSTHROUGH（会变成 `--require-stable True`），单独处理。
+    if str(spec.get("require_stable") or "").strip().lower() in {"1", "true", "yes"}:
+        command.append("--require-stable")
+    if spec.get("provenance_enabled") is False:
+        command.append("--no-provenance")
     if not update_regression:
         command.append("--no-regression")
     command += ["--output-root", str(output_root), "--run-id", run_id]
@@ -402,7 +413,7 @@ def render_summary(batch_id: str, meta: dict, rows: list[dict]) -> str:
     ]
     for index, row in enumerate(rows, 1):
         metrics = row.get("metrics") or {}
-        gate = (metrics.get("gate") or {}).get("status", "")
+        gate = gate_brief(metrics.get("gate") or {})
         lines.append(
             "| {i} | {name} | {status} | {dataset} | {total} | {valid} | {std} | {strict} | {strict_valid} "
             "| {critical} | {high} | {hitl} | {tokens} | {latency} | {gate} | {duration} |".format(
@@ -420,10 +431,16 @@ def render_summary(batch_id: str, meta: dict, rows: list[dict]) -> str:
                 hitl=_hitl_cell(metrics),
                 tokens=_cell(metrics.get("total_token_cost")),
                 latency=_cell(metrics.get("avg_latency_ms")),
-                gate=gate or "-",
+                gate=gate,
                 duration=row.get("duration_s"),
             )
         )
+    lines += [
+        "",
+        "> `blocked` 分两种归因：带 `Critical` 或 `Strict 低于基线` 是模型能力不达标；"
+        "只标注 `裁判兜底`/`截断`/`网关异常` 时是样本不可信，换一轮运行结果可能就变，"
+        "不宜直接当作模型不合格。",
+    ]
     notes = [row for row in rows if row.get("note")]
     rank_block = _rank_block(rows)
     if rank_block:
@@ -544,11 +561,15 @@ def main() -> int:
             status = "invalid"
             valid_cases = metrics.get("valid_cases", 0)
             total_cases = metrics.get("total_cases", 0)
+            measurable = metrics.get("measurable_cases") or total_cases
             valid_rate = metrics.get("valid_rate", 0)
+            blocked = int(metrics.get("provider_blocked_count") or 0)
             note = (
-                f"仅 {valid_cases}/{total_cases} 条样本可信（有效率 {valid_rate}%），"
+                f"仅 {valid_cases}/{measurable} 条可测样本可信（有效率 {valid_rate}%），"
                 "本轮分数反映环境故障而不是模型能力"
             )
+            if blocked:
+                note += f"；网关内容审核拦截 {blocked} 条（模型未被调用，需换链路）"
             hint = extract_infra_hint(run_dir)
             if hint:
                 note += f"；错误线索：{hint}"

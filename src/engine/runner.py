@@ -8,6 +8,7 @@ from typing import Any, List, Optional
 from openai import OpenAI
 
 from src.engine.privacy import mask_sensitive_data
+from src.engine.state import diff_states, snapshot_workspace
 from src.engine.tools import (
     Sandbox,
     build_openai_tools,
@@ -79,6 +80,24 @@ def _mask_payload(value: Any) -> Any:
         return json.loads(masked)
     except json.JSONDecodeError:
         return masked
+
+
+def _apply_initial_state(workspace: Path, initial_state: dict) -> None:
+    """把用例声明的初始文件写进工作区。
+
+    直接写盘而不走 Sandbox.write_file：初始状态是评测环境自己的准备动作，
+    不应该因为超出写入上限就被记成“模型违规”。
+    """
+    base = workspace.resolve()
+    for rel, content in (initial_state or {}).items():
+        raw = str(rel or "").strip()
+        if not raw:
+            continue
+        target = (base / raw).resolve()
+        if target != base and base not in target.parents:
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(str(content), encoding="utf-8")
 
 
 class AgentRunner:
@@ -163,7 +182,11 @@ class AgentRunner:
             "content": _truncate(payload, 6000),
         }
 
-    def run_case(self, case: TestCase) -> AgentTrace:
+    def run_case(self, case: TestCase, attempt: int = 0) -> AgentTrace:
+        """执行一条用例。
+
+        attempt>0 时使用独立工作目录，保证 repeat 场景下每次尝试互不污染。
+        """
         started = time.time()
         token_cost = 0
         input_tokens = 0
@@ -184,6 +207,8 @@ class AgentRunner:
         output_truncated = False
 
         workspace = self.workspace_root / self.run_id / safe_case_slug(case.id)
+        if attempt:
+            workspace = workspace.with_name(f"{workspace.name}-a{attempt}")
 
         if case.data_sensitivity == "S3" and self.local_client is None:
             message = (
@@ -233,8 +258,18 @@ class AgentRunner:
                 unsupported_tools=unsupported_tools,
                 model=model,
                 run_id=self.run_id,
+                attempt=attempt,
                 latency_ms=(time.time() - started) * 1000,
             )
+
+        state_before: dict = {}
+        state_after: dict = {}
+        try:
+            _apply_initial_state(workspace, case.initial_state)
+            # 用例开始前拍一次快照：之后所有变更（含模型自己写的文件）都能被归因。
+            state_before = snapshot_workspace(workspace)
+        except OSError:
+            state_before = {}
 
         try:
             for step in range(self.max_rounds):
@@ -368,6 +403,7 @@ class AgentRunner:
             retry_count = max(0, max_repeats - 1)
 
             extracted = extract_variables_from_results(tool_results)
+            state_after = snapshot_workspace(workspace)
             return AgentTrace(
                 case_id=case.id,
                 agent_response=_mask_payload(final_response) if route == "s2_masked_cloud" else final_response,
@@ -391,6 +427,10 @@ class AgentRunner:
                 round_history=round_history,
                 execution_workspace=str(workspace),
                 extracted_variables=extracted,
+                state_before=state_before,
+                state_after=state_after,
+                state_diff=diff_states(state_before, state_after),
+                attempt=attempt,
                 model=model,
                 run_id=self.run_id,
                 input_tokens=input_tokens,
@@ -399,6 +439,8 @@ class AgentRunner:
                 latency_ms=(time.time() - started) * 1000,
             )
         except Exception as exc:
+            # 异常也要拍终态：已经发生的副作用不能因为抛出异常就看不见。
+            state_after = snapshot_workspace(workspace)
             return AgentTrace(
                 case_id=case.id,
                 agent_response=_mask_payload(final_response) if route == "s2_masked_cloud" else final_response,
@@ -416,6 +458,10 @@ class AgentRunner:
                 round_history=round_history,
                 execution_workspace=str(workspace),
                 extracted_variables=extract_variables_from_results(tool_results),
+                state_before=state_before,
+                state_after=state_after,
+                state_diff=diff_states(state_before, state_after),
+                attempt=attempt,
                 model=model,
                 run_id=self.run_id,
                 input_tokens=input_tokens,

@@ -118,6 +118,8 @@ def judge_response(passed: bool, strict: bool, risk: str = "low", reason: str = 
             "risk_level": risk,
             "judge_reason": reason,
             "fail_reason": fail_reason,
+            "failure_stage": "validation" if not passed else "none",
+            "evidence_span": "round:1",
         },
         ensure_ascii=False,
     )

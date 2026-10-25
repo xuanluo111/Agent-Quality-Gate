@@ -1,11 +1,14 @@
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 Severity = Literal["critical", "high", "medium", "low"]
 DataSensitivity = Literal["S1", "S2", "S3"]
 RunMode = Literal["enforce", "shadow"]
 JudgeLayer = Literal["rule", "trajectory", "jcv_audit", "llm", "local_fallback", "harness"]
+# 失败环节：用于把“答错”拆成可归属的流水线阶段。
+FailureStage = Literal["understanding", "planning", "generation", "validation", "iteration"]
+StateOp = Literal["exists", "not_exists", "equals", "contains", "sha256"]
 
 # Runner 拿不到收尾答复时的占位文本；裁判与报告都按这个前缀识别“没测到答复”而不是“答错了”。
 NO_FINAL_RESPONSE_PREFIX = "[NO_FINAL_RESPONSE]"
@@ -14,7 +17,21 @@ NO_FINAL_RESPONSE_TEXT = f"{NO_FINAL_RESPONSE_PREFIX} Agent 在预算内没有�
 # 属于外部因素、不应计入模型能力的错因。
 # Output_Truncated：模型输出打满 max_tokens 导致一个字都没拿到，属于配置问题而不是答错。
 OUTPUT_TRUNCATED_REASON = "Output_Truncated"
-INFRA_FAIL_REASONS = {"Harness_Error", "Judge_Unavailable", OUTPUT_TRUNCATED_REASON}
+# 网关/云厂商的内容安全审核会把红队 prompt 直接拒在门外（403 safety review），
+# 模型根本没被调用：不是模型行为，也不是 Harness 故障，重试与改 key 都无效。
+PROVIDER_BLOCKED_REASON = "Provider_Blocked"
+INFRA_FAIL_REASONS = {
+    "Harness_Error",
+    "Judge_Unavailable",
+    OUTPUT_TRUNCATED_REASON,
+    PROVIDER_BLOCKED_REASON,
+}
+
+# 终态断言 / 参数血缘 / 脏状态相关错因。它们都是模型侧问题，不算基础设施故障。
+STATE_MISMATCH_REASON = "State_Mismatch"
+COLLATERAL_DAMAGE_REASON = "Collateral_Damage"
+FABRICATED_PARAMETER_REASON = "Fabricated_Parameter"
+STATE_POLLUTION_REASON = "State_Pollution"
 
 SEVERITY_ALIASES = {
     "critical": "critical",
@@ -64,11 +81,40 @@ def normalize_sensitivity(value: object) -> str:
     raise ValueError(f"未知数据敏感度: {value!r}")
 
 
+def _dump(value: object) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
 def normalize_category(value: object) -> str:
     raw = str(value or "").strip()
     if not raw:
         return "未分类"
     return CATEGORY_ALIASES.get(raw, raw)
+
+
+class StateAssertion(BaseModel):
+    """单条终态断言。
+
+    `equals` / `contains` 需要读文件正文，因此只在运行时能读到工作区时生效；
+    读不到按“无法验证”处理，不做静默通过。
+    """
+
+    path: str = Field(..., min_length=1, description="工作区相对路径")
+    op: StateOp = Field(..., description="exists/not_exists/equals/contains/sha256")
+    value: Optional[str] = Field(default=None, description="期望值；exists/not_exists 可省略")
+
+    @field_validator("op", mode="before")
+    @classmethod
+    def _normalize_op(cls, value: object) -> str:
+        return str(value or "").strip().lower()
+
+    @model_validator(mode="after")
+    def _require_value(self) -> "StateAssertion":
+        if self.op in {"equals", "contains", "sha256"} and (self.value is None or self.value == ""):
+            raise ValueError(f"state_assertions.{self.op} 必须提供 value")
+        return self
 
 
 class TestCase(BaseModel):
@@ -92,6 +138,20 @@ class TestCase(BaseModel):
     source: str = Field(default="", description="用例来源，便于追踪生成批次")
     tags: List[str] = Field(default_factory=list, description="检索标签")
 
+    # ---- iRTE 2026：终态断言 / 参数血缘 / 改口脏状态 ----
+    initial_state: Dict[str, str] = Field(default_factory=dict, description="用例开始前写入沙箱的初始文件")
+    expected_final_state: Dict[str, str] = Field(
+        default_factory=dict, description="期望终态：路径 -> sha256 或期望正文（正文会先哈希）"
+    )
+    state_assertions: List[StateAssertion] = Field(default_factory=list, description="终态断言列表")
+    allowed_changes: List[str] = Field(default_factory=list, description="允许变更的相对路径 glob，其余变更记 Collateral_Damage")
+    deprecated_values: List[str] = Field(default_factory=list, description="用户改口后已废弃的旧值")
+    correction_round: int = Field(
+        default=1,
+        ge=1,
+        description="改口从第几轮起生效（1 起，与 tool_call_params.step 对齐）；1 表示全程以新值为准",
+    )
+
     @field_validator("severity", mode="before")
     @classmethod
     def _normalize_severity(cls, value: object) -> str:
@@ -107,7 +167,16 @@ class TestCase(BaseModel):
     def _normalize_category(cls, value: object) -> str:
         return normalize_category(value)
 
-    @field_validator("allowed_tools", "forbidden_actions", "expected_variables", "tags", mode="before")
+    @field_validator("initial_state", "expected_final_state", mode="before")
+    @classmethod
+    def _coerce_state_files(cls, value: object) -> Dict[str, str]:
+        if not value:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("initial_state / expected_final_state 必须是 path -> value 的对象")
+        return {str(path): content if isinstance(content, str) else _dump(content) for path, content in value.items()}
+
+    @field_validator("allowed_tools", "forbidden_actions", "expected_variables", "tags", "allowed_changes", "deprecated_values", mode="before")
     @classmethod
     def _coerce_string_list(cls, value: object) -> List[str]:
         if value is None:
@@ -159,6 +228,12 @@ class AgentTrace(BaseModel):
     execution_workspace: str = Field(default="default_workspace")
     extracted_variables: List[str] = Field(default_factory=list)
 
+    # 工作区快照：相对路径 -> sha256，用于终态断言与副作用（Collateral_Damage）判定。
+    state_before: Dict[str, str] = Field(default_factory=dict)
+    state_after: Dict[str, str] = Field(default_factory=dict)
+    state_diff: Dict[str, List[str]] = Field(default_factory=dict)
+    attempt: int = Field(default=0, description="repeat 场景下的第几次独立尝试（0 起）")
+
     model: str = ""
     run_id: str = ""
     input_tokens: int = 0
@@ -167,6 +242,20 @@ class AgentTrace(BaseModel):
     token_cost: int = 0
     is_success: bool = True
     error_message: Optional[str] = None
+
+
+class AttemptResult(BaseModel):
+    """单次独立尝试的结论，pass^k 与稳定性指标都由它汇总。"""
+
+    attempt: int = 1
+    passed: bool = False
+    strict_passed: bool = False
+    risk_level: Severity = "high"
+    judge_layer: JudgeLayer = "rule"
+    fail_reason: str = "None"
+    data_valid: bool = True
+    state_diff: Dict[str, List[str]] = Field(default_factory=dict)
+    latency_ms: float = 0.0
 
 
 class EvalResult(BaseModel):
@@ -186,6 +275,14 @@ class EvalResult(BaseModel):
     evidence: str = Field(default="")
     impact: str = Field(default="")
     suggestion: str = Field(default="")
+
+    # 失败归因：规则层能判就先判，判不了由 LLM 裁判按契约给出。
+    failure_stage: Optional[FailureStage] = Field(default=None, description="understanding/planning/generation/validation/iteration")
+    evidence_span: str = Field(default="", description="证据定位：round:<i> | tool:<name> | state:<path>")
+
+    state_diff: Dict[str, List[str]] = Field(default_factory=dict, description="created/modified/deleted")
+    attempts: List[AttemptResult] = Field(default_factory=list, description="repeat>1 时每次独立尝试的结论")
+    provenance_violations: List[dict] = Field(default_factory=list, description="参数血缘违规：tool/param/value/reason")
 
     jcv_score: Optional[float] = Field(default=None, description="Jaccard 相似度；未执行 JCV 时为 None")
     data_valid: bool = Field(default=True, description="该样本是否真正测到了被测模型；Runner/网关异常时为 False")

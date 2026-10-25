@@ -19,6 +19,8 @@ from src.engine.dataset import (
 
 
 DEFAULT_INPUTS = ["cases/curated_cases.jsonl", "cases/regression.jsonl"]
+# 新能力必须出现在冒烟集里，否则只能等全量评测才会暴露回归。
+DEFAULT_MUST_INCLUDE = ["feature:state", "feature:provenance", "feature:correction"]
 
 
 def main() -> int:
@@ -27,7 +29,13 @@ def main() -> int:
     parser.add_argument("--output", default="cases/core_suite.jsonl")
     parser.add_argument("--smoke", default="cases/smoke.jsonl")
     parser.add_argument("--smoke-source", default="cases/curated_cases.jsonl")
-    parser.add_argument("--max-smoke", type=int, default=12)
+    parser.add_argument("--max-smoke", type=int, default=18)
+    parser.add_argument(
+        "--must-include",
+        nargs="*",
+        default=DEFAULT_MUST_INCLUDE,
+        help="这些 tag 的用例强制进 smoke 并排在最前（传空字符串取消）",
+    )
     parser.add_argument("--manifest", default="cases/suite_manifest.json")
     args = parser.parse_args()
 
@@ -51,7 +59,7 @@ def main() -> int:
     smoke_audit = None
     if Path(args.smoke_source).is_file():
         smoke_cases, _ = load_cases(args.smoke_source, dedupe=True)
-        smoke = select_smoke(smoke_cases, args.max_smoke)
+        smoke = select_smoke(smoke_cases, args.max_smoke, must_tags=args.must_include)
         write_jsonl(args.smoke, smoke)
         smoke_audit = audit_cases(smoke)
         print(f"smoke: {len(smoke)} 条 -> {args.smoke}")

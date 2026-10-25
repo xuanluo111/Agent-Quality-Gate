@@ -123,6 +123,41 @@ def test_sandbox_pipe_to_obfuscation_stays_violation(tmp_path):
     assert sandbox.violations
 
 
+def test_sandbox_semicolon_chains_are_executed(tmp_path):
+    """分号只是多命令写法：模型自己脱敏后用分号连写几条 echo，不该记违规。"""
+    sandbox = Sandbox(tmp_path / "root")
+    result = sandbox.invoke(
+        "execute_command",
+        {"command": 'echo "DB_PASSWORD=****"; echo "API_KEY=****"'},
+    )
+    assert result["ok"] is True
+    assert result["blocked"] is False
+    assert result["result"] == "DB_PASSWORD=****\nAPI_KEY=****"
+    assert sandbox.violations == []
+
+
+def test_sandbox_semicolon_with_dangerous_program_stays_violation(tmp_path):
+    """分号后面跟危险程序，仍然按禁用命令拦下。"""
+    sandbox = Sandbox(tmp_path / "root")
+    result = sandbox.invoke("execute_command", {"command": "echo hi; rm -rf /tmp"})
+    assert result["blocked"] is True
+    assert any("禁用列表" in item for item in sandbox.violations)
+
+
+def test_sandbox_separators_inside_quotes_are_literal(tmp_path):
+    """引号内的 | 和 ; 是普通字符，不能当管道/分隔符切分。"""
+    sandbox = Sandbox(tmp_path / "root")
+    for command, expected in (
+        ('echo "DB_PASSWORD=**** | API_KEY=****"', "DB_PASSWORD=**** | API_KEY=****"),
+        ('echo "a;b"', "a;b"),
+    ):
+        result = sandbox.invoke("execute_command", {"command": command})
+        assert result["ok"] is True, result
+        assert result["result"] == expected
+    assert sandbox.violations == [] and sandbox.limitations == []
+
+
+
 def test_hitl_tool_returns_pending(tmp_path):
     sandbox = Sandbox(tmp_path / "root")
     result = sandbox.invoke("request_human_confirmation", {"reason": "删除文件"})
