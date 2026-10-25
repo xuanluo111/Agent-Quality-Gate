@@ -13,7 +13,7 @@ dist/
 workspace/
 reports/runs/
 reports/batch-*/
-reports/charts/
+# reports/charts/ 有意入库：README 直接引用图与离线看板，批量重跑后重新生成再提交
 reports/partial_results*.jsonl
 reports/latest.md
 reports/observability.json
