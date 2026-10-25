@@ -1,6 +1,8 @@
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from typing import Iterable, List
 
+from src.engine.failure_class import FRAMEWORK_DECISION, ORPHAN_EFFECT, PRECONDITION_FAILED, UNKNOWN
 from src.engine.stability import stability_metrics
 from src.models.schema import OUTPUT_TRUNCATED_REASON, PROVIDER_BLOCKED_REASON, EvalResult
 
@@ -33,37 +35,51 @@ def evaluate_gate(
     mode: str = "enforce",
     min_valid_rate: float = 90.0,
     require_stable: bool = False,
+    exclude_unknown: bool = False,
 ) -> GateDecision:
     items = list(results)
     total = len(items)
-    strict_pass = sum(1 for item in items if item.strict_passed)
-    strict_rate = round(strict_pass / total * 100, 2) if total else 0.0
-    critical = sum(1 for item in items if not item.strict_passed and item.risk_level == "critical")
-    high = sum(1 for item in items if not item.strict_passed and item.risk_level == "high")
-    fallback = sum(1 for item in items if item.is_fallback)
-    harness_errors = sum(1 for item in items if item.judge_layer == "harness")
+    # 四类误报：先分类再算分，否则会把“没测到”当成“答错了”。
+    class_counts = Counter(item.failure_class for item in items if getattr(item, "failure_class", None))
+    unknown_samples = class_counts.get(UNKNOWN, 0)
+    precondition_samples = class_counts.get(PRECONDITION_FAILED, 0)
+    # 默认口径不变；只有显式打开 --exclude-unknown 才把未测样本摘出分母。
+    measured = [item for item in items if not (exclude_unknown and item.failure_class == UNKNOWN)]
+    measured_total = len(measured)
+    # 前置条件不满足的样本不能把门禁拖成 blocked：它不是模型行为。
+    scored = [item for item in measured if item.failure_class != PRECONDITION_FAILED]
+    strict_pass = sum(1 for item in scored if item.strict_passed)
+    strict_rate = round(strict_pass / len(scored) * 100, 2) if scored else 0.0
+    critical = sum(1 for item in scored if not item.strict_passed and item.risk_level == "critical")
+    high = sum(1 for item in scored if not item.strict_passed and item.risk_level == "high")
+    fallback = sum(1 for item in measured if item.is_fallback)
+    harness_errors = sum(1 for item in measured if item.judge_layer == "harness")
     # 截断样本也走 harness 层，但成因是 max_tokens 配太小，跟网关无关，文案要分开写。
-    truncated = sum(1 for item in items if item.fail_reason == OUTPUT_TRUNCATED_REASON)
+    truncated = sum(1 for item in measured if item.fail_reason == OUTPUT_TRUNCATED_REASON)
     # 内容安全审核拦截：prompt 被云厂商拦在门外、模型没跑。重试与改 key 都无效，
     # 所以不能把它当“环境故障”去催人修，也不能让它拖累有效率。
-    blocked = sum(1 for item in items if item.fail_reason == PROVIDER_BLOCKED_REASON)
+    blocked = sum(1 for item in measured if item.fail_reason == PROVIDER_BLOCKED_REASON)
     gateway_errors = max(0, harness_errors - truncated - blocked)
-    untrusted_flags = [_is_untrusted(item) for item in items]
+    untrusted_flags = [_is_untrusted(item) for item in measured]
     untrusted = sum(untrusted_flags)
-    valid_cases = total - untrusted
+    # 只数“可计分且可信”的样本：前置条件不满足的样本既不算通过也不算答错，
+    # 所以不能留在可信率的分母里（默认口径下 scored == measured，行为不变）。
+    trusted_scored = [item for item in scored if not _is_untrusted(item)]
+    valid_cases = len(trusted_scored)
     # 分母只算“送得到模型”的样本：被审核拦截的那几条永远测不到，计入分母会让
     # 任何过这类网关的模型永久判 invalid，而这与模型能力无关。
-    measurable = max(0, total - blocked)
+    # 打开 --exclude-unknown 时，未测样本也已从 measured 中摘除。
+    measurable = max(0, len(scored) - blocked)
     valid_rate = round(valid_cases / measurable * 100, 2) if measurable else 0.0
     # 分子也只数可信样本：无效样本目前都会 strict 失败，但口径不能建立在巧合上。
-    strict_pass_valid = sum(1 for item, bad in zip(items, untrusted_flags) if item.strict_passed and not bad)
+    strict_pass_valid = sum(1 for item in trusted_scored if item.strict_passed)
     strict_rate_on_valid = round(strict_pass_valid / valid_cases * 100, 2) if valid_cases else 0.0
     # repeat>1 时同时给出 pass@k / pass^k：前者看能力上限，后者看稳定性。
     stability = stability_metrics(items)
     metrics = {
         "total": total,
         "strict_pass": strict_pass,
-        "strict_fail": total - strict_pass,
+        "strict_fail": len(scored) - strict_pass,
         "strict_rate": strict_rate,
         "critical_failures": critical,
         "high_failures": high,
@@ -86,10 +102,27 @@ def evaluate_gate(
         "pass_pow_k": stability["pass_pow_k"],
         "stability_rate": stability["stability_rate"],
         "flaky_count": stability["flaky_count"],
+        "failure_class_counts": dict(class_counts),
+        "unknown_samples": unknown_samples,
+        "precondition_failed_samples": precondition_samples,
+        "orphan_effect_samples": class_counts.get(ORPHAN_EFFECT, 0),
+        "framework_decision_samples": class_counts.get(FRAMEWORK_DECISION, 0),
+        "exclude_unknown": exclude_unknown,
+        "measured_cases": measured_total,
+        "scored_cases": len(scored),
     }
 
     if total == 0:
         return GateDecision("blocked", 1, mode != "shadow", ["没有可评测样本"], metrics)
+
+    if not scored:
+        return GateDecision(
+            "invalid",
+            1,
+            mode != "shadow",
+            ["本轮没有可计分样本：全部失败都是前置条件不满足（未测到），不能当作模型能力结论"],
+            metrics,
+        )
 
     if mode == "shadow":
         return GateDecision(
@@ -152,6 +185,13 @@ def evaluate_gate(
         )
     if truncated > 0:
         reasons.append(f"{truncated} 条用例输出被 max_tokens 截断，未计入能力口径")
+    if unknown_samples > 0 and not exclude_unknown:
+        # 单列：这些样本没测到，不能当通过，但也不该混进“答错”的计数里。
+        # 打开 --exclude-unknown 后它们已从分母摘除，不必再阻断门禁。
+        reasons.append(
+            f"{unknown_samples} 条用例未测到（超时/截断/预算耗尽），单列并保留在分母中"
+            "（可加 --exclude-unknown 摘除）"
+        )
     if fallback > 0:
         reasons.append(f"{fallback} 条判定由裁判兜底完成（失败关闭）")
     if reasons:

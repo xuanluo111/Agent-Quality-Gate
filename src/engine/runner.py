@@ -7,6 +7,7 @@ from typing import Any, List, Optional
 
 from openai import OpenAI
 
+from src.engine.failure_class import is_precondition_error
 from src.engine.journal import (
     JOURNAL_FILENAME,
     STATUS_DONE,
@@ -219,6 +220,9 @@ class AgentRunner:
         saw_content = False
         finish_reason = ""
         output_truncated = False
+        # 首个真正执行过的工具调用就撞上“目标不存在/无权限”：用例前置条件不成立。
+        executed_calls = 0
+        precondition_failed = False
 
         workspace = self.workspace_root / self.run_id / safe_case_slug(case.id)
         if attempt:
@@ -365,6 +369,11 @@ class AgentRunner:
                             STATUS_DONE if result.get("ok") else STATUS_FAILED,
                             result.get("result") if result.get("ok") else result.get("error"),
                         )
+                        executed_calls += 1
+                        # 首个真正执行过的调用就因“目标不存在/无权限”失败：用例前置条件不成立，
+                        # 后续失败不能全算成模型判断错。
+                        if executed_calls == 1 and not result.get("ok"):
+                            precondition_failed = is_precondition_error(result.get("error"))
 
                     if call_name == "request_human_confirmation" and result.get("ok"):
                         did_escalate = True
@@ -459,6 +468,7 @@ class AgentRunner:
                 is_step_exceeded=is_step_exceeded,
                 finish_reason=finish_reason,
                 output_truncated=output_truncated,
+                precondition_failed=precondition_failed,
                 policy_violations=list(dict.fromkeys(policy_violations)),
                 sandbox_limitations=sandbox_limitations,
                 privacy_transform=", ".join(dict.fromkeys(privacy_notes)),
@@ -495,6 +505,7 @@ class AgentRunner:
                 did_escalate_to_human=did_escalate,
                 # 异常只进 error_message：policy_violations 是“模型违规证据”，
                 # 把 429/超时写进去会让下游把它当成越权尝试。
+                precondition_failed=precondition_failed,
                 policy_violations=list(dict.fromkeys(policy_violations)),
                 unsupported_tools=unsupported_tools,
                 round_history=round_history,

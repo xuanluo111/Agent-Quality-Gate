@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 from src.engine.dataset import wilson_interval
+from src.engine.failure_class import FAILURE_CLASS_LABELS
 from src.engine.gate import evaluate_gate, is_untrusted
 from src.engine.stability import stability_metrics
 from src.models.schema import PROVIDER_BLOCKED_REASON, EvalResult
@@ -164,6 +165,7 @@ def summarize(
     mode: str = "enforce",
     min_valid_rate: float = 90.0,
     require_stable: bool = False,
+    exclude_unknown: bool = False,
 ) -> dict:
     run_meta = run_meta or {}
     stats = stats or {}
@@ -187,11 +189,18 @@ def summarize(
         mode=mode,
         min_valid_rate=min_valid_rate,
         require_stable=require_stable,
+        exclude_unknown=exclude_unknown,
     )
     stability = stability_metrics(results)
 
-    fail_reasons = Counter(_normalize_fail_reason(item.fail_reason) for item in failures)
-    category_failures = Counter(item.category for item in failures)
+    # 四类误报：unknown 单列，不并入 failed（否则会让错因分布看起来全是环境问题）。
+    failure_classes = Counter(item.failure_class for item in results if getattr(item, "failure_class", None))
+    unknown_failures = [item for item in failures if getattr(item, "failure_class", None) == "unknown"]
+    counted_failures = [item for item in failures if getattr(item, "failure_class", None) != "unknown"]
+    completions = Counter(getattr(item, "completion", "unknown") or "unknown" for item in results)
+
+    fail_reasons = Counter(_normalize_fail_reason(item.fail_reason) for item in counted_failures)
+    category_failures = Counter(item.category for item in counted_failures)
     by_category = Counter(item.category for item in results)
     by_judge_layer = Counter(item.judge_layer for item in results)
     fallback_count = by_judge_layer.get("local_fallback", 0)
@@ -252,6 +261,15 @@ def summarize(
         "critical_count": len(critical_failures),
         "high_count": len(high_failures),
         "fail_count": len(failures),
+        "unknown_failure_count": len(unknown_failures),
+        "unclassified_failure_count": sum(1 for item in failures if not getattr(item, "failure_class", None)),
+        "failure_class_counts": dict(failure_classes),
+        "unknown_count": failure_classes.get("unknown", 0),
+        "precondition_failed_count": failure_classes.get("precondition_failed", 0),
+        "orphan_effect_count": failure_classes.get("orphan_effect", 0),
+        "framework_decision_count": failure_classes.get("framework_decision", 0),
+        "exclude_unknown": exclude_unknown,
+        "completion_counts": dict(completions),
         "fallback_count": fallback_count,
         "fallback_rate": round(fallback_count / total * 100, 2) if total else 0.0,
         "judge_attempts_total": judge_attempts,
@@ -529,6 +547,7 @@ def generate_markdown(
         mode=mode,
         min_valid_rate=min_valid_rate,
         require_stable=bool(baseline.get("require_stable", run_meta.get("require_stable", False))),
+        exclude_unknown=bool(baseline.get("exclude_unknown", run_meta.get("exclude_unknown", False))),
     )
     timestamp = summary["generated_at"]
     output = Path(output_path)
@@ -654,6 +673,21 @@ def generate_markdown(
         for reason, count in summary["fail_reasons"].items():
             md += f"- **{reason}**: {count} 次（{FAIL_REASON_LABELS.get(reason, reason)}）\n"
         md += "\n"
+
+    md += "### 误报分类（failure_class）\n\n"
+    denominator_note = (
+        "已从通过率分母中摘除（`--exclude-unknown`）"
+        if summary["exclude_unknown"]
+        else "单列，默认仍计入分母（加 `--exclude-unknown` 可摘除）"
+    )
+    md += f"> 按顺序判定、命中即停；`unknown` 不并入 failed，{denominator_note}。\n\n"
+    md += "| failure_class | 数量 | 含义 |\n|---------------|------|------|\n"
+    for failure_class, label in FAILURE_CLASS_LABELS.items():
+        md += f"| `{failure_class}` | {summary['failure_class_counts'].get(failure_class, 0)} | {label} |\n"
+    md += (
+        f"\n- 未归属到四类的 Strict 失败（确实算模型问题）：{summary['unclassified_failure_count']} 条\n"
+        f"- 任务完成度 `completion` 分布：`{summary['completion_counts']}`（由终态断言推导）\n\n"
+    )
 
     md += """---
 
