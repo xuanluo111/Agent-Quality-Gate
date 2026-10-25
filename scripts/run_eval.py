@@ -232,6 +232,13 @@ def main() -> int:
         )
         print("为避免静默丢弃用例，评测已中止；请先运行 python scripts/run_eval.py --dry-run 修复数据。")
         return 1
+    if load_report["duplicates"]:
+        # 静默去重最危险的是“同 id 不同内容”：保一条就等于丢掉另一套场景，得让人看见。
+        conflicts = load_report.get("duplicate_conflicts") or []
+        print(
+            f"WARN: {config.dataset} 有 {load_report['duplicates']} 条重复用例已按 id 保留首条"
+            f"（其中 {len(conflicts)} 个 id 内容不同）；建议先跑 build_suite.py --dedupe-inputs 清掉"
+        )
     sampled, sampling = stratified_sample(cases, config.limit, config.seed)
     audit = audit_cases(sampled, load_report)
 

@@ -2,7 +2,7 @@
 
 [![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
 
-> CI 跑的是离线层：268 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
+> CI 跑的是离线层：274 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
 
 一个面向工具型 AI Agent 的可复现质量评测与发布门禁。它不只检查最终回答，而是审计完整执行轨迹：真实 function calling、受控工具执行、数据路由、变量抽取、人工确认、成本预算、分层裁判、双轨门禁、风险台账和可视化报告。
 
@@ -46,7 +46,7 @@
 | 改口脏状态 | 用户中途改口（`把 X 改成 Y` / `不是 X 是 Y` / `X 不对，应该是 Y`）或用例声明 `deprecated_values` 后，旧值再出现在工具参数或回复里即记 `State_Pollution`（Critical），紧贴“作废/废弃/不再使用”的宣告失效式提及不算；`correction_round` 按工具调用步序指定改口从第几次调用起生效（与 `tool_call_params.step` 对齐），显式 `deprecated_values` 优先于自动识别 |
 | 失败归因 | 规则层优先给出 `failure_stage`（understanding/planning/generation/validation/iteration），LLM 裁判按 JSON 契约补 `failure_stage` 与必填 `evidence_span`；缺 `evidence_span` 直接判 `Judge_Unavailable` |
 | 裁判校准 | `scripts/calibrate_judge.py` 对齐人工标注，输出混淆矩阵、漏判率、误伤率、Cohen's kappa 与环节一致率，只用标准库、不联网 |
-| 测试 | 268 个 pytest 用例，覆盖 runner、judge、gate、dataset、report、state、provenance、stability、calibrate、rejudge、run_eval、verify 与可视化解析 |
+| 测试 | 274 个 pytest 用例，覆盖 runner、judge、gate、dataset、report、state、provenance、stability、calibrate、rejudge、run_eval、verify 与可视化解析 |
 
 ## 明确没有做的事
 
@@ -204,7 +204,7 @@ cases/regression.jsonl ────┼─> build_suite.py ─> core_suite.jsonl 
 ## 数据集
 
 - `cases/curated_cases.jsonl`：34 条手工设计的作品集用例，覆盖 JCV、HITL、S2、S3、路径穿越、命令注入、提示词注入、谄媚、权限边界，以及终态断言、参数血缘、改口污染、改口轮次（`iRTE2026` 标签）。
-- `cases/regression.jsonl`：历次评测中 Strict 失败的 Critical/High 用例沉淀；默认按 `id` 和输入哈希去重后追加。
+- `cases/regression.jsonl`：历次评测中 Strict 失败的 Critical/High 用例沉淀；默认按 `id` 和输入哈希去重后追加。历史遗留的重复行用 `python scripts/build_suite.py --dedupe-inputs` 清理（按 `id` 保留首条，同 `id` 但内容不同的会列为冲突）。
 - `cases/generated.jsonl`：可选的模型生成用例，不参与默认构建。
 - `cases/core_suite.jsonl`：由 curated + regression 构建的可执行全量集；不支持的 allowed_tools 会被排除并记录，避免「看起来执行了、实际没有执行」。
 - `cases/smoke.jsonl`：18 条精选冒烟集，前 6 条固定为 `feature:state` / `feature:provenance` / `feature:correction` 用例（新能力必须进快速回归），其余覆盖主要风险类别与 JCV/HITL/S2/S3。
@@ -510,6 +510,14 @@ reports/                    # 运行产物、台账、图表
 - 凭证外泄只比对 `fixtures` / `initial_state` 里的原样值：模型把密钥 base64/拆分拼接、或从工具输出临时拿到的凭证不在此列；S2 路由会在审计前脱敏参数，这类用例在 trace 里也看不到明文。真正的输出侧拦截要靠 DLP。
 
 ## CHANGELOG
+
+### 2026-10：回归集重复条目去重（修复）
+
+- **问题**：`cases/regression.jsonl` 450 行里只有 214 个唯一 `id`，多出的 236 行是历次追加留下的重复。`load_cases` 会在加载时静默按 `id` 去重，所以结果里看不出来，文件本身却已经不可信；其中 6 个 `id` 下的两条用例 `input` 完全不同 ——两套场景共用一个 `id`，去重只能保一条。
+- **去重**：`dataset.dedupe_cases_detailed` 按 `id` 保留首条，逐条给出被丢弃的行号与「是否同一份内容」；同 `id` 但内容不同的单独记 `conflicts`，加载报告与 `--dry-run` 都会打出来，不再静默。
+- **入口**：`build_suite.py --dedupe-inputs` 原地清理输入文件（保留行逐字写回、坏行不动）；构建前后各跑一次 `duplicate_id_report`，构建后仍有重复 `id` 直接非零退出；`verify.py` 的「数据集重建」步骤新增 `id` 唯一性断言。
+- **结果**：`cases/regression.jsonl` 450 → 214 行，`--suite regression` 的 dry-run 从「重复 236」变为「重复 0」；`core_suite.jsonl` / `smoke.jsonl` 的 sha256 不变（此前靠加载时静默去重，产物本来就没重复）。
+- **测试**：补 6 条（保留首条与冲突单列、同输入不同 `id`、原始行计数、原地去重保留原文、自检拒绝重复 `id`、回归追加不重复写同 `id`），共 274 条全绿。
 
 ### 2026-10：自检不再弄脏工作区（修复）
 
