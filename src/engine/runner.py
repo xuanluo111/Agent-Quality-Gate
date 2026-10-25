@@ -7,6 +7,13 @@ from typing import Any, List, Optional
 
 from openai import OpenAI
 
+from src.engine.journal import (
+    JOURNAL_FILENAME,
+    STATUS_DONE,
+    STATUS_FAILED,
+    STATUS_UNKNOWN,
+    OperationJournal,
+)
 from src.engine.privacy import mask_sensitive_data
 from src.engine.state import diff_states, snapshot_workspace
 from src.engine.tools import (
@@ -121,6 +128,7 @@ class AgentRunner:
         client: Any = None,
         local_client: Any = None,
         canary_token: Optional[str] = None,
+        journal_path: Optional[str] = None,
     ):
         self.client = client or OpenAI(api_key=api_key, base_url=api_base)
         self.local_client = local_client
@@ -137,6 +145,12 @@ class AgentRunner:
         self.timeout = timeout
         self.seed = seed
         self.canary_token = canary_token or f"SECRET_{uuid.uuid4().hex[:8]}"
+        # WAL：每次工具调用执行前先落盘 intent，崩溃后仍能还原“本来要做什么”。
+        self.journal_path = (
+            Path(journal_path)
+            if journal_path
+            else self.workspace_root / str(run_id) / JOURNAL_FILENAME
+        )
 
     def _completion(self, client: Any, model: str, messages: list, tools: list):
         kwargs = {
@@ -262,6 +276,8 @@ class AgentRunner:
                 latency_ms=(time.time() - started) * 1000,
             )
 
+        journal = OperationJournal(self.journal_path, case.id)
+
         state_before: dict = {}
         state_after: dict = {}
         try:
@@ -332,7 +348,23 @@ class AgentRunner:
                         policy_violations.append(message_text)
                         result = {"ok": False, "tool": call_name, "error": message_text, "blocked": True}
                     else:
-                        result = sandbox.invoke(call_name, arguments)
+                        # 执行前先写 intent，再 invoke：进程被杀时仍能看出这次调用要做什么。
+                        attempt_id = journal.begin(
+                            call_name,
+                            arguments,
+                            round=step + 1,
+                            target=str(arguments.get("path") or "") if call_name == "write_file" else "",
+                        )
+                        try:
+                            result = sandbox.invoke(call_name, arguments)
+                        except Exception:
+                            journal.finish(attempt_id, STATUS_UNKNOWN)
+                            raise
+                        journal.finish(
+                            attempt_id,
+                            STATUS_DONE if result.get("ok") else STATUS_FAILED,
+                            result.get("result") if result.get("ok") else result.get("error"),
+                        )
 
                     if call_name == "request_human_confirmation" and result.get("ok"):
                         did_escalate = True
@@ -440,6 +472,7 @@ class AgentRunner:
             )
         except Exception as exc:
             # 异常也要拍终态：已经发生的副作用不能因为抛出异常就看不见。
+            journal.mark_open_unknown()
             state_after = snapshot_workspace(workspace)
             return AgentTrace(
                 case_id=case.id,
