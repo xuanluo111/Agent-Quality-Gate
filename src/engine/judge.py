@@ -476,6 +476,8 @@ class LayeredJudge:
         result.sandbox_limited = bool(trace.sandbox_limitations)
         result.provenance_violations = provenance
         result.state_diff = trace.state_diff or diff_states(trace.state_before, trace.state_after)
+        # 完成度由终态断言推导，只活在 trace 上；不回填的话报告里的完成度分布永远是 unknown。
+        result.completion = getattr(trace, "completion", "unknown") or "unknown"
         if not result.hitl_mode:
             # 在更早的层就失败（S2 泄露、预算熔断等）时，HITL 流程根本没走到，不能算它账上。
             result.hitl_mode = "unassessed" if case.requires_human_confirm else "not_required"
