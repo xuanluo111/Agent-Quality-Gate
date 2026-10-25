@@ -124,8 +124,23 @@ cp models.example.json models.json
 }
 ```
 
-清单里只引用环境变量名（`api_key_env`），不写明文 Key：
+本项目实际跑过的 7 个模型（`models.json` 本身被 `.gitignore` 忽略，内网 `base_url` 也不写进仓库，下表只保留可复现的部分）：
 
+| `name`（台账分区键） | `model` | `api_key_env` | 选取理由 |
+|---|---|---|---|
+| `tokendance-spark-x2.5-4b` | `spark-x2.5-4b` | `GC_API_KEY` | 主力小参数模型 |
+| `tokendance-spark-x2.5-1.7b` | `spark-x2.5-1.7b` | `GC_API_KEY` | 与上一行同系列、参数更小，用来看规模效应 |
+| `tokendance-ling-3.1-flash` | `ling-3.1-flash` | `GC_API_KEY` | 同网关下的强基线 |
+| `tokendance-mimo-v2.6-flash` | `mimo-v2.6-flash` | `GC_API_KEY` | 中等规模，用来验证稳定复现 |
+| `tokendance-step-3.5-flash` | `step-3.5-flash` | `GC_API_KEY` | 推理型，思维链会吃满 `max_tokens` |
+| `diandian-dots3-note-pre` | `dots3-note-prev` | `XHS_API_KEY` | 网关会拦红队 prompt 的链路（见「`invalid`：把“没测到”和“测不过”分开」） |
+| `zhipu-glm-4-flash` | `glm-4-flash` | `ZHIPUAI_API_KEY` | 外部对照组 |
+
+默认参数：`suite=core`、`limit=120`、`workers=3`、`judge_samples=2`、`max_tokens=4096`、`token_budget=24000`、`repeat=2`、`require_stable=true`——每个模型跑两次，门禁看 pass^k 而不是单次最好成绩。
+
+dots 早期叫 `dots-3-note-preview`（旧批次的台账分区键），改名后台账另起一个分区，两份保留、不跨名合并（见台账小节）。
+
+清单里只引用环境变量名（`api_key_env`），不写明文 Key：
 ```bash
 caffeinate -dims python scripts/run_batch.py --matrix models.json --dry-run   # 先免费校验
 caffeinate -dims python scripts/run_batch.py --matrix models.json             # 正式串行评测
@@ -314,15 +329,16 @@ reports/
 │       ├── results.jsonl        # 逐条 result + trace，失败也会保留；result.attempts 与 attempts 的 attempt 均 1 起且同序
 │       ├── report.md
 │       └── summary.json         # 可视化与下游消费的结构化摘要
-├── latest.md                    # 最近一次“会发布”的报告副本（--no-publish 的运行不覆盖）
-├── risk_ledger.json             # 跨期风险台账（同一模型的多个 run 各自记账）
-├── observability.json           # 最近一次“会发布”的 summary 副本
-└── charts/
+├── latest.md                    # 最近一次“会发布”的报告副本（不入库，每次发布被覆盖）
+├── risk_ledger.json             # 跨期风险台账（同一模型的多个 run 各自记账，入库）
+├── observability.json           # 最近一次“会发布”的 summary 副本（不入库）
+└── charts/                      # 入库：README 引用的图 + 可离线打开的仪表盘
     ├── dashboard.html           # ECharts 交互仪表盘（含三原色图板）
+    ├── echarts.min.js           # 本地化的 ECharts，断网也能打开看板
     └── *.png                    # 柱状图、折线图、比例图、三原色图板
 ```
 
-单用例工具工作目录位于 `workspace/<run_id>/<case_slug>/`。这些运行产物默认被 `.gitignore` 忽略，报告 Markdown 与台账可以按需提交。
+单用例工具工作目录位于 `workspace/<run_id>/<case_slug>/`。除 `risk_ledger.json` 与 `charts/` 外，运行产物默认被 `.gitignore` 忽略：`runs/` 是逐次重跑不断堆积的原始数据（含 `results.jsonl` 轨迹），`latest.md` / `observability.json` 每次“会发布”的运行都会覆盖，所以都不入库。`charts/` 入库是为了 clone 后能直接看图和离线打开看板；它是一份快照，当前对应 `reports/runs/` 下的 9 份报告（`20261024-230655` 七模型批次 + 两次 dots 补跑），重新批量后要重新生成并提交。
 
 ## 可视化
 
