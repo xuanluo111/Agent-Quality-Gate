@@ -204,6 +204,10 @@ def step_capabilities() -> Step:
 
 def step_dataset() -> Step:
     before = {name: _sha256(ROOT / "cases" / name) for name in DATASET_FILES if (ROOT / "cases" / name).is_file()}
+    # manifest 带 generated_at，重建必然改动时间戳。数据集内容没变时把它还原，
+    # 否则每跑一次自检就多一个“只差时间”的 diff，CI 里没人管、本地很碍事。
+    manifest_path = ROOT / "cases" / "suite_manifest.json"
+    manifest_before = manifest_path.read_bytes() if manifest_path.is_file() else None
     first = _run([sys.executable, "scripts/build_suite.py"])
     if first.returncode != 0:
         return Step("数据集重建", False, _tail(first.stdout + first.stderr))
@@ -241,6 +245,11 @@ def step_dataset() -> Step:
     front = {tag for row in smoke_rows[:6] for tag in (row.get("tags") or [])}
     if missing_capability_tags(front):
         return Step("数据集重建", False, f"smoke 前 6 条未覆盖新能力: {sorted(front)}")
+    # 内容文件与自检前一致 = 这轮只是校验，不是真的重建，把时间戳改回去。
+    if manifest_before is not None and all(
+        _sha256(ROOT / "cases" / name) == digest for name, digest in before.items()
+    ):
+        manifest_path.write_bytes(manifest_before)
     return Step(
         "数据集重建",
         True,

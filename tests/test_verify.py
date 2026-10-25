@@ -44,3 +44,44 @@ def test_capability_dataset_respects_limit():
 
     assert len(_capability_cases(2)) == 2
     assert _capability_cases(0) == _capability_cases(999)
+
+
+def test_step_dataset_keeps_manifest_timestamp_when_content_unchanged(tmp_path, monkeypatch):
+    """自检只做校验：数据集内容没变时，不能把 manifest 的 generated_at 改掉。
+
+    否则每跑一次 `make verify` 就会多一个只差时间戳的 diff，把工作区弄脏。
+    """
+    import json
+    from types import SimpleNamespace
+
+    import scripts.verify as verify
+
+    cases = tmp_path / "cases"
+    cases.mkdir()
+    tags = ["feature:state", "feature:provenance", "feature:correction"]
+    (cases / "curated_cases.jsonl").write_text('{"id": "a"}\n', encoding="utf-8")
+    (cases / "core_suite.jsonl").write_text(
+        json.dumps({"id": "a", "tags": tags}) + "\n", encoding="utf-8"
+    )
+    (cases / "smoke.jsonl").write_text(json.dumps({"id": "a", "tags": tags}) + "\n", encoding="utf-8")
+    manifest = cases / "suite_manifest.json"
+    manifest.write_text(
+        json.dumps({"generated_at": "2026-01-01 00:00:00", "core": {"written": 1}, "smoke": {"written": 1}}),
+        encoding="utf-8",
+    )
+    original = manifest.read_bytes()
+
+    def fake_run(args, timeout=1800):
+        # 模拟 build_suite：用例内容不变，只刷新 generated_at
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        data["generated_at"] = "2026-01-02 00:00:00"
+        manifest.write_text(json.dumps(data), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(verify, "ROOT", tmp_path)
+    monkeypatch.setattr(verify, "_run", fake_run)
+
+    step = verify.step_dataset()
+
+    assert step.ok is True, step.detail
+    assert manifest.read_bytes() == original
