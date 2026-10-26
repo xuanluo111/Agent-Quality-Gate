@@ -158,6 +158,8 @@ def parse_summary(path: Path, reports_dir: Path) -> dict:
     return {
         "file": str(relative),
         "model": str(data.get("model") or "unknown"),
+        # started_at 是这次运行真正开始的时间；generated_at 只代表报告生成那一刻。
+        "started_at": str(data.get("started_at") or ""),
         "generated_at": str(data.get("generated_at") or data.get("started_at") or ""),
         "std_rate": float(data.get("std_pass_rate", data.get("std_rate", 0.0)) or 0.0),
         "strict_rate": float(data.get("strict_pass_rate", data.get("strict_rate", 0.0)) or 0.0),
@@ -186,6 +188,15 @@ def parse_summary(path: Path, reports_dir: Path) -> dict:
         "fallback_rate": round(fallback / total * 100, 2) if total else 0.0,
         "case_categories": {str(key): int(value) for key, value in (data.get("by_category") or {}).items()},
     }
+
+
+def sort_stamp(report: dict) -> str:
+    """时间轴与排序一律用真实运行开始时间。
+
+    `generated_at` 是报告重生成那一刻：重判一次就把不同日期跑的批次压到同一刻，
+    趋势图会退化成一条竖线。旧报告没有 `started_at` 时才退回生成时间。
+    """
+    return str(report.get("started_at") or report.get("generated_at") or "")
 
 
 def load_reports(reports_dir: Path, include_selfcheck: bool = False) -> tuple[list[dict], list[dict]]:
@@ -217,13 +228,13 @@ def load_reports(reports_dir: Path, include_selfcheck: bool = False) -> tuple[li
                 reports.append(parse_report(path))
             except Exception as exc:
                 skipped.append({"file": path.name, "reason": str(exc)})
-    reports.sort(key=lambda item: item["generated_at"])
+    reports.sort(key=sort_stamp)
     counts = Counter(report["model"] for report in reports)
     for report in reports:
         if counts[report["model"]] == 1:
             report["display"] = report["model"]
         else:
-            stamp = report["generated_at"][5:16] if report["generated_at"] else report["file"]
+            stamp = sort_stamp(report)[5:16] if sort_stamp(report) else report["file"]
             report["display"] = f'{report["model"]} · {stamp}'
     return reports, skipped
 
@@ -527,8 +538,8 @@ def render_pngs(reports: list[dict], aggregates: dict, out_dir: Path) -> list[Pa
     outputs.append(out_dir / "02_critical_failures_bar.png")
     save_figure(plt, fig, outputs[-1])
 
-    timeline = sorted(reports, key=lambda item: item["generated_at"])
-    tick_labels = [f'{item["generated_at"][5:16]}\n{compact_name(item)}' for item in timeline]
+    timeline = sorted(reports, key=sort_stamp)
+    tick_labels = [f'{sort_stamp(item)[5:16]}\n{compact_name(item)}' for item in timeline]
     strict_series = [item["strict_rate"] for item in timeline]
     critical_series = [item["critical"] for item in timeline]
     ax_positions = np.arange(len(timeline))
@@ -707,7 +718,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <table>
         <thead>
           <tr>
-            <th>报告文件</th><th>模型</th><th>模式</th><th>裁判</th><th>生成时间</th><th>样本</th>
+            <th>报告文件</th><th>模型</th><th>模式</th><th>裁判</th><th>运行开始</th><th>样本</th>
             <th>Standard</th><th>Strict</th><th>Critical</th><th>门禁</th><th>local_fallback</th>
           </tr>
         </thead>
@@ -734,6 +745,10 @@ function shortLabel(name) {
 function esc(value) {
   return String(value).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
+
+// 排序与时间轴用真实运行开始时间：generated_at 是报告重生成那一刻，
+// 重判一次就会把不同日期的批次压到同一刻。
+function stampOf(item) { return item.started_at || item.generated_at || ""; }
 
 function chart(id) {
   if (!window.echarts) {
@@ -828,8 +843,8 @@ function renderFailPie() {
 function renderTimeline() {
   const instance = chart("chart-timeline");
   if (!instance) return;
-  const ordered = [...REPORTS].sort((a, b) => a.generated_at.localeCompare(b.generated_at));
-  const labels = ordered.map(item => item.generated_at.slice(5, 16) + "\\n" + shortLabel(item.display));
+  const ordered = [...REPORTS].sort((a, b) => stampOf(a).localeCompare(stampOf(b)));
+  const labels = ordered.map(item => stampOf(item).slice(5, 16) + "\\n" + shortLabel(item.display));
   instance.setOption({
     color: ["#2E5BFF", "#E5484D"],
     tooltip: { trigger: "axis" },
@@ -933,7 +948,7 @@ function renderVenn() {
 }
 
 function renderTable() {
-  const rows = [...REPORTS].sort((a, b) => b.generated_at.localeCompare(a.generated_at)).map(item => {
+  const rows = [...REPORTS].sort((a, b) => stampOf(b).localeCompare(stampOf(a))).map(item => {
     const fallback = item.fallback > 0
       ? `<span class="badge warn">${item.fallback} (${item.fallback_rate.toFixed(1)}%)</span>`
       : '<span class="badge passed">0</span>';
@@ -948,7 +963,7 @@ function renderTable() {
       <td>${esc(item.display)}</td>
       <td>${esc(item.mode || "-")}</td>
       <td>${esc(item.judge_model || "-")}</td>
-      <td class="num">${esc(item.generated_at)}</td>
+      <td class="num">${esc(stampOf(item))}</td>
       <td class="num">${sample}</td>
       <td class="num">${item.std_rate.toFixed(2)}%</td>
       <td class="num"${ci}>${item.strict_rate.toFixed(2)}%</td>

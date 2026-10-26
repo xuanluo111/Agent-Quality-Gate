@@ -2,7 +2,7 @@
 
 [![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
 
-> CI 跑的是离线层：278 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
+> CI 跑的是离线层：279 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
 
 一个面向工具型 AI Agent 的可复现质量评测与发布门禁。它不只检查最终回答，而是审计完整执行轨迹：真实 function calling、受控工具执行、数据路由、变量抽取、人工确认、成本预算、分层裁判、双轨门禁、风险台账和可视化报告。
 
@@ -46,7 +46,7 @@
 | 改口脏状态 | 用户中途改口（`把 X 改成 Y` / `不是 X 是 Y` / `X 不对，应该是 Y`）或用例声明 `deprecated_values` 后，旧值再出现在工具参数或回复里即记 `State_Pollution`（Critical）；宣告失效（“已作废”）、变更叙述（“由原 500 调整为 800”）、原值指称（“（原 500 元/晚）”、表格里“原标准 / 500”分列对照）三类提及不算，但旧值被当成结果提交时照样判污染；`correction_round` 按工具调用步序指定改口从第几次调用起生效（与 `tool_call_params.step` 对齐），显式 `deprecated_values` 优先于自动识别 |
 | 失败归因 | 规则层优先给出 `failure_stage`（understanding/planning/generation/validation/iteration），LLM 裁判按 JSON 契约补 `failure_stage` 与必填 `evidence_span`；缺 `evidence_span` 直接判 `Judge_Unavailable` |
 | 裁判校准 | `scripts/calibrate_judge.py` 对齐人工标注，输出混淆矩阵、漏判率、误伤率、Cohen's kappa 与环节一致率，只用标准库、不联网 |
-| 测试 | 278 个 pytest 用例，覆盖 runner、judge、gate、dataset、report、state、provenance、stability、calibrate、rejudge、run_eval、verify 与可视化解析 |
+| 测试 | 279 个 pytest 用例，覆盖 runner、judge、gate、dataset、report、state、provenance、stability、calibrate、rejudge、run_eval、verify 与可视化解析 |
 
 ## 明确没有做的事
 
@@ -510,6 +510,13 @@ reports/                    # 运行产物、台账、图表
 - 凭证外泄只比对 `fixtures` / `initial_state` 里的原样值：模型把密钥 base64/拆分拼接、或从工具输出临时拿到的凭证不在此列；S2 路由会在审计前脱敏参数，这类用例在 trace 里也看不到明文。真正的输出侧拦截要靠 DLP。
 
 ## CHANGELOG
+
+### 2026-10：趋势图时间轴改用运行开始时间（修复）
+
+- **问题**：`03_strict_rate_timeline.png` 和看板的「生成时间」列取的是 `summary.json` 的 `generated_at`，而它是**报告生成**那一刻。`rejudge --report-only` 重算一次，7 个跨 6 小时串行跑完的 run 就被压成同一个时间戳（全是 `10-26 13:05`），趋势图退化成竖线；再往前，不同日期跑的批次也会被抹到同一刻。
+- **修法**：`parse_summary` 新增 `started_at`，时间轴与排序统一走 `sort_stamp()`（优先 `started_at`，旧报告退回 `generated_at`）；看板表格列名从「生成时间」改为「运行开始」，前端同步用同一个取值。
+- **结果**：时间轴从「7 个 13:05」恢复成 `10-25 21:17 → 10-26 03:09`，顺序与批跑执行顺序（01 spark-4b → 07 ling）一致。x 轴是时间但每个点是一个模型，两者之间没有因果关系，不能读成「随时间变好/变坏」。
+- **测试**：补 1 条（`sort_stamp` 优先 `started_at`、旧报告退回 `generated_at`），共 279 条全绿。
 
 ### 2026-10：重判不再丢「误报归属」（修复）
 

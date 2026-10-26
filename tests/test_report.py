@@ -123,6 +123,8 @@ def test_generate_markdown_summary_and_ledger(tmp_path):
     structured = visualize_reports.parse_summary(run_dir / "summary.json", reports_dir)
     assert structured["model"] == "fake-model"
     assert structured["judge_model"] == "judge-model"
+    # 时间轴要用运行开始时间，不是报告重生成时间。
+    assert structured["started_at"] == "2026-10-20 10:00:00"
     assert structured["mode"] == "enforce"
     assert structured["strict_rate"] == 50.0
     assert structured["gate_status"] == "blocked"
@@ -589,3 +591,14 @@ def test_visualization_skips_selfcheck_runs_by_default(tmp_path):
     reports, skipped = visualize_reports.load_reports(reports_dir, include_selfcheck=True)
     assert {report["run_id"] for report in reports} == {"run-1", "verify-20261024"}
     assert skipped == []
+
+
+def test_sort_stamp_prefers_run_start_over_regeneration_time():
+    """重判会把 generated_at 重写成同一刻，时间轴必须用 started_at。
+
+    否则不同日期跑的批次在趋势图上会塌成一条竖线，“时间趋势”就没意义了。
+    """
+    report = {"started_at": "2026-10-25 21:17:47", "generated_at": "2026-10-26 13:05:13"}
+    assert visualize_reports.sort_stamp(report) == "2026-10-25 21:17:47"
+    # 旧报告没有 started_at 时退回生成时间，不能排序成空串。
+    assert visualize_reports.sort_stamp({"generated_at": "2026-10-20 10:00:00"}) == "2026-10-20 10:00:00"
