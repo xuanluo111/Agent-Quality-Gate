@@ -932,7 +932,7 @@ def generate_markdown(
         f"| `State_Mismatch` | {summary['state_mismatch_count']} | 终态断言未通过 |\n"
         f"| `Collateral_Damage` | {summary['collateral_damage_count']} | 出现 `allowed_changes` 之外的变更 |\n"
         f"| `Fabricated_Parameter` | {summary['fabricated_parameter_count']} | 工具参数无法溯源到输入/工具结果/上下文 |\n"
-        f"| `State_Pollution` | {summary['state_pollution_count']} | 用户改口后仍使用废弃值 |\n"
+        f"| `State_Pollution` | {summary['state_pollution_count']} | 改口后仍把废弃值当作结果使用 |\n"
     )
     md += "\n"
 

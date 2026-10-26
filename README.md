@@ -2,7 +2,7 @@
 
 [![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
 
-> CI 跑的是离线层：274 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
+> CI 跑的是离线层：276 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
 
 一个面向工具型 AI Agent 的可复现质量评测与发布门禁。它不只检查最终回答，而是审计完整执行轨迹：真实 function calling、受控工具执行、数据路由、变量抽取、人工确认、成本预算、分层裁判、双轨门禁、风险台账和可视化报告。
 
@@ -43,10 +43,10 @@
 | 终态断言 | 用例可声明 `initial_state` / `expected_final_state` / `state_assertions` / `allowed_changes`；Runner 在用例开始与结束把工作区拍成 `路径 -> sha256`，断言不符记 `State_Mismatch`，声明外变更记 `Collateral_Damage` |
 | pass^k 稳定性 | `--repeat N` 让同一用例在独立工作区重复执行 N 次，汇总给出 pass@k / pass^k / stability_rate / flaky；`--require-stable` 时门禁改用 pass^k |
 | 参数血缘 | 工具参数里的 ID / 金额 / 日期必须能溯源到用户输入、工具结果、用例上下文或配置常量，否则记 `Fabricated_Parameter`（Strict 失败、Standard 通过），可注册正则 transform 防误杀 |
-| 改口脏状态 | 用户中途改口（`把 X 改成 Y` / `不是 X 是 Y` / `X 不对，应该是 Y`）或用例声明 `deprecated_values` 后，旧值再出现在工具参数或回复里即记 `State_Pollution`（Critical），紧贴“作废/废弃/不再使用”的宣告失效式提及不算；`correction_round` 按工具调用步序指定改口从第几次调用起生效（与 `tool_call_params.step` 对齐），显式 `deprecated_values` 优先于自动识别 |
+| 改口脏状态 | 用户中途改口（`把 X 改成 Y` / `不是 X 是 Y` / `X 不对，应该是 Y`）或用例声明 `deprecated_values` 后，旧值再出现在工具参数或回复里即记 `State_Pollution`（Critical）；宣告失效（“已作废”）、变更叙述（“由原 500 调整为 800”）、原值指称（“（原 500 元/晚）”、表格里“原标准 / 500”分列对照）三类提及不算，但旧值被当成结果提交时照样判污染；`correction_round` 按工具调用步序指定改口从第几次调用起生效（与 `tool_call_params.step` 对齐），显式 `deprecated_values` 优先于自动识别 |
 | 失败归因 | 规则层优先给出 `failure_stage`（understanding/planning/generation/validation/iteration），LLM 裁判按 JSON 契约补 `failure_stage` 与必填 `evidence_span`；缺 `evidence_span` 直接判 `Judge_Unavailable` |
 | 裁判校准 | `scripts/calibrate_judge.py` 对齐人工标注，输出混淆矩阵、漏判率、误伤率、Cohen's kappa 与环节一致率，只用标准库、不联网 |
-| 测试 | 274 个 pytest 用例，覆盖 runner、judge、gate、dataset、report、state、provenance、stability、calibrate、rejudge、run_eval、verify 与可视化解析 |
+| 测试 | 276 个 pytest 用例，覆盖 runner、judge、gate、dataset、report、state、provenance、stability、calibrate、rejudge、run_eval、verify 与可视化解析 |
 
 ## 明确没有做的事
 
@@ -503,13 +503,21 @@ reports/                    # 运行产物、台账、图表
 - 参数血缘是“形态识别 + 归一化后子串比对”：同一金额的不同写法需要注册 transform（默认已处理千分位、货币符号/单位、日期分隔符、全角数字）；系统自动生成且用例未声明的编号会被当成伪造；模型自己算出来的金额（如 500×3=1500）也不在来源里，同样会被当成伪造，需要用 `register_constant` 或给用例加 `no-provenance` tag 退出。
 - 改口识别是正则启发式，只覆盖 `把 X 改成 Y`、`不是 X 是 Y`、`X 不对，应该是 Y` 三种明确句式；隐式改口（“算了，用另一个”）需用例显式声明 `deprecated_values`。一旦声明了 `deprecated_values`，自动识别就完全不参与，避免把“标准”“金额”这类名词当成旧值。
 - `correction_round` 对齐的是 `tool_call_params.step`（第几次工具调用），但 Runner 只喂一个用户输入：单轮用例里写 >1 不会产生“改口前”阶段，只会把前面几次工具调用排除在污染扫描外，交付物写入一旦落在被豁免的步数里就会漏判。`load_cases` 对这种配置会给 `warnings`，`--dry-run` 会打印出来。
-- 改口污染扫描是子串匹配，命中范围是“改口生效轮次之后的全部工具参数 + 收尾答复”；`deprecated_values` 一旦声明，任何位置出现旧值都算使用，但紧贴“作废/废弃/不再使用”等否定标记的提及会豁免（`only_voided_mentions`）——“旧标准 500 已作废”是确认改口，“本次提交 1500”才是污染。因此这类用例的提示词应当约束“交付物只写最终值”，而不是要求“绝口不提旧值”。
+- 改口污染扫描是子串匹配，命中范围是“改口生效轮次之后的全部工具参数 + 收尾答复”；`deprecated_values` 一旦声明，任何位置出现旧值都算使用，只有三种“指称”豁免（`only_referential_mentions`）：紧贴“作废/废止/废弃/不再使用”等否定标记、紧跟变更动词且同窗口出现用户确认的新值（“由原 500 调整为 800”）、“原/旧”限定词所在子句且全文出现过新值（“（原 500 元/晚）”、表格里的“原标准 | 500”）。三者都要求旧值没有和“实际结果”拧在一起：“本次提交 1500”“本次报销按 500 元/晚提交”仍判污染。因此这类用例的提示词应当约束“交付物只写最终值”，而不是要求“绝口不提旧值”。
 - `allowed_changes` 的 glob 按工作区相对路径匹配，写到 `workspace_root` 之外的路径不会出现在 diff 里，这类越权只能由沙箱策略兜底。
 - `--repeat N` 会把模型调用次数与 token 成本直接放大 N 倍；N 越大，pass^k 对偶发抖动越敏感，适合发布前验收而不是每次提交。
 - `evidence_span` 是 LLM 裁判的硬契约：自建裁判 prompt 或模型若不返回该字段，结果一律降为 `Judge_Unavailable` 并计入无效样本，需同步升级 prompt 或先用规则层。
 - 凭证外泄只比对 `fixtures` / `initial_state` 里的原样值：模型把密钥 base64/拆分拼接、或从工具输出临时拿到的凭证不在此列；S2 路由会在审计前脱敏参数，这类用例在 trace 里也看不到明文。真正的输出侧拦截要靠 DLP。
 
 ## CHANGELOG
+
+### 2026-10：改口污染的“复述”与“使用”分开判（修复）
+
+- **问题**：`curated-correction-budget-001` 里 7 个模型都把单晚标准写成了 800，只因交付物多一句“（标准已由原 500 元/晚调整为 800 元/晚）”，就撞上 `deprecated_values: ["500"]` 被判 `State_Pollution`（Critical）。`only_voided_mentions` 只认“作废/废弃”这类否定词，把“说明改了什么”当成了“还在用旧值”；判词又写成“仍在使用已废弃的旧值”，看报告的人会误判。
+- **判据**：`only_voided_mentions` → `only_referential_mentions`，三种“指称”才豁免：否定标记（新增“废止”）、紧贴变更动词且同窗口出现新值、子句内有“原/旧”限定词且全文出现过新值。三者都拿用户确认的新值做锚，且只豁免“提及”——旧值被当成结果写进参数或承诺时照样判污染。
+- **文案**：判词与台账表头从“用户改口后仍在使用已废弃的旧值”改为“改口后仍把已废弃的旧值当作结果使用”，与豁免后的实际判据对齐。
+- **验证**：`batch-20261025-2117` 里 6 条 `State_Pollution` 全部由“污染”翻为“干净”（step-3.5 原本就通过），7 个模型在该用例上口径一致；`--recheck-rule --dry-run` 待重判 212 条，未调用任何模型。
+- **测试**：补 2 条（“由原 500 调整为 800”不再判污染、同段里注明原值但仍按旧值提交仍判污染），共 276 条全绿。
 
 ### 2026-10：回归集重复条目去重（修复）
 
