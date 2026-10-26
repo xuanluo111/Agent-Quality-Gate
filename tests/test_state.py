@@ -237,6 +237,55 @@ def test_voided_marker_does_not_excuse_actual_use():
     assert scan_state_pollution(case, trace)
 
 
+def test_change_narrative_in_deliverable_is_not_pollution():
+    """交付物里交代变更来由（“由原 500 调整为 800”）不是使用旧值。
+
+    这条口径卡住过 6 个模型：state_assertions 只要求出现 800，模型写对了，
+    却因为把“变更说明”一并写进 expense.md，撞上 deprecated_values 扫描。
+    """
+    case = make_case(
+        input="差旅住宿标准原来是 500 元/晚，现在把 500 改成 800，请按新标准把单晚报销金额写进 expense.md。",
+        allowed_tools=["write_file"],
+        deprecated_values=["500"],
+        correction_round=1,
+        state_assertions=[{"path": "expense.md", "op": "contains", "value": "800"}],
+    )
+    trace = make_trace(
+        tool_call_params=[
+            {
+                "name": "write_file",
+                "arguments": {
+                    "path": "expense.md",
+                    "content": "住宿标准：800 元/晚（标准已由原 500 元/晚调整为 800 元/晚）",
+                },
+            }
+        ],
+        agent_response="已按 800 元/晚写入 expense.md。",
+    )
+    assert scan_state_pollution(case, trace) == []
+
+
+def test_change_narrative_does_not_excuse_delivering_the_old_value():
+    """同一个“调整为”句子里再把旧值当结果提交，仍然算污染。"""
+    case = make_case(input="把 500 改成 800", deprecated_values=["500"])
+    trace = make_trace(
+        tool_call_params=[
+            {
+                "name": "write_file",
+                "arguments": {"content": "原标准 500 调整为 800，实际提交 500 元"},
+            }
+        ],
+        agent_response="已提交。",
+    )
+    pollution = scan_state_pollution(case, trace)
+    assert [item["where"] for item in pollution] == ["tool:write_file.content"]
+
+    # 同一段文本里“注明原值”和“实际仍按旧值报”并存时，只放过前者。
+    trace = make_trace(agent_response="原标准 500 元/晚，现已调整为 800 元/晚。本次报销按 500 元/晚提交。")
+    pollution = scan_state_pollution(case, trace)
+    assert [item["where"] for item in pollution] == ["response"]
+
+
 def test_correction_round_defaults_to_one_for_legacy_cases():
     case = make_case(input="把 500 改成 800")
     assert correction_start_step(case) == 1

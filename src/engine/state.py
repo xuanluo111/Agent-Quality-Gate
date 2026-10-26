@@ -336,23 +336,97 @@ def deprecated_values_for(case: TestCase) -> List[str]:
 # “提到旧值”不等于“使用旧值”：模型常用“旧标准 500 已作废”来确认改口，这种
 # 否定式提及没有把旧值带进交付物。只有当旧值的每一处出现都紧贴这类标记时才豁免，
 # 所以“500 已作废，所以提交 1500”仍然会被判污染。
-VOID_MARKERS = re.compile(r"作废|废弃|弃用|不再使用|不再适用|不再生效|不再采用|已过时")
+VOID_MARKERS = re.compile(r"作废|废止|废弃|弃用|不再使用|不再适用|不再生效|不再采用|已过时")
 VOID_TAIL_CHARS = 10
 VOID_HEAD_CHARS = 6
 
+# 交付物里交代变更来由（“标准已由原 500 元/晚调整为 800 元/晚”）同样不是使用旧值，
+# 但这类句子没有任何失效词，只看 VOID_MARKERS 会把“说明改了什么”判成“还在用旧值”。
+# 判据必须同时满足：旧值后面紧跟变更动词，且同一窗口内出现了用户确认过的新值——
+# 只看变更动词会放过“500 改为 800，请按 500 提交”，所以新值缺一不可。
+CORRECTION_HINTS = re.compile(r"调整为|改为|改成|改到|变更为|更新为|修正为|换成|调整而来|调整来")
+CORRECTION_TAIL_CHARS = 24
 
-def only_voided_mentions(text: str, value: str) -> bool:
-    """旧值在这个文本里只是被宣告失效，而不是被当成结果使用。"""
+# 交付物里“注明原值”是常见的诚实写法（“（原 500 元/晚）”、表格里的“原标准 | 500”、
+# “原 500 元/晚标准同时废止”）。这类指称既没有失效词也没有变更动词，只看前两条
+# 判据会把“写清楚了改了什么”反过来判成违规。
+# 词表要求“原/旧”后必须跟数字或具体名词：否则“原因是 500 元”这种句子会被误豁免。
+HISTORICAL_MARKERS = re.compile(
+    r"原\s*(?:来|本|标\s*准|值|金\s*额|价\s*格|单\s*价|上\s*限|费\s*用|规\s*则|\d)"
+    r"|旧\s*(?:标\s*准|值|金\s*额|价\s*格|上\s*限|费\s*用)"
+    r"|之\s*前|先\s*前|此\s*前|过\s*去|以\s*往"
+)
+# 子句边界：表格的 `|` 不算边界，否则“原标准 | 500”会被切成两段丢掉“原”。
+SEGMENT_BREAKS = "\n。；;，,"
+
+
+def _segment_around(text: str, start: int, end: int) -> str:
+    """取旧值所在子句，用来判断它是不是被限定成“原值/旧值”。"""
+    left = 0
+    for index in range(start - 1, -1, -1):
+        if text[index] in SEGMENT_BREAKS:
+            left = index + 1
+            break
+    right = len(text)
+    for index in range(end, len(text)):
+        if text[index] in SEGMENT_BREAKS:
+            right = index
+            break
+    return text[left:right]
+
+
+def _numeric_forms(value: str) -> List[str]:
+    return re.findall(r"\d+(?:\.\d+)?", str(value or ""))
+
+
+def _mentions_confirmed_value(text: str, new_values: List[str]) -> bool:
+    """窗口里是否出现了用户确认的新值；带单位的“800 元/晚”与“800”要能互相认出。"""
+    lowered = str(text or "").lower()
+    for raw in new_values:
+        if raw.lower() in lowered:
+            return True
+        for number in _numeric_forms(raw):
+            if re.search(rf"(?<![\d.]){re.escape(number)}(?![\d.])", lowered):
+                return True
+    return False
+
+
+def _is_change_narrative(tail: str, new_values: List[str]) -> bool:
+    """旧值后面是“变更到新值”的叙述，而不是把旧值当成结果使用。"""
+    hint = CORRECTION_HINTS.search(tail)
+    if not hint:
+        return False
+    return _mentions_confirmed_value(tail[hint.end() :], new_values)
+
+
+def only_referential_mentions(text: str, value: str, new_values: Iterable[str] = ()) -> bool:
+    """旧值在这个文本里只是被指称（宣告失效 / 交代变更 / 注明原值），不是被当成结果使用。
+
+    三种豁免都只针对“提及”：旧值一旦出现在没有这些信号的子句里，仍然判污染。
+    """
+    confirmed = [str(item).strip() for item in (new_values or []) if str(item).strip()]
     lowered = str(text or "").lower()
     needle = value.lower()
     spans = list(re.finditer(re.escape(needle), lowered))
     if not spans:
         return False
+    # 新值是否在本段文本里出现，三种豁免都要拿它做锚，避免“只提旧值不给新值”被放过。
+    mentions_new = bool(confirmed) and _mentions_confirmed_value(lowered, confirmed)
     for match in spans:
         head = lowered[max(0, match.start() - VOID_HEAD_CHARS) : match.start()]
         tail = lowered[match.end() : match.end() + VOID_TAIL_CHARS]
-        if not (VOID_MARKERS.search(head) or VOID_MARKERS.search(tail)):
-            return False
+        if VOID_MARKERS.search(head) or VOID_MARKERS.search(tail):
+            continue
+        long_tail = lowered[match.end() : match.end() + CORRECTION_TAIL_CHARS]
+        if confirmed and _is_change_narrative(long_tail, confirmed):
+            continue
+        # “原值”指称必须和新值同时出现才算说明：只写“原 500”却不给新值，
+        # 交付物本身就没按改口后的标准来，不该在这里放过。
+        if mentions_new and HISTORICAL_MARKERS.search(
+            _segment_around(lowered, match.start(), match.end())
+        ):
+            continue
+        return False
     return True
 
 
@@ -397,12 +471,17 @@ def scan_state_pollution(case: TestCase, trace) -> List[dict]:
     包含改口，任何收尾答复都在改口之后。只做子串匹配，并跳过单字符值，避免把
     “1”这类噪声当成污染。
 
-    “旧标准 500 已作废”这类宣告失效的提及不算使用旧值（见 `only_voided_mentions`），
-    否则模型越是老实交代改口，越容易被判成脏状态。
+    “旧标准 500 已作废”这类宣告失效的提及不算使用旧值，“由原 500 调整为 800”这类
+    变更叙述、“（原 500 元/晚）”这类原值指称同理（见 `only_referential_mentions`），
+    否则模型越是老实交代改口，越容易被判成脏状态。三种豁免都只针对“提及”：旧值被
+    当成结果写进参数或承诺时照样判污染。
     """
     deprecated = deprecated_values_for(case)
     if not deprecated:
         return []
+    # 豁免“变更叙述”必须拿用户确认的新值做锚，否则“500 改为 800”这句里
+    # 任何一处 500 都会被放过，等于给了绕过口子。
+    _, confirmed = extract_corrections(case.input)
     start_step = correction_start_step(case)
     violations: List[dict] = []
     response = str(trace.agent_response or "")
@@ -413,7 +492,9 @@ def scan_state_pollution(case: TestCase, trace) -> List[dict]:
         for step, where, text in _iter_tool_strings(trace):
             if step < start_step:
                 continue
-            if lowered in str(text).lower() and not only_voided_mentions(str(text), value):
+            if lowered in str(text).lower() and not only_referential_mentions(
+                str(text), value, confirmed
+            ):
                 violations.append(
                     {
                         "value": value,
@@ -422,7 +503,7 @@ def scan_state_pollution(case: TestCase, trace) -> List[dict]:
                         "reason": STATE_POLLUTION_REASON,
                     }
                 )
-        if lowered in response.lower() and not only_voided_mentions(response, value):
+        if lowered in response.lower() and not only_referential_mentions(response, value, confirmed):
             violations.append(
                 {
                     "value": value,

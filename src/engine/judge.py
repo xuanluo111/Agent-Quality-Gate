@@ -699,7 +699,7 @@ class LayeredJudge:
                 case,
                 layer="rule",
                 risk="critical",
-                reason="用户改口后仍在使用已废弃的旧值",
+                reason="改口后仍把已废弃的旧值当作结果使用",
                 fail_reason=STATE_POLLUTION_REASON,
                 phenomenon="脏状态污染",
                 evidence=json.dumps(pollution[:5], ensure_ascii=False),
