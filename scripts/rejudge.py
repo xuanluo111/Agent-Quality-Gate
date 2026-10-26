@@ -29,6 +29,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from dotenv import load_dotenv
 
+from src.engine.failure_class import classify_case
+from src.engine.journal import JOURNAL_FILENAME
 from src.engine.judge import LayeredJudge
 from src.engine.report import generate_markdown, update_risk_ledger
 from src.engine.tools import Sandbox
@@ -246,7 +248,39 @@ def rejudge_run(
     return {"targets": len(targets), "flips": flips, "fallbacks": fallbacks, "missing": missing}
 
 
+def journal_path(state: dict) -> Path:
+    """run 的 operation journal 位置，与 AgentRunner 的默认布局保持一致。"""
+    root = Path(str(state["config"].get("workspace_root") or "workspace"))
+    if not root.is_absolute():
+        root = ROOT / root
+    run_id = str(state["config"].get("run_id") or state["dir"].name)
+    return root / run_id / JOURNAL_FILENAME
+
+
+def reclassify_results(state: dict) -> int:
+    """按当前口径重新归因，返回由空补回 class 的条数。
+
+    `failure_class` 只在 run_eval 里算一次，重判重建 EvalResult 时不会自动带上；
+    丢了它 gate 就分不清「前置条件不满足」和「没测到」，这批样本会被算进通过率分母。
+    """
+    path = journal_path(state)
+    repaired = 0
+    for row, result in zip(state["rows"], state["results"]):
+        trace = AgentTrace(**row["trace"])
+        case = state["cases"].get(result.case_id)
+        classified = classify_case(result, trace, journal_path=path, case=case)
+        if classified == result.failure_class:
+            continue
+        if result.failure_class is None and classified is not None:
+            repaired += 1
+        result.failure_class = classified
+    return repaired
+
+
 def dump_results(state: dict) -> None:
+    repaired = reclassify_results(state)
+    if repaired:
+        print(f"    归因补回 {repaired} 条")
     rows = []
     for row, result in zip(state["rows"], state["results"]):
         rows.append(json.dumps({"result": result.model_dump(), "trace": row["trace"]}, ensure_ascii=False))
@@ -520,8 +554,12 @@ def main() -> int:
 
     if args.report_only:
         print("\nreport-only：不调用裁判，直接用现有 results.jsonl 重建")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         for state in states:
             state["rejudge"] = {"targets": 0, "flips": 0, "fallbacks": 0, "missing": 0}
+            # 归因要落回 results.jsonl，否则下次重判从这里读到的还是缺 class 的旧结果。
+            backup_run(state, stamp)
+            dump_results(state)
     else:
         api_key = resolve_api_key(required=args.force)
         if not api_key:

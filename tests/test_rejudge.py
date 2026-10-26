@@ -3,7 +3,8 @@ import json
 import rejudge
 from rejudge import build_judge, rebuild_ledger
 
-from tests.conftest import make_result
+from src.engine.failure_class import UNKNOWN
+from tests.conftest import make_case, make_result, make_trace
 
 
 def test_legacy_config_does_not_retro_apply_provenance():
@@ -106,3 +107,80 @@ def test_rebuild_ledger_returns_empty_when_nothing_to_replay(tmp_path, monkeypat
 
     assert rebuild_ledger([]) == {}
     assert not ledger.exists()
+
+
+def _write_run(tmp_path, results):
+    """铺一个最小可用的 run 目录：config / summary / results 三件套。"""
+    run_dir = tmp_path / "run-001"
+    run_dir.mkdir()
+    dataset = tmp_path / "cases.jsonl"
+    dataset.write_text(
+        "\n".join(
+            json.dumps(make_case(id=item.case_id).model_dump(), ensure_ascii=False) for item in results
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "config.json").write_text(
+        json.dumps({"dataset": str(dataset), "run_id": "run-001", "workspace_root": str(tmp_path / "ws")}),
+        encoding="utf-8",
+    )
+    (run_dir / "summary.json").write_text(json.dumps({}), encoding="utf-8")
+    rows = [
+        json.dumps(
+            {"result": item.model_dump(), "trace": make_trace(case_id=item.case_id).model_dump()},
+            ensure_ascii=False,
+        )
+        for item in results
+    ]
+    (run_dir / "results.jsonl").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    return run_dir
+
+
+def _read_results(run_dir):
+    return [
+        json.loads(line)["result"]
+        for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def test_dump_results_restores_failure_class(tmp_path):
+    """`failure_class` 只在 run_eval 里算，重判写回时必须重算。
+
+    丢了它 gate 就分不清「前置条件不满足 / 没测到」，这两类样本会被算进通过率分母。
+    """
+    untested = make_result(
+        case_id="case-trunc",
+        passed=False,
+        strict_passed=False,
+        fail_reason="Output_Truncated",
+        data_valid=False,
+        failure_class=None,
+    )
+    healthy = make_result(case_id="case-pass", failure_class=None)
+    run_dir = _write_run(tmp_path, [untested, healthy])
+
+    state = rejudge.prepare_run(run_dir)
+    rejudge.dump_results(state)
+
+    restored = {item["case_id"]: item["failure_class"] for item in _read_results(run_dir)}
+    assert restored == {"case-trunc": UNKNOWN, "case-pass": None}
+
+
+def test_dump_results_keeps_existing_class(tmp_path):
+    """已有归类不能被重算改写成别的值，否则等于换了口径却不留痕。"""
+    untested = make_result(
+        case_id="case-trunc",
+        passed=False,
+        strict_passed=False,
+        fail_reason="Output_Truncated",
+        data_valid=False,
+        failure_class=UNKNOWN,
+    )
+    run_dir = _write_run(tmp_path, [untested])
+
+    state = rejudge.prepare_run(run_dir)
+    rejudge.dump_results(state)
+
+    assert _read_results(run_dir)[0]["failure_class"] == UNKNOWN
