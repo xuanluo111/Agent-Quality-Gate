@@ -12,6 +12,8 @@ dist/
 # 本地沙箱与运行产物
 workspace/
 reports/runs/
+# 补跑/定向重跑的结果单独归档，不与正式批次并列进图表
+reports/reruns/
 reports/batch-*/
 # reports/charts/ 有意入库：README 直接引用图与离线看板，批量重跑后重新生成再提交
 reports/partial_results*.jsonl

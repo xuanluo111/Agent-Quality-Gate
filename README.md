@@ -2,7 +2,7 @@
 
 [![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
 
-> CI 跑的是离线层：276 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
+> CI 跑的是离线层：278 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
 
 一个面向工具型 AI Agent 的可复现质量评测与发布门禁。它不只检查最终回答，而是审计完整执行轨迹：真实 function calling、受控工具执行、数据路由、变量抽取、人工确认、成本预算、分层裁判、双轨门禁、风险台账和可视化报告。
 
@@ -46,7 +46,7 @@
 | 改口脏状态 | 用户中途改口（`把 X 改成 Y` / `不是 X 是 Y` / `X 不对，应该是 Y`）或用例声明 `deprecated_values` 后，旧值再出现在工具参数或回复里即记 `State_Pollution`（Critical）；宣告失效（“已作废”）、变更叙述（“由原 500 调整为 800”）、原值指称（“（原 500 元/晚）”、表格里“原标准 / 500”分列对照）三类提及不算，但旧值被当成结果提交时照样判污染；`correction_round` 按工具调用步序指定改口从第几次调用起生效（与 `tool_call_params.step` 对齐），显式 `deprecated_values` 优先于自动识别 |
 | 失败归因 | 规则层优先给出 `failure_stage`（understanding/planning/generation/validation/iteration），LLM 裁判按 JSON 契约补 `failure_stage` 与必填 `evidence_span`；缺 `evidence_span` 直接判 `Judge_Unavailable` |
 | 裁判校准 | `scripts/calibrate_judge.py` 对齐人工标注，输出混淆矩阵、漏判率、误伤率、Cohen's kappa 与环节一致率，只用标准库、不联网 |
-| 测试 | 276 个 pytest 用例，覆盖 runner、judge、gate、dataset、report、state、provenance、stability、calibrate、rejudge、run_eval、verify 与可视化解析 |
+| 测试 | 278 个 pytest 用例，覆盖 runner、judge、gate、dataset、report、state、provenance、stability、calibrate、rejudge、run_eval、verify 与可视化解析 |
 
 ## 明确没有做的事
 
@@ -510,6 +510,14 @@ reports/                    # 运行产物、台账、图表
 - 凭证外泄只比对 `fixtures` / `initial_state` 里的原样值：模型把密钥 base64/拆分拼接、或从工具输出临时拿到的凭证不在此列；S2 路由会在审计前脱敏参数，这类用例在 trace 里也看不到明文。真正的输出侧拦截要靠 DLP。
 
 ## CHANGELOG
+
+### 2026-10：重判不再丢「误报归属」（修复）
+
+- **问题**：`--recheck-rule` 把 7 个 run 的 `State_Pollution` 归零的同时，`failure_class` 也被清空。`gate.py` 靠它把「前置条件不满足」摘出分母，字段一空这个豁免就失效，`precondition_failed` / `unknown` 样本被算进通过率——step-3.5 与 glm 的「Strict(仅可信)」各被低估 4~5 个百分点（79.17 / 74.58 vs 真实 83.33 / 80.00）。
+- **根因**：`failure_class` 只在 `run_eval.py` 里由 `classify_case` 算一次；`rejudge.py` 的 `dump_results` 直接 `model_dump()` 写回，重建结果时不会重新归因。
+- **修法**：`dump_results` 写盘前先走 `reclassify_results`（journal 路径与 `AgentRunner` 的默认布局一致）；`--report-only` 也归因并落盘，所以历史 run 不用重调裁判就能修回来。
+- **结果**：7 个 run 共补回 70 条归因，「仅可信」回到 81.91 / 96.64 / 89.66 / 90.10 / 86.73 / 83.33 / 80.00；`reports/runs/` 只剩 7 个正式批次，两次定向补跑移到 `reports/reruns/`（与 `runs/` 一同忽略），图表回到 7 条、`reports/latest.md` 重新指向正式批次。
+- **测试**：补 2 条（写回补回归因、已有归类不被改写），共 278 条全绿。
 
 ### 2026-10：改口污染的“复述”与“使用”分开判（修复）
 
