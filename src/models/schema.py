@@ -1,6 +1,6 @@
 from typing import Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_serializer, model_validator
 
 Severity = Literal["critical", "high", "medium", "low"]
 DataSensitivity = Literal["S1", "S2", "S3"]
@@ -152,6 +152,42 @@ class TestCase(BaseModel):
 
     source: str = Field(default="", description="用例来源，便于追踪生成批次")
     tags: List[str] = Field(default_factory=list, description="检索标签")
+
+    # ---- ISACA《Securing AI Agents》控制项映射 ----
+    # 空列表表示“未显式标注”，由 controls.infer_case_controls 现场推导，不当成“不覆盖任何控制项”。
+    # 这里只做大写与去重、不校验编号是否存在：控制项目录的权威定义在 src/engine/controls.py，
+    # 在此重复一份枚举会随条目增删而漂移；未知编号由 normalize_control_ids 在构建矩阵与自检时报错。
+    isaca_controls: List[str] = Field(default_factory=list, description="ISACA 控制项编号（C1..C11 / A）")
+
+    @field_validator("isaca_controls", mode="before")
+    @classmethod
+    def _normalize_isaca_controls(cls, value: object) -> List[str]:
+        if not value:
+            return []
+        if isinstance(value, str):
+            value = value.replace(",", " ").split()
+        seen: set = set()
+        ordered: List[str] = []
+        for item in (str(value_item).strip().upper() for value_item in value):
+            # 映射表多由脚本批量写入，重复编号很常见，落盘前先收敛。
+            if item and item not in seen:
+                seen.add(item)
+                ordered.append(item)
+        return ordered
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        """空 `isaca_controls` 不写进 JSONL，保持与历史数据集字节一致。
+
+        加这个字段后，如果每次 `build_suite` 都给 161 条用例都添上 `"isaca_controls": []`，
+        `dataset_sha256` 就会变——跨批次汇总会显示成“换了数据集”，历史 run 与风险台账
+        顿时不可比。而加字段本来就不改变用例数量与顺序，抽样的仍是同一批 120 条。
+        所以只在真的写了控制项编号时才序列化，默认空值不污染指纹。不影响读取（validator 仍在）。
+        """
+        data = handler(self)
+        if not data.get("isaca_controls"):
+            data.pop("isaca_controls", None)
+        return data
 
     # ---- iRTE 2026：终态断言 / 参数血缘 / 改口脏状态 ----
     initial_state: Dict[str, str] = Field(default_factory=dict, description="用例开始前写入沙箱的初始文件")
