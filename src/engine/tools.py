@@ -147,6 +147,61 @@ TOOL_SCHEMAS: Dict[str, dict] = {
 }
 
 
+# JSON Schema 最小子集校验器：只覆盖 TOOL_SCHEMAS 实际用到的关键字
+# （required / properties.type / enum / additionalProperties=False），刻意不引入
+# jsonschema 依赖，与项目"优先标准库"的纪律一致。integer 与 number 区分、bool 不算整数。
+_JSON_TYPE_CHECKS = {
+    "string": lambda v: isinstance(v, str),
+    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "boolean": lambda v: isinstance(v, bool),
+    "object": lambda v: isinstance(v, dict),
+    "array": lambda v: isinstance(v, list),
+    "null": lambda v: v is None,
+}
+
+
+def validate_tool_arguments(name: str, arguments: Any) -> List[str]:
+    """把一次工具调用的参数对照其声明的 JSON Schema 校验，返回人类可读的违规清单。
+
+    只校验 `TOOL_SCHEMAS` 里登记的已知工具；未登记的工具名返回空清单——越权调用由
+    allowlist 侧处理，不属于参数校验的职责。支持的关键字子集：required、
+    properties.<key>.type、properties.<key>.enum、additionalProperties=False。
+    """
+    schema = TOOL_SCHEMAS.get(name)
+    if not schema:
+        return []
+    params = (schema.get("function") or {}).get("parameters") or {}
+    if not isinstance(arguments, dict):
+        return [f"{name}: 参数应为对象，实际为 {type(arguments).__name__}"]
+
+    violations: List[str] = []
+    properties: Dict[str, dict] = params.get("properties") or {}
+
+    for key in params.get("required") or []:
+        if key not in arguments:
+            violations.append(f"{name}: 缺少必填参数 '{key}'")
+
+    allow_extra = params.get("additionalProperties", True)
+    for key, value in arguments.items():
+        spec = properties.get(key)
+        if spec is None:
+            if allow_extra is False:
+                violations.append(f"{name}: 出现未声明的额外参数 '{key}'")
+            continue
+        expected_type = spec.get("type")
+        check = _JSON_TYPE_CHECKS.get(expected_type)
+        if check is not None and not check(value):
+            violations.append(
+                f"{name}: 参数 '{key}' 类型应为 {expected_type}，实际为 {type(value).__name__}"
+            )
+            continue
+        enum = spec.get("enum")
+        if enum is not None and value not in enum:
+            violations.append(f"{name}: 参数 '{key}' 取值 {value!r} 不在允许的枚举 {enum} 内")
+    return violations
+
+
 class SandboxViolation(RuntimeError):
     """危险意图：破坏性/提权/联网/越权路径，计入策略违规。"""
 

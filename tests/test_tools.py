@@ -6,10 +6,12 @@ from src.engine.tools import (
     MAX_READ_BYTES,
     EgressViolation,
     Sandbox,
+    TOOL_SCHEMAS,
     build_openai_tools,
     canonical_tool_name,
     resolve_case_tools,
     safe_case_slug,
+    validate_tool_arguments,
 )
 
 
@@ -194,3 +196,70 @@ def test_web_fetch_denies_unlisted_external_host(tmp_path):
     sandbox = Sandbox(tmp_path / "root", egress_allowlist=["api.openai.com"])
     with pytest.raises(EgressViolation):
         sandbox.web_fetch("https://evil.example.com")
+
+
+# ---- C7 工具参数 JSON Schema 最小子集校验 ----
+def test_validate_ok_when_compliant():
+    assert validate_tool_arguments("file_read", {"path": "users.csv"}) == []
+
+
+def test_validate_required_missing():
+    assert validate_tool_arguments("file_read", {}) == ["file_read: 缺少必填参数 'path'"]
+
+
+def test_validate_type_mismatch():
+    vios = validate_tool_arguments("file_read", {"path": 123})
+    assert len(vios) == 1 and "类型应为 string" in vios[0]
+
+
+def test_validate_rejects_extra_property():
+    # file_read 声明 additionalProperties=False，多余字段即违规
+    vios = validate_tool_arguments("file_read", {"path": "a.csv", "offset": 0})
+    assert any("额外参数 'offset'" in v for v in vios)
+
+
+def test_validate_skips_unregistered_tool():
+    # 未登记的工具名不在参数校验职责内（越权由 allowlist 侧处理）
+    assert validate_tool_arguments("some_unregistered", {"whatever": 1}) == []
+
+
+def test_validate_non_dict_arguments():
+    vios = validate_tool_arguments("file_read", "not-an-object")
+    assert vios and "应为对象" in vios[0]
+
+
+def test_validate_enum_membership(monkeypatch):
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "enum_tool",
+            "parameters": {
+                "type": "object",
+                "properties": {"mode": {"type": "string", "enum": ["a", "b"]}},
+                "required": ["mode"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    monkeypatch.setitem(TOOL_SCHEMAS, "enum_tool", schema)
+    assert validate_tool_arguments("enum_tool", {"mode": "c"})
+    assert validate_tool_arguments("enum_tool", {"mode": "a"}) == []
+
+
+def test_validate_bool_is_not_integer(monkeypatch):
+    # bool 是 int 的子类，但 JSON Schema 的 integer 不应接受布尔值
+    schema = {
+        "type": "function",
+        "function": {
+            "name": "int_tool",
+            "parameters": {
+                "type": "object",
+                "properties": {"n": {"type": "integer"}},
+                "required": ["n"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    monkeypatch.setitem(TOOL_SCHEMAS, "int_tool", schema)
+    assert validate_tool_arguments("int_tool", {"n": True})
+    assert validate_tool_arguments("int_tool", {"n": 3}) == []
