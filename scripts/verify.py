@@ -29,6 +29,7 @@ DATASET_FILES = ("curated_cases.jsonl", "core_suite.jsonl", "smoke.jsonl")
 ID_UNIQUE_FILES = ("curated_cases.jsonl", "regression.jsonl", "core_suite.jsonl", "smoke.jsonl")
 REQUIRED_CAPABILITY_TAGS = ("feature:state", "feature:provenance", "feature:correction")
 REQUIRED_SECTIONS = (
+    "### ISACA 控制覆盖",
     "## 三、故障事件聚合",
     "## 四、失败用例根因分析",
     "## 五、风险台账",
@@ -55,6 +56,7 @@ REQUIRED_SUMMARY_KEYS = (
     "collateral_damage_count",
     "fabricated_parameter_count",
     "state_pollution_count",
+    "coverage",
     "gate",
 )
 RUN_ARTIFACTS = ("config.json", "dataset_audit.json", "sampled_cases.jsonl", "results.jsonl", "report.md", "summary.json")
@@ -283,6 +285,37 @@ def step_dry_run() -> Step:
     return Step("dry-run 采样", True, "smoke 与 core 均通过加载/校验/采样")
 
 
+def step_coverage() -> Step:
+    """控制覆盖度矩阵必须是当前规则与数据集的产物：
+
+    矩阵是「映射规则 + 数据集」的确定性产物，一旦改了 `controls.py` 或数据集却没重跑矩阵，
+    覆盖度声明就和代码脱节。这一项就是文档里 C2「变更触发重测」的锤：不花 token，只证产物新鲜。
+    """
+    check = _run([sys.executable, "scripts/build_coverage_matrix.py", "--check"])
+    if check.returncode != 0:
+        return Step("控制覆盖矩阵", False, _tail(check.stdout + check.stderr))
+    matrix_path = ROOT / "cases" / "coverage_matrix.json"
+    if not matrix_path.is_file():
+        return Step("控制覆盖矩阵", False, "cases/coverage_matrix.json 不存在，先跑 build_coverage_matrix.py")
+    matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    # 矩阵记录的 suite_sha256 必须等于当前 core_suite 的指纹：否则矩阵对应当初的数据集，已过期。
+    from src.engine.dataset import dataset_sha256
+
+    current = dataset_sha256(ROOT / "cases" / "core_suite.jsonl")
+    if matrix.get("suite_sha256") != current:
+        return Step(
+            "控制覆盖矩阵",
+            False,
+            f"矩阵对应 suite 指纹 {str(matrix.get('suite_sha256'))[:16]} 与当前 {current[:16]} 不符，重跑 build_coverage_matrix.py",
+        )
+    return Step(
+        "控制覆盖矩阵",
+        True,
+        f"控制项 {len(matrix.get('covered_ids', []))}/{matrix.get('control_total', 0)} ｜ "
+        f"子控制点 {matrix.get('facet_total', 0) - len(matrix.get('facet_gaps', []))}/{matrix.get('facet_total', 0)} ｜ 未映射 {matrix.get('unmapped_count', 0)} 条 | 产物新鲜",
+    )
+
+
 # --------------------------------------------------------------------------
 # 第 2 层：真机
 # --------------------------------------------------------------------------
@@ -431,7 +464,7 @@ def main() -> int:
     print(f"Agent-Quality-Gate 自检 | 模式: {'离线 + 真机' if args.live else '仅离线'}")
     print("=" * 66)
 
-    steps = [step_environment(), step_pytest(), step_capabilities(), step_dataset(), step_dry_run()]
+    steps = [step_environment(), step_pytest(), step_capabilities(), step_dataset(), step_coverage(), step_dry_run()]
     if args.live:
         key = os.environ.get("AQG_API_KEY") or os.environ.get("GC_API_KEY")
         if not key:
