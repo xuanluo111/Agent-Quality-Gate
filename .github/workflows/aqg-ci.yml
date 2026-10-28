@@ -24,7 +24,35 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Run unit tests
         run: python -m pytest -q
+      - name: Verify supply-chain lock integrity (C10, offline)
+        # 阻断门禁：每个直接依赖必须在 requirements.lock 精确锁定且满足声明下界。纯标准库、不联网。
+        run: python scripts/check_supply_chain.py
       - name: Rebuild deterministic suites
         run: python scripts/build_suite.py
       - name: Validate smoke suite without calling a model
         run: python scripts/run_eval.py --suite smoke --dry-run --limit 0
+
+  supply-chain:
+    # C10 软件供应链：从同一份 requirements.lock 出 SBOM 并做已知漏洞扫描。
+    # 单一 Python 版本即可（lock 是按解析快照生成的，SBOM/审计只读该清单）。
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install SBOM & audit tools
+        run: pip install cyclonedx-bom pip-audit
+      - name: Generate CycloneDX SBOM from the lock
+        run: cyclonedx-py requirements --sv 1.5 --output-reproducible -o sbom.json requirements.lock
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aqg-sbom
+          path: sbom.json
+      - name: Audit pinned dependencies for known vulnerabilities
+        # 咨询级：把已知 CVE 报出来供人判断，不因私有网关镜像里解析不到的包而卡死流水线。
+        # 阻断式的供应链门禁由上面的 lock 完整性校验承担（可离线、可单测、口径稳定）。
+        continue-on-error: true
+        run: pip-audit -r requirements.lock --progress-spinner off
