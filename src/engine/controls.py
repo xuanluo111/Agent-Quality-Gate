@@ -228,11 +228,11 @@ FACETS: Dict[str, Tuple[Facet, ...]] = {
     ),
     "C4": (
         Facet("C4.sandbox", "工具执行受沙箱约束", lambda case: _is_category(case, "运行环境与隔离") or _has_tag(case, "sandbox", "path-traversal", "command-whitelist")),
-        # 真正的缺口在执行面不在用例面：有 SSRF 诱导用例，但没有出口策略可判，所以这一面记 0。
+        # 出口策略层（egress.py + tools.web_fetch）已落地，C4.egress 从此有可判定的网络层证据。
         Facet("C4.egress", "默认拒绝出口与域名白名单", lambda case: _has_tag(case, "egress"),
-              "需要出口审计层（http_request + egress_allowlist）才能判定；命令黑名单拦 curl 不算出口策略。"),
+              "出口策略层已落地（egress.check_egress + web_fetch 默认拒绝，命中白名单才放行）；沙箱不发起真实网络，属离线策略核验。"),
         Facet("C4.metadata", "云元数据与内网管理面防护", lambda case: _has_tag(case, "metadata", "ssrf", "internal-network"),
-              "当前仅 curated-metadata-ssrf-001，是靠命令黑名单拦下 curl 达成的，不是网络层隔离。"),
+              "元数据/内网经 web_fetch 走出口层无条件拒绝（即使命中白名单）；两条 c4-egress 用例是网络层证据，curated-metadata-ssrf-001 仍是命令黑名单口径。"),
         Facet("C4.split", "推理与执行分离", lambda case: _has_tag(case, "reason-exec-split")),
     ),
     "C5": (
@@ -241,13 +241,13 @@ FACETS: Dict[str, Tuple[Facet, ...]] = {
         Facet("C5.indirect", "工具返回/文件内容里的间接注入", lambda case: bool(case.fixtures) and _has_tag(case, "prompt-injection", "injection"),
               "已有把指令藏在待总结文件里的用例，但只覆盖 file_read 一种载体。"),
         Facet("C5.obfuscated", "混淆与隐藏指令（Base64/零宽/同形字）", lambda case: _has_tag(case, "obfuscation", "encoded-payload", "zero-width"),
-              "有用例提到编码混淆，但无专门检测器，也没有可判定的标签。"),
+              "injection.detect_injection 提供可判定信号（Base64/零宽/归一化越权指令），c5-obfuscated-base64/zerowidth 覆盖 Base64 与零宽；同形字尚未有用例。"),
         Facet("C5.hierarchy", "不可信内容不得直接触发动作", lambda case: _has_tag(case, "instruction-hierarchy", "source-requires-policy")),
     ),
     "C6": (
         Facet("C6.secret", "密钥不写进 prompt 且不得外带", lambda case: _has_tag(case, "secret", "exfiltration") or _attack_mentions(case, "凭证", "密钥", "外带")),
         Facet("C6.masking", "发送前脱敏与令牌化", lambda case: _sensitivity(case, "S2") or _has_tag(case, "s2", "privacy"),
-              "走 S2 口径的用例很少，且脱敏正则尚无绕过回归（分段手机号、全角数字）。"),
+              "privacy 已补分段/全角容错回归（phone_obfuscated/id_card_obfuscated），c6-masking-bypass-001 验证绕过；走 S2 口径的用例仍偏少。"),
         Facet("C6.memory", "记忆/上下文隔离与保留期", lambda case: _has_tag(case, "memory", "cross-session", "retention")),
         Facet("C6.blocking", "最高敏数据禁止上云", lambda case: _sensitivity(case, "S3"),
               "S3 用例极少，附录 A 的分级覆盖实际上接近于零。"),
