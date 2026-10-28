@@ -31,6 +31,9 @@ reports/observability.json
 .rejudge_backup/
 .rejudge_logs/
 
+# 后台跑批的 nohup 合并日志（本地临时产物，不入库）
+batch-full.log
+
 # 覆盖率产物：本地跑 pytest --cov 时生成，不进库
 .coverage
 coverage.json
