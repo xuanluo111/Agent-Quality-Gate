@@ -13,6 +13,7 @@ from src.engine.dataset import (
     read_jsonl,
     select_smoke,
     stratified_sample,
+    two_proportion_z_test,
     wilson_interval,
 )
 from src.engine.state import deprecated_values_for, scan_state_pollution
@@ -159,6 +160,30 @@ def test_wilson_interval():
     low, high = wilson_interval(10, 10)
     assert high <= 100
     assert low > 60
+
+
+def test_two_proportion_z_test_degenerate_and_identical():
+    # 任一侧 total<=0 → 不可检验，保守当作无显著差异。
+    assert two_proportion_z_test(0, 0, 5, 10) == (0.0, 1.0)
+    assert two_proportion_z_test(5, 10, 0, 0) == (0.0, 1.0)
+    # 比例完全相同 → z=0、p=1。
+    z, p = two_proportion_z_test(5, 10, 50, 100)
+    assert abs(z) < 1e-9 and abs(p - 1.0) < 1e-9
+
+
+def test_two_proportion_z_test_detects_significant_shift():
+    # 同分母下 79% vs 91%（≈真实批次幅度）应显著。
+    z, p = two_proportion_z_test(95, 120, 109, 120)
+    assert p < 0.05
+    # 方向对称：交换两组只改 z 符号，p 不变（双侧检验）。
+    z_rev, p_rev = two_proportion_z_test(109, 120, 95, 120)
+    assert abs(z + z_rev) < 1e-9 and abs(p - p_rev) < 1e-9
+
+
+def test_two_proportion_z_test_small_sample_not_significant():
+    # 小样本下的 1~2 条拖动不应被当成显著趋势。
+    _z, p = two_proportion_z_test(5, 10, 6, 10)
+    assert p > 0.05
 
 
 def test_select_smoke_prioritizes_features():
