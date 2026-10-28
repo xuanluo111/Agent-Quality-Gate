@@ -2,6 +2,7 @@ import hashlib
 import json
 import math
 import random
+import statistics
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -251,6 +252,31 @@ def wilson_interval(successes: int, total: int, z: float = 1.96) -> Tuple[float,
     center = (p + z * z / (2 * total)) / denominator
     margin = z * math.sqrt((p * (1 - p) + z * z / (4 * total)) / total) / denominator
     return max(0.0, center - margin) * 100, min(1.0, center + margin) * 100
+
+
+# 正态分布 CDF：与 wilson_interval 默认的 z=1.96 同一置信口径（双侧 95%）。
+_NORMAL = statistics.NormalDist(0.0, 1.0)
+
+
+def two_proportion_z_test(
+    successes_a: int, total_a: int, successes_b: int, total_b: int
+) -> Tuple[float, float]:
+    """两比例双侧 z 检验，返回 (z, p_two_sided)。用于判定跨批次通过率差异是否显著。
+
+    合池方差（pooled）是检验“两个比例是否相等”的标准做法：H0 成立时两组来自同一总体，
+    故用合并比例 p̂ 估方差。任一组 total<=0 时无法检验，返回 (0.0, 1.0)（视作无显著差异，
+    保守不误报）。p 用正态 CDF 直接算，不引入 scipy。
+    """
+    if total_a <= 0 or total_b <= 0:
+        return 0.0, 1.0
+    p_a, p_b = successes_a / total_a, successes_b / total_b
+    pooled = (successes_a + successes_b) / (total_a + total_b)
+    se = math.sqrt(pooled * (1 - pooled) * (1 / total_a + 1 / total_b))
+    if se == 0:
+        return 0.0, 1.0
+    z = (p_b - p_a) / se
+    p_value = 2 * _NORMAL.cdf(-abs(z))
+    return z, p_value
 
 
 def select_smoke(
