@@ -266,6 +266,18 @@ def snapshot_metrics(run_id: str, run_dir: Path, batch_dir: Path, stem: str) -> 
     return data
 
 
+def read_run_epoch(run_dir: Path) -> str:
+    """从本轮 summary.json 读数据集代际指纹（无则空串），供批次跨代分组。"""
+    summary = run_dir / "summary.json"
+    if not summary.is_file():
+        return ""
+    try:
+        data = json.loads(summary.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return ""
+    return str(data.get("dataset_epoch") or "")
+
+
 def already_done(output_root: Path, name: str) -> bool:
     return any((path / "report.md").is_file() for path in output_root.glob(f"*-{slug(name)}"))
 
@@ -400,6 +412,11 @@ def render_summary(batch_id: str, meta: dict, rows: list[dict]) -> str:
         f"- 生成时间：{time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"- 回归回写：{'开启' if meta['update_regression'] else '关闭（保证各模型数据集一致）'}",
     ]
+    if meta.get("generation_mixed"):
+        epochs = meta.get("dataset_epochs") or []
+        lines.append(
+            f"- ⚠️ 本批次混用 {len(epochs)} 代数据集（{', '.join(epochs)}）：跨代通过率不可直接横向排名，请分代比较。"
+        )
     if judges:
         line = f"- 裁判模型：{', '.join(judges)}"
         if same_source:
@@ -526,6 +543,7 @@ def main() -> int:
                     "limit": spec.get("limit"),
                     "duration_s": 0,
                     "metrics": {},
+                    "dataset_epoch": read_run_epoch(run_dir),
                     "note": "使用 --skip-existing 跳过",
                 }
             )
@@ -581,6 +599,7 @@ def main() -> int:
                 "limit": spec.get("limit"),
                 "duration_s": duration,
                 "metrics": metrics,
+                "dataset_epoch": read_run_epoch(run_dir),
                 "run_id": run_id,
                 "exit_code": code,
                 "note": note,
@@ -595,10 +614,14 @@ def main() -> int:
             print(f"门禁未通过且 on_gate=stop，终止批次（剩余 {total - index} 个模型未执行）")
             break
 
+    run_epochs = sorted({str(row.get("dataset_epoch") or "") for row in rows} - {""})
     meta = {
         "on_error": args.on_error,
         "on_gate": args.on_gate,
         "update_regression": args.update_regression,
+        # 批次跨代信息：>1 个 epoch 说明同一批次里混了不同代数据集，跨代不能直接排名。
+        "dataset_epochs": run_epochs,
+        "generation_mixed": len(run_epochs) > 1,
     }
     summary_path = batch_dir / "summary.md"
     summary_path.write_text(render_summary(batch_id, meta, rows), encoding="utf-8")
