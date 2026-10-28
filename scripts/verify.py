@@ -57,6 +57,7 @@ REQUIRED_SUMMARY_KEYS = (
     "fabricated_parameter_count",
     "state_pollution_count",
     "coverage",
+    "dataset_epoch",
     "gate",
 )
 RUN_ARTIFACTS = ("config.json", "dataset_audit.json", "sampled_cases.jsonl", "results.jsonl", "report.md", "summary.json")
