@@ -118,8 +118,11 @@ CONTROL_CATALOG: Tuple[Control, ...] = (
         "C10 模型·供应商·软件供应链",
         POSTURE_HARNESS,
         (
-            "summary：model/model_version/base_url 入档",
+            "summary：model/model_version/judge_model 入档",
             "failure_class.Provider_Blocked：网关内容审核拦截单列，不冒充模型失败",
+            "requirements.lock + scripts/check_supply_chain.py：依赖精确锁定，离线校验锁定覆盖/纯净/下界（CI 阻断门禁）",
+            "CI aqg-ci.yml supply-chain job：cyclonedx 从同一 lock 出 SBOM，pip-audit 扫已知漏洞（咨询级）",
+            "scripts/drift_check.py：跨批次 Provider_Change（model_version/judge_model 变更）与比率漂移核验，复用 dataset.two_proportion_z_test",
         ),
     ),
     Control(
@@ -129,6 +132,8 @@ CONTROL_CATALOG: Tuple[Control, ...] = (
         (
             "runner：最大轮次 / token_budget / max_tokens / 工具调用次数上限",
             "judge：retry_count >= 2 记重试风暴（只检测，不拦截）",
+            "runner._completion + is_transient_api_error：瞬态故障（429/超时/5xx）指数退避+jitter 重试，累计 backoff_ms 入轨迹；非瞬态不白等",
+            "run_eval._trip_reason：连续 Harness_Error 熔断 / --abort-on-critical 急停 / --abort-file 外部信号，剩余用例记 Harness_Error 未评（半批停摆不算低分）",
         ),
     ),
     Control(

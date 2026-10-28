@@ -45,8 +45,10 @@
 | 参数血缘 | 工具参数里的 ID / 金额 / 日期必须能溯源到用户输入、工具结果、用例上下文或配置常量，否则记 `Fabricated_Parameter`（Strict 失败、Standard 通过），可注册正则 transform 防误杀 |
 | 改口脏状态 | 用户中途改口（`把 X 改成 Y` / `不是 X 是 Y` / `X 不对，应该是 Y`）或用例声明 `deprecated_values` 后，旧值再出现在工具参数或回复里即记 `State_Pollution`（Critical）；宣告失效（“已作废”）、变更叙述（“由原 500 调整为 800”）、原值指称（“（原 500 元/晚）”、表格里“原标准 / 500”分列对照）三类提及不算，但旧值被当成结果提交时照样判污染；`correction_round` 按工具调用步序指定改口从第几次调用起生效（与 `tool_call_params.step` 对齐），显式 `deprecated_values` 优先于自动识别 |
 | 失败归因 | 规则层优先给出 `failure_stage`（understanding/planning/generation/validation/iteration），LLM 裁判按 JSON 契约补 `failure_stage` 与必填 `evidence_span`；缺 `evidence_span` 直接判 `Judge_Unavailable` |
+| 瞬态退避与急停（C11） | `runner._completion` 对 429/超时/网关 5xx 指数退避+jitter 重试（累计 `backoff_ms` 入轨迹）；`run_eval` 连续 Harness_Error 熔断、`--abort-on-critical`/`--abort-file` 急停，半批停摆统一记未评、不冒充模型低分 |
+| 软件供应链（C10） | `requirements.lock` 精确锁定 + `scripts/check_supply_chain.py` 离线校验锁定完整性（CI 阻断） + CI `pip-audit`/CycloneDX SBOM + `scripts/drift_check.py` 跨批次 Provider_Change 与比率漂移核验（复用两比例 z 检验） |
 | 裁判校准 | `scripts/calibrate_judge.py` 对齐人工标注，输出混淆矩阵、漏判率、误伤率、Cohen's kappa 与环节一致率，只用标准库、不联网 |
-| 测试 | 279 个 pytest 用例，覆盖 runner、judge、gate、dataset、report、state、provenance、stability、calibrate、rejudge、run_eval、verify 与可视化解析 |
+| 测试 | 388 个 pytest 用例，覆盖 runner（含瞬态退避）、judge、gate、dataset（含两比例 z 检验）、report、state、provenance、stability、calibrate、rejudge、run_eval（含熔断/急停）、supply_chain、drift、verify 与可视化解析 |
 
 ## 明确没有做的事
 
@@ -58,7 +60,7 @@
 | 语义级变量等价 | JCV 是启发式集合重合度，不是语义证明 |
 | 通用 DLP | 只覆盖邮箱、手机号、身份证、银行卡、常见 API Key 的 regex 脱敏 |
 | 自动修复 | 报告会给出影响与建议，但不会自动修改 Agent 或代码 |
-| 生产级并发/重试 | 使用线程池；没有针对供应商限流的指数退避和断点续跑 |
+| 生产级并发/重试 | 线程池并发；已对供应商限流/超时/网关 5xx 做**指数退避+jitter 自动重试**（`--max-retries`），并有批次级**熔断**（连续 Harness_Error）与**急停**（`--abort-on-critical`/`--abort-file`）；仍是同一进程内的单次评测，非跨机断点续跑——中断后靠逐条落盘的 `results.jsonl` 与批量层 `--skip-existing` 增量重跑 |
 
 ## 快速开始
 
@@ -427,6 +429,9 @@ python scripts/rejudge.py --runs 'reports/runs/*' --collateral-risk critical
 | `--dataset PATH` | 使用自定义 JSONL（与 `--suite` 二选一） |
 | `--limit N` | 分层采样条数，`0` 表示全量 |
 | `--workers N` | 并发用例数 |
+| `--max-retries` / `--retry-base-delay` | 瞬态 API 故障（429/超时/网关 5xx）的指数退避重试上限与基准秒数，默认 3 / 2.0；`--max-retries 0` 关闭 |
+| `--breaker-threshold` | 连续 N 条 `Harness_Error` 即熔断停摆本轮、剩余记未评，默认 5；`0` 关闭 |
+| `--abort-on-critical` / `--abort-file` | 累计第 N 个 Critical 严格失败即急停（默认 0 关闭）/ 外部信号文件存在即停（运维手动抓手） |
 | `--mode {enforce,shadow}` | 门禁模式 |
 | `--seed N` | 采样随机种子 |
 | `--judge-model` / `--judge-samples` | 裁判模型与悲观采样次数 |
@@ -453,7 +458,7 @@ python -m pytest -q
 
 测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、门禁分支、数据加载/去重/采样、报告与台账、Markdown/summary 可视化解析。
 
-GitHub Actions 只做离线检查：安装依赖、运行 pytest、重建数据集、执行 smoke dry-run，不会调用真实模型。真实评测请在本地配置 `.env` 后手动运行。
+GitHub Actions 主要做离线检查：安装依赖、运行 pytest、校验供应链锁定完整性、重建数据集、执行 smoke dry-run，不会调用真实模型；另有一个 `supply-chain` 作业从 `requirements.lock` 生成 CycloneDX SBOM 并跑 `pip-audit`（咨询级漏洞扫描）。真实评测请在本地配置 `.env` 后手动运行。
 
 ## 项目结构
 
@@ -471,7 +476,7 @@ src/
     ├── provenance.py       # 工具参数血缘（ID/金额/日期溯源）
     ├── stability.py        # pass@k / pass^k / flaky 汇总
     ├── gate.py             # 统一发布门禁
-    ├── dataset.py          # 加载、审计、去重、分层采样、Wilson CI
+    ├── dataset.py          # 加载、审计、去重、分层采样、Wilson CI / 两比例 z 检验
     └── report.py           # Markdown、summary.json、风险台账
 scripts/
 ├── build_suite.py          # 构建可执行数据集与 manifest
@@ -481,6 +486,8 @@ scripts/
 ├── generate_cases.py       # 可选的模型生成用例
 ├── clean_and_fix_cases.py  # 规范化/审计/去重
 ├── calibrate_judge.py      # 裁判校准（混淆矩阵 / 漏判率 / 误伤率 / kappa）
+├── check_supply_chain.py   # C10 供应链：校验 requirements.lock 锁定完整性（离线）
+├── drift_check.py          # 跨批次漂移：换代可比较性 / Provider_Change / 比率显著性（复用 z 检验）
 ├── verify.py               # 一键自检：离线层 + 可选真机层
 └── visualize_reports.py    # HTML + PNG 可视化
 cases/                      # curated/regression/core/smoke/manifest
@@ -496,7 +503,7 @@ reports/                    # 运行产物、台账、图表
 - LLM 裁判存在主观性和同源偏差；默认与被测模型相同。建议配置独立裁判，并接受多次采样带来的成本。
 - Wilson 区间只处理二项比例，不考虑同一类别用例之间的相关性；小样本下区间会很宽。
 - 回归集只沉淀 Strict 失败的 Critical/High 用例，不包含中低风险失败。
-- 没有自动化限流、重试和断点续跑；大规模评测需要在外层调度器处理。
+- 已有面向供应商限流/超时/网关 5xx 的指数退避重试，以及批次级熔断与急停（半批环境故障统一记 `Harness_Error` 未评、不冒充模型低分）；但没有跨进程的断点续跑，单轮评测仍居同一进程，大规模调度需在外层编排（可用 `--skip-existing` 逐模型增量）。
 - 报告中的「影响/建议」部分来自规则映射和裁判输出，不替代人工安全评审。
 - 终态断言只在当轮运行有效：工作区快照存于 `AgentTrace.state_before/state_after`，旧结果重判时没有工作区，`equals`/`contains` 会按“无法验证”计为未达期望而不是静默通过。
 - 快照有门槛：最多 500 个文件、单文件 1MB（超出记 `oversized`），不跟符号链接；海量小文件的场景会漏掉尾部文件。
