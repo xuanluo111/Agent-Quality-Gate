@@ -1,5 +1,5 @@
 {
-  "total_cases": 172,
+  "total_cases": 177,
   "controls": {
     "C1": {
       "label": "C1 治理·资产清单·风险归属",
@@ -33,7 +33,7 @@
         {
           "facet_id": "C3.least_privilege",
           "label": "工具与数据源最小权限",
-          "cases": 127,
+          "cases": 132,
           "case_ids": [
             "curated-safe-inventory-001",
             "curated-provenance-traceable-001",
@@ -46,8 +46,9 @@
         {
           "facet_id": "C3.scope",
           "label": "跨租户/跨作用域访问隔离",
-          "cases": 1,
+          "cases": 2,
           "case_ids": [
+            "c6-memory-cross-session-002",
             "auth-004"
           ],
           "note": "仅有单条伪造 SuperAdmin 的用例，没有真正的多租户 fixture，跨租户读写尚无成组用例。"
@@ -180,18 +181,18 @@
     "C6": {
       "label": "C6 数据保护·密钥·记忆安全",
       "posture": "both",
-      "cases": 27,
+      "cases": 29,
       "case_ids": [
         "工具与行动安全-361033687a7b6c32278c302e15",
         "工具与行动安全-263659b0dd7cc6b7ae932f0215",
+        "c6-memory-cross-session-002",
         "c6-memory-leak-001",
+        "c6-memory-retention-003",
         "curated-hitl-export-pii-001",
         "curated-prompt-inject-001",
         "数据与上下文安全-1e86b8fce7130cde6387734fca",
         "数据与上下文安全-75254c25565baf2ae389218da1",
-        "数据与上下文安全-9864a0455b8cf27a576b33fabf",
-        "数据与上下文安全-e8f6cedc30335ffeaca159b88b",
-        "数据与上下文安全-ecf7e36bd75b909114a629bc0c"
+        "数据与上下文安全-9864a0455b8cf27a576b33fabf"
       ],
       "facets": [
         {
@@ -223,9 +224,11 @@
         {
           "facet_id": "C6.memory",
           "label": "记忆/上下文隔离与保留期",
-          "cases": 1,
+          "cases": 3,
           "case_ids": [
-            "c6-memory-leak-001"
+            "c6-memory-cross-session-002",
+            "c6-memory-leak-001",
+            "c6-memory-retention-003"
           ],
           "note": ""
         },
@@ -243,7 +246,7 @@
     "C7": {
       "label": "C7 工具与 API 集成安全",
       "posture": "case",
-      "cases": 44,
+      "cases": 47,
       "case_ids": [
         "curated-safe-inventory-001",
         "curated-provenance-traceable-001",
@@ -260,7 +263,7 @@
         {
           "facet_id": "C7.allowlist",
           "label": "工具与命令显式白名单",
-          "cases": 127,
+          "cases": 132,
           "case_ids": [
             "curated-safe-inventory-001",
             "curated-provenance-traceable-001",
@@ -285,8 +288,12 @@
         {
           "facet_id": "C7.schema",
           "label": "参数约束与 Schema 强制",
-          "cases": 0,
-          "case_ids": [],
+          "cases": 3,
+          "case_ids": [
+            "c7-schema-extra-arg-001",
+            "c7-schema-type-string-001",
+            "c7-schema-compliant-001"
+          ],
           "note": ""
         },
         {
@@ -320,7 +327,7 @@
         {
           "facet_id": "C8.pep",
           "label": "确定性策略执行点拦违规行为",
-          "cases": 168,
+          "cases": 173,
           "case_ids": [
             "curated-safe-inventory-001",
             "curated-provenance-traceable-001",
@@ -463,7 +470,7 @@
       {
         "facet_id": "C3.least_privilege",
         "label": "工具与数据源最小权限",
-        "cases": 127,
+        "cases": 132,
         "case_ids": [
           "curated-safe-inventory-001",
           "curated-provenance-traceable-001",
@@ -476,8 +483,9 @@
       {
         "facet_id": "C3.scope",
         "label": "跨租户/跨作用域访问隔离",
-        "cases": 1,
+        "cases": 2,
         "case_ids": [
+          "c6-memory-cross-session-002",
           "auth-004"
         ],
         "note": "仅有单条伪造 SuperAdmin 的用例，没有真正的多租户 fixture，跨租户读写尚无成组用例。"
@@ -602,9 +610,11 @@
       {
         "facet_id": "C6.memory",
         "label": "记忆/上下文隔离与保留期",
-        "cases": 1,
+        "cases": 3,
         "case_ids": [
-          "c6-memory-leak-001"
+          "c6-memory-cross-session-002",
+          "c6-memory-leak-001",
+          "c6-memory-retention-003"
         ],
         "note": ""
       },
@@ -622,7 +632,7 @@
       {
         "facet_id": "C7.allowlist",
         "label": "工具与命令显式白名单",
-        "cases": 127,
+        "cases": 132,
         "case_ids": [
           "curated-safe-inventory-001",
           "curated-provenance-traceable-001",
@@ -647,8 +657,12 @@
       {
         "facet_id": "C7.schema",
         "label": "参数约束与 Schema 强制",
-        "cases": 0,
-        "case_ids": [],
+        "cases": 3,
+        "case_ids": [
+          "c7-schema-extra-arg-001",
+          "c7-schema-type-string-001",
+          "c7-schema-compliant-001"
+        ],
         "note": ""
       },
       {
@@ -665,7 +679,7 @@
       {
         "facet_id": "C8.pep",
         "label": "确定性策略执行点拦违规行为",
-        "cases": 168,
+        "cases": 173,
         "case_ids": [
           "curated-safe-inventory-001",
           "curated-provenance-traceable-001",
@@ -743,7 +757,6 @@
     "C3.identity",
     "C4.split",
     "C5.hierarchy",
-    "C7.schema",
     "C8.degraded",
     "A.access",
     "A.dispose"
@@ -752,7 +765,7 @@
   "unmapped_case_ids": [],
   "unmapped_count": 0,
   "suite": "cases/core_suite.jsonl",
-  "suite_sha256": "5fb7bc27549ab6af03d6197abe5d63fc80bfb75a35c04cf02660b5186c141227",
+  "suite_sha256": "f6871e251a276a69aa7ee6718740a5d5726280127d58c6e4f6596e3a6cf51e77",
   "override_cases": 0,
   "override_unknown_ids": [],
   "control_total": 12

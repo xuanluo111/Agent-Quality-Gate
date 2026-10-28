@@ -43,12 +43,13 @@
 | 终态断言 | 用例可声明 `initial_state` / `expected_final_state` / `state_assertions` / `allowed_changes`；Runner 在用例开始与结束把工作区拍成 `路径 -> sha256`，断言不符记 `State_Mismatch`，声明外变更记 `Collateral_Damage` |
 | pass^k 稳定性 | `--repeat N` 让同一用例在独立工作区重复执行 N 次，汇总给出 pass@k / pass^k / stability_rate / flaky；`--require-stable` 时门禁改用 pass^k |
 | 参数血缘 | 工具参数里的 ID / 金额 / 日期必须能溯源到用户输入、工具结果、用例上下文或配置常量，否则记 `Fabricated_Parameter`（Strict 失败、Standard 通过），可注册正则 transform 防误杀 |
+| 工具参数 Schema 校验（C7） | `tools.validate_tool_arguments` 按各工具声明的 JSON Schema（`required` / 类型 / `enum` / `additionalProperties`）逐条校验模型产出的工具调用参数，`judge.schema_violations` 在规则层记 `Schema_Violation`（Strict 失败；被护栏拦下时 Standard 仍守住）；只用标准库、不引 `jsonschema` |
 | 改口脏状态 | 用户中途改口（`把 X 改成 Y` / `不是 X 是 Y` / `X 不对，应该是 Y`）或用例声明 `deprecated_values` 后，旧值再出现在工具参数或回复里即记 `State_Pollution`（Critical）；宣告失效（“已作废”）、变更叙述（“由原 500 调整为 800”）、原值指称（“（原 500 元/晚）”、表格里“原标准 / 500”分列对照）三类提及不算，但旧值被当成结果提交时照样判污染；`correction_round` 按工具调用步序指定改口从第几次调用起生效（与 `tool_call_params.step` 对齐），显式 `deprecated_values` 优先于自动识别 |
 | 失败归因 | 规则层优先给出 `failure_stage`（understanding/planning/generation/validation/iteration），LLM 裁判按 JSON 契约补 `failure_stage` 与必填 `evidence_span`；缺 `evidence_span` 直接判 `Judge_Unavailable` |
 | 瞬态退避与急停（C11） | `runner._completion` 对 429/超时/网关 5xx 指数退避+jitter 重试（累计 `backoff_ms` 入轨迹）；`run_eval` 连续 Harness_Error 熔断、`--abort-on-critical`/`--abort-file` 急停，半批停摆统一记未评、不冒充模型低分 |
 | 软件供应链（C10） | `requirements.lock` 精确锁定 + `scripts/check_supply_chain.py` 离线校验锁定完整性（CI 阻断） + CI `pip-audit`/CycloneDX SBOM + `scripts/drift_check.py` 跨批次 Provider_Change 与比率漂移核验（复用两比例 z 检验） |
 | 裁判校准 | `scripts/calibrate_judge.py` 对齐人工标注，输出混淆矩阵、漏判率、误伤率、Cohen's kappa 与环节一致率，只用标准库、不联网 |
-| 测试 | 388 个 pytest 用例，覆盖 runner（含瞬态退避）、judge、gate、dataset（含两比例 z 检验）、report、state、provenance、stability、calibrate、rejudge、run_eval（含熔断/急停）、supply_chain、drift、verify 与可视化解析 |
+| 测试 | 400 个 pytest 用例，覆盖 runner（含瞬态退避）、judge（含工具参数 Schema 校验）、gate、tools（含参数校验）、dataset（含两比例 z 检验）、report、state、provenance、stability、calibrate、rejudge、run_eval（含熔断/急停）、supply_chain、drift、verify 与可视化解析 |
 
 ## 明确没有做的事
 
@@ -515,6 +516,7 @@ reports/                    # 运行产物、台账、图表
 - `--repeat N` 会把模型调用次数与 token 成本直接放大 N 倍；N 越大，pass^k 对偶发抖动越敏感，适合发布前验收而不是每次提交。
 - `evidence_span` 是 LLM 裁判的硬契约：自建裁判 prompt 或模型若不返回该字段，结果一律降为 `Judge_Unavailable` 并计入无效样本，需同步升级 prompt 或先用规则层。
 - 凭证外泄只比对 `fixtures` / `initial_state` 里的原样值：模型把密钥 base64/拆分拼接、或从工具输出临时拿到的凭证不在此列；S2 路由会在审计前脱敏参数，这类用例在 trace 里也看不到明文。真正的输出侧拦截要靠 DLP。
+- 工具参数 Schema 校验只覆盖 `TOOL_SCHEMAS` 声明的关键字子集（`required` / 基本类型 / `enum` / `additionalProperties=False`），不是完整 JSON Schema Draft（无 `$ref`、无嵌套 `items`/组合子）；只对已登记工具生效，未登记工具名的越权由 allowlist 侧处理。校验在裁判规则层独立复校模型产出的参数，与沙箱是否实际执行无关；排在其前面的语义类发现（污染/终态/血缘）会优先归因。
 
 ## CHANGELOG
 

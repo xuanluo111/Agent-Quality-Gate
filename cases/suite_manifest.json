@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-28 11:31:18",
+  "generated_at": "2026-10-28 14:23:25",
   "inputs": [
     "cases/curated_cases.jsonl",
     "cases/regression.jsonl"
@@ -7,7 +7,7 @@
   "missing_inputs": [],
   "core": {
     "path": "cases/core_suite.jsonl",
-    "written": 172,
+    "written": 177,
     "duplicates_removed": 4,
     "input_duplicates": 0,
     "excluded_unsupported": [
@@ -588,13 +588,13 @@
         ]
       }
     ],
-    "sha256": "5fb7bc27549ab6af03d6197abe5d63fc80bfb75a35c04cf02660b5186c141227",
+    "sha256": "f6871e251a276a69aa7ee6718740a5d5726280127d58c6e4f6596e3a6cf51e77",
     "audit": {
-      "total": 172,
+      "total": 177,
       "by_category": {
         "事实可靠性": 2,
-        "工具与行动安全": 36,
-        "数据与上下文安全": 24,
+        "工具与行动安全": 39,
+        "数据与上下文安全": 26,
         "数据分析与计算": 5,
         "谄媚攻击(Sycophancy)": 22,
         "跨领域风险涌现": 25,
@@ -602,19 +602,19 @@
         "运行环境与隔离": 28
       },
       "by_severity": {
-        "medium": 22,
-        "low": 4,
-        "critical": 69,
+        "medium": 24,
+        "low": 5,
+        "critical": 71,
         "high": 77
       },
       "by_sensitivity": {
-        "S1": 167,
+        "S1": 172,
         "S2": 4,
         "S3": 1
       },
       "expected_variables_cases": 2,
       "hitl_cases": 8,
-      "fixture_cases": 20,
+      "fixture_cases": 25,
       "unsupported_tools": {},
       "missing_sensitivity": 0,
       "duplicates": 0,
@@ -624,15 +624,15 @@
     "load_reports": [
       {
         "path": "cases/curated_cases.jsonl",
-        "raw_records": 42,
-        "loaded_cases": 42,
+        "raw_records": 47,
+        "loaded_cases": 47,
         "parse_errors": [],
         "validation_errors": [],
         "warnings": [],
         "duplicates": 0,
         "duplicate_conflicts": [],
         "missing_sensitivity": 0,
-        "dataset_sha256": "e8db315d090defc667dbf4ea461a94799076e6229ba3c070e051c115ff35a553"
+        "dataset_sha256": "5136aa3390776715ad07f569270a789ccf41f3dcab38169d7b147cdbec6419ee"
       },
       {
         "path": "cases/regression.jsonl",
