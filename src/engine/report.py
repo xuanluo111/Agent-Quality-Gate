@@ -17,6 +17,7 @@ from src.engine.controls import (
 )
 from src.engine.failure_class import FAILURE_CLASS_LABELS, PRECONDITION_FAILED, UNKNOWN
 from src.engine.gate import evaluate_gate, is_untrusted
+from src.engine.lineage import dataset_epoch, epoch_allows_regression, is_breakpoint
 from src.engine.stability import stability_metrics
 from src.models.schema import PROVIDER_BLOCKED_REASON, EvalResult
 
@@ -469,6 +470,8 @@ def summarize(
         "mode": mode,
         "dataset": run_meta.get("dataset", ""),
         "dataset_hash": stats.get("dataset_hash", ""),
+        # 代际标识：把 dataset_hash 钉成 epoch，供跨批次分组与劣化护栏使用。
+        "dataset_epoch": dataset_epoch(stats.get("dataset_hash", "")),
         "seed": run_meta.get("seed"),
         "git_sha": run_meta.get("git_sha", ""),
         "started_at": run_meta.get("started_at", ""),
@@ -593,6 +596,23 @@ HITL_MODE_LABELS = {
 }
 
 
+def _render_generation_block(summary: dict) -> str:
+    """只在发生数据集换代时插一句告警，同代不产生噪声。
+
+    分母换了（加用例 / 改断言）会让分层抽样洗牌，跟上一代通过率直接比较没有意义。
+    这里把断点显式标出来，提醒读者跨代只比同类；台账已把跨代重新失败的用例
+    重新基线为 open，不会把数据集变更冒充成模型劣化。
+    """
+    epoch = summary.get("dataset_epoch", "")
+    if not epoch or not summary.get("generation_breakpoint"):
+        return ""
+    prev = summary.get("prev_dataset_epoch", "")
+    return (
+        f"> ⚠️ **数据集换代**：本轮指纹 `{epoch}` 与台账上一代 `{prev}` 不同，属一次代际切换。"
+        f"跨代通过率不可直接比较；台账已把上一代 resolved、本轮再次失败的用例重新记为 open（新一轮基线），不判作模型劣化。\n"
+    )
+
+
 def _render_hitl_block(summary: dict) -> str:
     """HITL 不只看“有没有调工具”，拆成安全守住与流程完成两个口径。"""
     total = int(summary.get("hitl_total") or 0)
@@ -681,6 +701,7 @@ def update_risk_ledger(
     results: Iterable[EvalResult],
     generated_at: str,
     scope: str = "",
+    epoch: str = "",
 ) -> dict:
     path = Path(ledger_path)
     if path.is_file():
@@ -691,6 +712,9 @@ def update_risk_ledger(
     else:
         ledger = {}
     entries = ledger.get("entries") or {}
+    # 保留上一代标识与历史 epoch 列表，写回时用于断点判定与代际滘源。
+    prev_epoch = str(ledger.get("dataset_epoch") or "")
+    epoch_history = list(ledger.get("dataset_epochs") or [])
     items = list(results)
 
     for result in items:
@@ -706,11 +730,21 @@ def update_risk_ledger(
                     "model": scope or None,
                     "first_seen_run": run_id,
                     "first_seen_at": generated_at,
+                    "first_seen_epoch": epoch,
                     "occurrences": 0,
                     "runs": [],
                     "status": "open",
                 }
             previous_status = entry.get("status")
+            entry_epoch_before = str(entry.get("epoch") or "")
+            # 跨代护栏：只有同一代内的 resolved -> open 才是真劣化（regressed）；
+            # 换了代再失败，当作新一轮基线（open），不拿数据集变更冒充模型劣化。
+            if previous_status == "resolved" and epoch_allows_regression(entry_epoch_before, epoch):
+                new_status = "regressed"
+            else:
+                new_status = "open"
+                if previous_status == "resolved":
+                    entry["rebaselined_from_epoch"] = entry_epoch_before
             entry.update(
                 {
                     "category": result.category,
@@ -720,7 +754,8 @@ def update_risk_ledger(
                     "last_seen_at": generated_at,
                     "last_evidence": (result.evidence or result.judge_reason)[:1000],
                     "occurrences": int(entry.get("occurrences", 0)) + 1,
-                    "status": "regressed" if previous_status == "resolved" else "open",
+                    "epoch": epoch,
+                    "status": new_status,
                 }
             )
             runs = entry.setdefault("runs", [])
@@ -735,6 +770,7 @@ def update_risk_ledger(
                     "resolved_at": generated_at,
                     "last_seen_run": run_id,
                     "last_seen_at": generated_at,
+                    "epoch": epoch,
                 }
             )
             entries[key] = entry
@@ -742,9 +778,16 @@ def update_risk_ledger(
     statuses = Counter(entry.get("status", "open") for entry in entries.values())
     open_risks = [entry for entry in entries.values() if entry.get("status") in {"open", "regressed"}]
     open_risks.sort(key=lambda item: (RISK_ORDER.get(item.get("risk_level", ""), 9), item.get("case_id", "")))
+    # 代际历史：只在 epoch 非空且未曾记录时追加，供跨批次分组与滘源回溯。
+    if epoch and epoch not in {str(h.get("epoch") or "") for h in epoch_history}:
+        epoch_history.append({"epoch": epoch, "first_recorded_at": generated_at})
     ledger = {
         "updated_at": generated_at,
         "last_run_id": run_id,
+        "dataset_epoch": epoch,
+        "prev_dataset_epoch": prev_epoch,
+        "generation_breakpoint": is_breakpoint(prev_epoch, epoch),
+        "dataset_epochs": epoch_history,
         "entries": entries,
         "status_counts": dict(statuses),
         "open_risks": open_risks,
@@ -795,19 +838,34 @@ def generate_markdown(
 
     ledger_target = Path(ledger_path) if ledger_path else output.parent / "risk_ledger.json"
     ledger_scope = str(run_meta.get("model") or "")
+    cur_epoch = summary.get("dataset_epoch", "")
     if write_ledger:
         ledger = update_risk_ledger(
-            ledger_target, summary["run_id"] or output.parent.name, results, timestamp, scope=ledger_scope
+            ledger_target,
+            summary["run_id"] or output.parent.name,
+            results,
+            timestamp,
+            scope=ledger_scope,
+            epoch=cur_epoch,
         )
+        summary["prev_dataset_epoch"] = str(ledger.get("prev_dataset_epoch") or "")
+        summary["generation_breakpoint"] = bool(ledger.get("generation_breakpoint", False))
     else:
         # 重判场景：台账由单独的重建流程负责，这里只读不算，避免同一批结果被重复计数。
         try:
             ledger = json.loads(ledger_target.read_text(encoding="utf-8")) if ledger_target.is_file() else {}
         except json.JSONDecodeError:
             ledger = {}
+        # 重判不引入新代：只拿台账当前代与本轮指纹对一比，同代即无断点。
+        summary["prev_dataset_epoch"] = str(ledger.get("dataset_epoch") or "")
+        summary["generation_breakpoint"] = is_breakpoint(summary["prev_dataset_epoch"], cur_epoch)
+    summary["dataset_epoch"] = cur_epoch
     summary["ledger"] = {
         "path": str(ledger_target),
         "status_counts": ledger.get("status_counts", {}),
+        "dataset_epoch": ledger.get("dataset_epoch", cur_epoch),
+        "dataset_epochs": ledger.get("dataset_epochs", []),
+        "generation_breakpoint": summary["generation_breakpoint"],
     }
 
     failures = [item for item in results if not item.strict_passed]
@@ -849,6 +907,7 @@ def generate_markdown(
     verdict_block = _render_verdict(summary, trusted_failures)
     dimension_block = _render_dimension_block(summary)
     coverage_block = _render_coverage_block(summary)
+    generation_block = _render_generation_block(summary)
     # 旧 run 的 model_version 可能是环境变量泄漏值；没有独立版本时不再重复显示一次模型名。
     model_label = f"`{summary['model']}`"
     if summary["model_version"] and summary["model_version"] != summary["model"]:
@@ -860,8 +919,8 @@ def generate_markdown(
 > **被测模型**：{model_label}
 > **裁判模型**：`{summary['judge_model']}`{'（与被测模型同源，需谨慎解读）' if summary['judge_same_as_sut'] else ''}
 > **运行模式**：`{mode}` | **采样 seed**：`{summary['seed']}`
-> **数据集**：`{summary['dataset']}` | **SHA256**：`{summary['dataset_hash'][:16] or '-'}`
-> **Git**：`{summary['git_sha'] or '-'}`
+> **数据集**：`{summary['dataset']}` | **SHA256**：`{summary['dataset_hash'][:16] or '-'}` | **代际**：`{summary['dataset_epoch'] or '-'}`
+{generation_block}> **Git**：`{summary['git_sha'] or '-'}`
 
 ---
 
