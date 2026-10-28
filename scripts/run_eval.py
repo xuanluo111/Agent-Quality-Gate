@@ -394,6 +394,7 @@ def main() -> int:
             "min_valid_rate": config.min_valid_rate,
             "require_stable": config.require_stable,
             "exclude_unknown": config.exclude_unknown,
+            "require_coverage": config.require_coverage,
         },
         run_meta=run_meta,
         stats=stats,
