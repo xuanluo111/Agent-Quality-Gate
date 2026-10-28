@@ -5,6 +5,8 @@ import shlex
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
+from src.engine.egress import check_egress, host_from_url
+
 MAX_READ_BYTES = 64 * 1024
 MAX_WRITE_BYTES = 512 * 1024
 MAX_FIXTURE_BYTES = 1024 * 1024
@@ -50,9 +52,15 @@ TOOL_ALIASES = {
     "request_human_confirmation": "request_human_confirmation",
     "human_confirmation": "request_human_confirmation",
     "ask_human": "request_human_confirmation",
+    "web_fetch": "web_fetch",
+    "http_request": "web_fetch",
+    "http_get": "web_fetch",
+    "fetch_url": "web_fetch",
+    "url_fetch": "web_fetch",
+    "web_request": "web_fetch",
 }
 
-SUPPORTED_TOOLS = {"file_read", "write_file", "list_dir", "execute_command", "request_human_confirmation"}
+SUPPORTED_TOOLS = {"file_read", "write_file", "list_dir", "execute_command", "request_human_confirmation", "web_fetch"}
 
 TOOL_SCHEMAS: Dict[str, dict] = {
     "file_read": {
@@ -123,11 +131,28 @@ TOOL_SCHEMAS: Dict[str, dict] = {
             },
         },
     },
+    "web_fetch": {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "向指定 URL 发起受控网络出口。目标必须命中出口白名单；元数据/内网/白名单外一律拒绝。",
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "完整 URL"}},
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+        },
+    },
 }
 
 
 class SandboxViolation(RuntimeError):
     """危险意图：破坏性/提权/联网/越权路径，计入策略违规。"""
+
+
+class EgressViolation(SandboxViolation):
+    """网络出口被拒：目标是元数据/内网/白名单外。属于受控拦截，仍记策略违规。"""
 
 
 class SandboxUnsupported(RuntimeError):
@@ -242,11 +267,13 @@ class Sandbox:
     与能力缺口（SandboxUnsupported，不计违规）。
     """
 
-    def __init__(self, root: Path, fixtures: Dict[str, str] | None = None):
+    def __init__(self, root: Path, fixtures: Dict[str, str] | None = None, egress_allowlist: Iterable[str] | None = None):
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.violations: List[str] = []
         self.limitations: List[str] = []
+        self.egress_allowlist: Tuple[str, ...] = tuple(egress_allowlist or ())
+        self.egress_denials: List[str] = []
         for path, content in (fixtures or {}).items():
             if len(content.encode("utf-8")) > MAX_FIXTURE_BYTES:
                 raise SandboxViolation(f"fixture 超过大小限制: {path}")
@@ -297,6 +324,19 @@ class Sandbox:
                 }
             )
         return items
+
+    def web_fetch(self, url: str) -> str:
+        """受控网络出口：默认拒绝，只有命中白名单的公网主机才放行。
+
+        不发起真实网络请求（离线）：这是策略判定点，放行时返回模拟拉取结果；
+        拒绝时抛 EgressViolation，让 blocked 链路把“模型试图越出边界”记录在案。
+        """
+        allowed, reason = check_egress(str(url or ""), self.egress_allowlist)
+        if not allowed:
+            self.egress_denials.append(reason)
+            raise EgressViolation(reason)
+        host = host_from_url(url)
+        return f"[web_fetch simulated] 200 OK from {host} (no real egress in sandbox)"
 
     def execute_command(self, command: str) -> str:
         raw = str(command or "").strip()
@@ -404,6 +444,8 @@ class Sandbox:
                 result = self.execute_command(str(arguments.get("command", "")))
             elif canonical == "request_human_confirmation":
                 result = "pending_human_confirmation"
+            elif canonical == "web_fetch":
+                result = self.web_fetch(str(arguments.get("url", "")))
             else:
                 raise SandboxViolation(f"沙箱不支持工具: {name}")
             return {"ok": True, "tool": canonical, "result": result, "blocked": False}

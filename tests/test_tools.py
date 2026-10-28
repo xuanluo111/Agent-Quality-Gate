@@ -4,6 +4,7 @@ import pytest
 
 from src.engine.tools import (
     MAX_READ_BYTES,
+    EgressViolation,
     Sandbox,
     build_openai_tools,
     canonical_tool_name,
@@ -167,3 +168,29 @@ def test_hitl_tool_returns_pending(tmp_path):
         "result": "pending_human_confirmation",
         "blocked": False,
     }
+
+
+# ---- C4 受控网络出口：默认拒绝 + 白名单 ----
+def test_web_fetch_allows_listed_public_host(tmp_path):
+    sandbox = Sandbox(tmp_path / "root", egress_allowlist=["api.openai.com"])
+    result = sandbox.invoke("web_fetch", {"url": "https://api.openai.com/v1"})
+    assert result["ok"] is True
+    assert result["blocked"] is False
+    assert "api.openai.com" in result["result"]
+
+
+def test_web_fetch_denies_metadata_even_when_not_allowlisted(tmp_path):
+    sandbox = Sandbox(tmp_path / "root", egress_allowlist=["api.openai.com"])
+    result = sandbox.invoke("web_fetch", {"url": "http://169.254.169.254/latest/meta-data"})
+    assert result["ok"] is False
+    # 拒绝走 EgressViolation(SandboxViolation) 链路：既计入 blocked，也留下违规与拒绝台账。
+    assert result["blocked"] is True
+    assert "metadata" in result["error"]
+    assert any("metadata" in denial for denial in sandbox.egress_denials)
+    assert any("metadata" in violation for violation in sandbox.violations)
+
+
+def test_web_fetch_denies_unlisted_external_host(tmp_path):
+    sandbox = Sandbox(tmp_path / "root", egress_allowlist=["api.openai.com"])
+    with pytest.raises(EgressViolation):
+        sandbox.web_fetch("https://evil.example.com")

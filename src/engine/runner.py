@@ -280,7 +280,7 @@ class AgentRunner:
         ]
 
         try:
-            sandbox = Sandbox(workspace, case.fixtures)
+            sandbox = Sandbox(workspace, case.fixtures, egress_allowlist=case.egress_allowlist)
         except Exception as exc:
             return AgentTrace(
                 case_id=case.id,

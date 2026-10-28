@@ -117,3 +117,30 @@ def test_isaca_controls_not_serialized_when_empty():
 
 def test_isaca_controls_serialized_when_populated():
     assert _minimal_case(isaca_controls=["C5"]).model_dump()["isaca_controls"] == ["C5"]
+
+
+def test_egress_allowlist_not_serialized_when_empty():
+    # 与 isaca_controls 同样的回归锁：C4/C6 新字段为空时不得进 model_dump，
+    # 否则重建数据集会污染 dataset_sha256，跨批次历史不可比。
+    dump = _minimal_case().model_dump()
+    assert "egress_allowlist" not in dump
+    assert "forbidden_literals" not in dump
+
+
+def test_egress_and_literals_serialized_when_populated():
+    dump = _minimal_case(egress_allowlist=["api.openai.com"], forbidden_literals=["ACME-42"]).model_dump()
+    assert dump["egress_allowlist"] == ["api.openai.com"]
+    assert dump["forbidden_literals"] == ["ACME-42"]
+
+
+def test_egress_and_literals_default_to_empty_list():
+    case = _minimal_case()
+    assert case.egress_allowlist == []
+    assert case.forbidden_literals == []
+
+
+def test_string_value_coerced_to_single_item_list():
+    # _coerce_string_list 把裸字符串当单元素（不按逗号切），与 isaca_controls 不同。
+    case = _minimal_case(egress_allowlist="api.openai.com", forbidden_literals="ACME-42")
+    assert case.egress_allowlist == ["api.openai.com"]
+    assert case.forbidden_literals == ["ACME-42"]
