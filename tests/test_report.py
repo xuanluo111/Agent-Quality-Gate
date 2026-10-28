@@ -359,6 +359,90 @@ def test_ledger_skips_untrusted_samples(tmp_path):
     assert "c2" not in ledger["entries"]
 
 
+def _critical_fail(case_id="c1", evidence="x"):
+    return make_result(
+        case_id=case_id,
+        category="身份与授权",
+        passed=False,
+        strict_passed=False,
+        risk_level="critical",
+        judge_layer="rule",
+        fail_reason="Policy_Violation",
+        evidence=evidence,
+    )
+
+
+def test_ledger_regressed_within_same_epoch(tmp_path):
+    """同一代内 resolved 后再次失败，仍是真劣化（regressed）。"""
+    ledger_path = tmp_path / "risk_ledger.json"
+    update_risk_ledger(ledger_path, "run-1", [_critical_fail()], "2026-10-20 10:00:00", epoch="e1")
+    update_risk_ledger(ledger_path, "run-2", [make_result(case_id="c1")], "2026-10-20 11:00:00", epoch="e1")
+    ledger = update_risk_ledger(ledger_path, "run-3", [_critical_fail()], "2026-10-20 12:00:00", epoch="e1")
+    assert ledger["entries"]["c1"]["status"] == "regressed"
+    assert "rebaselined_from_epoch" not in ledger["entries"]["c1"]
+
+
+def test_ledger_rebaselines_across_epochs(tmp_path):
+    """换了代再失败不判模型劣化：重新基线为 open，并记下从哪一代重新来的。"""
+    ledger_path = tmp_path / "risk_ledger.json"
+    update_risk_ledger(ledger_path, "run-1", [_critical_fail()], "2026-10-20 10:00:00", epoch="e1")
+    update_risk_ledger(ledger_path, "run-2", [make_result(case_id="c1")], "2026-10-20 11:00:00", epoch="e1")
+    ledger = update_risk_ledger(ledger_path, "run-3", [_critical_fail()], "2026-10-20 12:00:00", epoch="e2")
+    entry = ledger["entries"]["c1"]
+    assert entry["status"] == "open"
+    assert entry["rebaselined_from_epoch"] == "e1"
+    assert entry["epoch"] == "e2"
+
+
+def test_ledger_records_generation_breakpoint(tmp_path):
+    """台账顶层要记下当前代、上一代、是否换代，以及代际历史。"""
+    ledger_path = tmp_path / "risk_ledger.json"
+    update_risk_ledger(ledger_path, "run-1", [_critical_fail()], "2026-10-20 10:00:00", epoch="e1")
+    ledger = update_risk_ledger(ledger_path, "run-2", [_critical_fail()], "2026-10-20 11:00:00", epoch="e2")
+    assert ledger["dataset_epoch"] == "e2"
+    assert ledger["prev_dataset_epoch"] == "e1"
+    assert ledger["generation_breakpoint"] is True
+    assert {h["epoch"] for h in ledger["dataset_epochs"]} == {"e1", "e2"}
+
+
+def test_report_marks_generation_breakpoint(tmp_path):
+    """跨代重跑时，报告开头要明说“数据集换代”，且 summary 带代际字段。"""
+    reports_dir = tmp_path / "reports"
+    ledger_path = reports_dir / "risk_ledger.json"
+
+    stats_a = stats()
+    stats_a["dataset_hash"] = "a" * 64
+    run_a = dict(run_meta(), run_id="run-A")
+    generate_markdown(
+        sample_results(), str(reports_dir / "runs" / "run-A" / "report.md"),
+        run_meta=run_a, stats=stats_a, ledger_path=str(ledger_path),
+    )
+
+    stats_b = stats()
+    stats_b["dataset_hash"] = "b" * 64
+    run_b = dict(run_meta(), run_id="run-B")
+    report_b = reports_dir / "runs" / "run-B" / "report.md"
+    summary = generate_markdown(
+        sample_results(), str(report_b),
+        run_meta=run_b, stats=stats_b, ledger_path=str(ledger_path),
+    )
+    assert summary["dataset_epoch"] == "b" * 16
+    assert summary["generation_breakpoint"] is True
+    assert "数据集换代" in report_b.read_text(encoding="utf-8")
+
+    # 同代重跑不应误报断点。
+    stats_c = stats()
+    stats_c["dataset_hash"] = "b" * 64
+    run_c = dict(run_meta(), run_id="run-C")
+    report_c = reports_dir / "runs" / "run-C" / "report.md"
+    summary_c = generate_markdown(
+        sample_results(), str(report_c),
+        run_meta=run_c, stats=stats_c, ledger_path=str(ledger_path),
+    )
+    assert summary_c["generation_breakpoint"] is False
+    assert "数据集换代" not in report_c.read_text(encoding="utf-8")
+
+
 def test_visualization_prefers_summary_when_present(tmp_path):
     reports_dir = tmp_path / "reports"
     run_dir = reports_dir / "runs" / "run-1"
