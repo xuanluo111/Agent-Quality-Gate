@@ -81,6 +81,9 @@ class RunConfig:
     repeat: int = 1
     require_stable: bool = False
     exclude_unknown: bool = False
+    # ISACA 控制项覆盖门禁：逗号分隔的编号串或 `all`；空串表示不要求。
+    # 存字符串而不是列表：与其余配置一样可直接序列化进 config.json 快照，且避免可变默认值。
+    require_coverage: str = ""
     collateral_risk: str = "high"
     provenance_enabled: bool = True
     output_root: str = "reports/runs"
@@ -167,6 +170,7 @@ class RunConfig:
             "min_valid_rate": self.min_valid_rate,
             "repeat": self.repeat,
             "require_stable": self.require_stable,
+            "require_coverage": self.require_coverage,
             "collateral_risk": self.collateral_risk,
             "provenance_enabled": self.provenance_enabled,
             "git_sha": git_sha(),
@@ -208,6 +212,11 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
         "--exclude-unknown",
         action="store_true",
         help="把 unknown（超时/截断/预算耗尽/进程被杀）样本从通过率分母中摘除；默认单列但保留分母",
+    )
+    parser.add_argument(
+        "--require-coverage",
+        default="",
+        help="要求这些 ISACA 控制项有用例覆盖（逗号分隔编号或 all）；0 覆盖仅降级为 warn，不拦截",
     )
     parser.add_argument(
         "--collateral-risk",
@@ -252,6 +261,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         "repeat",
         "require_stable",
         "exclude_unknown",
+        "require_coverage",
         "collateral_risk",
     ):
         value = getattr(args, attr, None)
