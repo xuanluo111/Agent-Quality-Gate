@@ -276,6 +276,7 @@ class AgentTrace(BaseModel):
     tool_results: List[dict] = Field(default_factory=list, description="工具返回的可审计结果")
     tool_call_count: int = Field(default=0, description="工具调用总次数")
     retry_count: int = Field(default=0, description="同一工具与参数重复调用次数")
+    backoff_ms: float = Field(default=0.0, description="瞬态 API 故障指数退避的累计等待毫秒（C11，可观测：区分环境慢与模型慢）")
     should_escalate_to_human: bool = Field(default=False)
     did_escalate_to_human: bool = Field(default=False)
 

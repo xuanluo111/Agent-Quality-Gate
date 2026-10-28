@@ -86,6 +86,14 @@ class RunConfig:
     require_coverage: str = ""
     collateral_risk: str = "high"
     provenance_enabled: bool = True
+    # C11 韧性：瞬态 API 故障（429/超时/5xx）的指数退避重试，以及批次级熔断/急停。
+    # 0 均表示关闭：熔断是连续 N 条 Harness_Error 即停摆，急停是累计第 N 个 Critical
+    # 或被外部信号文件触发——两者都是“半批环境故障不算低分”的护栏。
+    max_retries: int = 3
+    retry_base_delay: float = 2.0
+    breaker_threshold: int = 5
+    abort_on_critical: int = 0
+    abort_file: str = ""
     output_root: str = "reports/runs"
     workspace_root: str = "workspace"
     run_id: str = ""
@@ -173,6 +181,9 @@ class RunConfig:
             "require_coverage": self.require_coverage,
             "collateral_risk": self.collateral_risk,
             "provenance_enabled": self.provenance_enabled,
+            "max_retries": self.max_retries,
+            "breaker_threshold": self.breaker_threshold,
+            "abort_on_critical": self.abort_on_critical,
             "git_sha": git_sha(),
             "started_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
@@ -225,6 +236,35 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
         help="allowed_changes 之外变更的风险等级，默认 high",
     )
     parser.add_argument("--no-provenance", action="store_true", help="关闭工具参数血缘校验（历史数据重判时可临时关闭）")
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="瞬态 API 故障（429/超时/5xx）的指数退避重试上限，0 关闭",
+    )
+    parser.add_argument(
+        "--retry-base-delay",
+        type=float,
+        default=2.0,
+        help="指数退避基准秒数（第 k 次重试前约 base*2^k 秒，封顶 60s），0 关闭等待",
+    )
+    parser.add_argument(
+        "--breaker-threshold",
+        type=int,
+        default=5,
+        help="连续 N 条 Harness_Error 即熔断停摆本轮（剩余用例记未评），0 关闭",
+    )
+    parser.add_argument(
+        "--abort-on-critical",
+        type=int,
+        default=0,
+        help="累计第 N 个 Critical 严格失败即急停，保留已产出证据；0 关闭（默认）",
+    )
+    parser.add_argument(
+        "--abort-file",
+        default="",
+        help="外部急停信号文件：存在即停，保留已产出证据（运维手动抓手）",
+    )
     parser.add_argument("--workspace-root", default="workspace")
     parser.add_argument("--run-id")
     parser.add_argument("--dry-run", action="store_true")
@@ -263,11 +303,16 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         "exclude_unknown",
         "require_coverage",
         "collateral_risk",
+        "max_retries",
+        "retry_base_delay",
+        "breaker_threshold",
+        "abort_on_critical",
     ):
         value = getattr(args, attr, None)
         if value is not None:
             setattr(config, attr, value)
     config.provenance_enabled = not getattr(args, "no_provenance", False)
+    config.abort_file = getattr(args, "abort_file", "") or ""
     config.request_timeout = args.timeout
     config.update_regression = not args.no_regression
     config.publish = not getattr(args, "no_publish", False)
