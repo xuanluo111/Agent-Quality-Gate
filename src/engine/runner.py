@@ -1,4 +1,5 @@
 import json
+import random
 import time
 import uuid
 from collections import Counter
@@ -32,6 +33,21 @@ def _get(value: Any, key: str, default: Any = None) -> Any:
     if isinstance(value, dict):
         return value.get(key, default)
     return getattr(value, key, default)
+
+
+# 瞬态故障：重试可能成功，与“模型答错”无关。判据与 judge.ENVIRONMENT_ERROR_MARKERS
+# 同源口径（都是“不该算进模型能力”的环境错误），但集合更窄：内容审核 403 重试无效，
+# 不能在这里白等；而网关 5xx/连接重置虽无固定话术，也确实值得再试一次。
+TRANSIENT_STATUS_MARKERS = ("error code: 500", "error code: 502", "error code: 503", "error code: 504")
+TRANSIENT_TEXT_MARKERS = (
+    "rate_limit", "rate limit", "too many requests", "error code: 429",
+    "timeout", "timed out", "connection reset", "connection error", "temporarily unavailable",
+) + TRANSIENT_STATUS_MARKERS
+
+
+def is_transient_api_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(marker in text for marker in TRANSIENT_TEXT_MARKERS)
 
 
 def _usage_tokens(response: Any) -> tuple[int, int, int]:
@@ -126,6 +142,9 @@ class AgentRunner:
         temperature: float = 0.1,
         timeout: int = 300,
         seed: Optional[int] = None,
+        max_retries: int = 3,
+        retry_base_delay: float = 2.0,
+        sleep_fn: Any = time.sleep,
         client: Any = None,
         local_client: Any = None,
         canary_token: Optional[str] = None,
@@ -145,6 +164,12 @@ class AgentRunner:
         self.temperature = temperature
         self.timeout = timeout
         self.seed = seed
+        # C11 真退避：瞬态故障不再直接烧成 Harness_Error，而是先受控重试；
+        # sleep_fn 可注入：单测用假 sleep 记录等待序列，零真实耗时。
+        self.max_retries = max(0, int(max_retries))
+        self.retry_base_delay = max(0.0, float(retry_base_delay))
+        self.sleep_fn = sleep_fn
+        self.backoff_ms_total = 0.0
         self.canary_token = canary_token or f"SECRET_{uuid.uuid4().hex[:8]}"
         # WAL：每次工具调用执行前先落盘 intent，崩溃后仍能还原“本来要做什么”。
         self.journal_path = (
@@ -178,14 +203,26 @@ class AgentRunner:
             kwargs["tool_choice"] = "auto"
         if self.seed is not None:
             kwargs["seed"] = self.seed
-        try:
-            return client.chat.completions.create(**kwargs)
-        except Exception as exc:
-            text = str(exc).lower()
-            if "seed" in text and "seed" in kwargs:
-                kwargs.pop("seed", None)
-                return client.chat.completions.create(**kwargs)
-            raise
+        # 重试只逆补瞬态环境故障；seed 兼容回退保持原语义（只重试一次、去 seed），
+        # 否则非瞬态错误会被当成可重试，把确定性失败拖成 2^N 白等。
+        for index in range(self.max_retries + 1):
+            call_kwargs = dict(kwargs)
+            try:
+                return client.chat.completions.create(**call_kwargs)
+            except Exception as exc:
+                text = str(exc).lower()
+                if "seed" in call_kwargs and "seed" in text:
+                    call_kwargs.pop("seed", None)
+                    return client.chat.completions.create(**call_kwargs)
+                if index >= self.max_retries or not is_transient_api_error(exc):
+                    raise
+                delay = min(self.retry_base_delay * (2 ** index), 60.0)
+                # 等宽 jitter：多 worker 同时碰壁时错开重试峰，避免二阶雪崩。
+                delay = delay * (0.5 + random.random() / 2.0)
+                waited = delay * 1000.0
+                self.backoff_ms_total += waited
+                self.sleep_fn(delay)
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def _system_prompt(self, case: TestCase, route: str) -> str:
         if route == "local":
@@ -215,6 +252,7 @@ class AgentRunner:
         attempt>0 时使用独立工作目录，保证 repeat 场景下每次尝试互不污染。
         """
         started = time.time()
+        self.backoff_ms_total = 0.0
         token_cost = 0
         input_tokens = 0
         output_tokens = 0
@@ -515,6 +553,7 @@ class AgentRunner:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 token_cost=token_cost,
+                backoff_ms=round(self.backoff_ms_total, 1),
                 latency_ms=(time.time() - started) * 1000,
             )
         except Exception as exc:
@@ -550,6 +589,7 @@ class AgentRunner:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 token_cost=token_cost,
+                backoff_ms=round(self.backoff_ms_total, 1),
                 latency_ms=(time.time() - started) * 1000,
                 is_success=False,
                 error_message=str(exc),

@@ -59,6 +59,53 @@ def _harness_failure(case: TestCase, error: Exception | str, run_id: str, model:
     return trace, result
 
 
+def _skipped_result(case: TestCase, run_id: str, model: str, why: str) -> EvalResult:
+    """熔断/急停后未执行的用例：按环境故障补录，不当模型失分。
+
+    统一记 Harness_Error：gate 的基础设施单列口径会把有效率拉低、整体判 invalid，
+    “半批停摆”不会被当成“模型考了低分”。
+    """
+    return EvalResult(
+        case_id=case.id,
+        category=case.category,
+        passed=False,
+        strict_passed=False,
+        risk_level="low",
+        judge_layer="harness",
+        judge_reason=why,
+        fail_reason="Harness_Error",
+        phenomenon="环境故障致本轮停摆",
+        evidence=why,
+        impact="本轮未完成，不能参与能力横向对比",
+        suggestion="修复环境后重跑；已产出证据保留在 results.jsonl",
+        model=model,
+        run_id=run_id,
+    )
+
+
+def _trip_reason(
+    *,
+    consecutive_harness: int,
+    critical_strict: int,
+    breaker_threshold: int,
+    abort_on_critical: int,
+    abort_file_present: bool,
+) -> str | None:
+    """纯函数：给定计数与阈值给出停摆原因（None=继续），阈值 0 表示该护栏关闭。
+
+    优先级：熔断 > Critical 急停 > 外部信号。熔断打头是因为“连续环境故障”意味着
+    网关整体不可用，继续只会白烧额度；Critical 急停次之（安全红线越踩越危险）；
+    外部信号是运维手动抓手，任何时候都能叫停。拆成纯函数便于单测覆盖三条分支与顺序。
+    """
+    if breaker_threshold and consecutive_harness >= breaker_threshold:
+        return f"熔断：连续 {consecutive_harness} 条 Harness_Error（阈值 {breaker_threshold}）"
+    if abort_on_critical and critical_strict >= abort_on_critical:
+        return f"急停：累计 {critical_strict} 个 Critical 严格失败（阈值 {abort_on_critical}）"
+    if abort_file_present:
+        return "急停：检测到外部信号文件"
+    return None
+
+
 def _attempts_payload(traces: List[AgentTrace]) -> List[dict]:
     """逐次轨迹按尝试顺序、统一成 1 起再落盘。
 
@@ -280,6 +327,8 @@ def main() -> int:
         max_tokens=config.max_tokens,
         temperature=config.temperature,
         timeout=config.request_timeout,
+        max_retries=config.max_retries,
+        retry_base_delay=config.retry_base_delay,
         seed=config.seed,
     )
     judge = LayeredJudge(
@@ -297,6 +346,11 @@ def main() -> int:
     results: list[EvalResult] = []
     traces: list[AgentTrace] = []
     runtime_error_cases: list[str] = []
+    # C11 熔断/急停状态：熔断按“到达顺序的连续 Harness_Error”近似（并发下不是
+    # 严格时间序，但停摆方向保守可接受）；急停按累计 Critical 严格失败精确计数。
+    consecutive_harness = 0
+    critical_strict = 0
+    abort_info: dict | None = None
     partial_path = run_dir / "results.jsonl"
     started_at = time.strftime("%Y-%m-%d %H:%M:%S")
     start_time = time.time()
@@ -314,6 +368,7 @@ def main() -> int:
                 for case in sampled
             }
             completed = 0
+            handled_ids: set[str] = set()
             for future in concurrent.futures.as_completed(futures):
                 case = futures[future]
                 completed += 1
@@ -324,6 +379,7 @@ def main() -> int:
                     case_traces = [trace]
                 results.append(result)
                 traces.extend(case_traces)
+                handled_ids.add(case.id)
                 if any(not trace.is_success for trace in case_traces):
                     runtime_error_cases.append(case.id)
                 partial.write(
@@ -347,6 +403,36 @@ def main() -> int:
                     f"target_tokens={sum(trace.token_cost for trace in case_traces)} judge_tokens={result.token_cost} "
                     f"elapsed={elapsed / 60:.1f}m eta={eta:.1f}m"
                 )
+
+                # C11 熔断/急停计数：Harness_Error 按到达顺序累计连续值（并发下非严格
+                # 时间序，但停摆方向保守可接受）；Critical 只数真实能力失分（rule 层判出的
+                # critical 严格失败），环境故障已在上一分支归 Harness_Error，不会误触急停。
+                if result.fail_reason == "Harness_Error":
+                    consecutive_harness += 1
+                else:
+                    consecutive_harness = 0
+                if result.risk_level == "critical" and not result.strict_passed:
+                    critical_strict += 1
+                reason = _trip_reason(
+                    consecutive_harness=consecutive_harness,
+                    critical_strict=critical_strict,
+                    breaker_threshold=config.breaker_threshold,
+                    abort_on_critical=config.abort_on_critical,
+                    abort_file_present=bool(config.abort_file) and Path(config.abort_file).exists(),
+                )
+                if reason:
+                    skipped = 0
+                    for pending_future, pending_case in futures.items():
+                        if pending_case.id in handled_ids:
+                            continue
+                        pending_future.cancel()
+                        results.append(
+                            _skipped_result(pending_case, config.run_id, config.model, reason)
+                        )
+                        skipped += 1
+                    abort_info = {"reason": reason, "completed": completed, "skipped": skipped}
+                    print(f"停摆：{reason}｜本轮标记未评 {skipped} 条，保留已产出证据")
+                    break
 
     finished_at = time.strftime("%Y-%m-%d %H:%M:%S")
     total_tokens = sum(result.token_cost for result in results) + sum(trace.token_cost for trace in traces)
@@ -375,6 +461,7 @@ def main() -> int:
         "sampling": sampling,
         "total_token_cost": total_tokens,
         "avg_latency_ms": round(avg_latency, 2),
+        "abort": abort_info,
     }
     run_meta = config.metadata()
     run_meta["started_at"] = started_at
