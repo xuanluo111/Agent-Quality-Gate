@@ -2,6 +2,8 @@
 models.json
 # 全量批次临时矩阵（由 models.json 改 limit=0 生成），不入库
 models.full.json
+# 重跑 invalid 模型的临时矩阵，不入库
+models.rerun2.json
 .venv/
 __pycache__/
 *.py[cod]
@@ -32,7 +34,7 @@ reports/observability.json
 .rejudge_logs/
 
 # 后台跑批的 nohup 合并日志（本地临时产物，不入库）
-batch-full.log
+batch-*.log
 
 # 覆盖率产物：本地跑 pytest --cov 时生成，不进库
 .coverage
