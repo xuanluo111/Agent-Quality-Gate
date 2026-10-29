@@ -1046,6 +1046,10 @@ def generate_markdown(
             md += "\n"
             if item.jcv_score is not None:
                 md += f"- **变量重合度 (JCV)**：`{item.jcv_score:.2f}`\n"
+                _p = f"{item.jcv_precision:.2f}" if item.jcv_precision is not None else "N/A"
+                _r = f"{item.jcv_recall:.2f}" if item.jcv_recall is not None else "N/A"
+                if item.jcv_precision is not None or item.jcv_recall is not None:
+                    md += f"- **抽取精确/召回（仅归因、不判负）**：`P={_p}` `R={_r}`\n"
             md += f"- **现象**：{item.phenomenon or item.judge_reason or '未提供'}\n"
             md += f"- **依据**：{item.evidence or item.judge_reason or '未提供'}\n"
             md += f"- **影响**：{item.impact or _get_impact(item.risk_level, item.category)}\n"
