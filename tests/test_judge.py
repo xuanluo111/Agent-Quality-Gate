@@ -2,11 +2,13 @@ import json
 
 from src.engine.judge import (
     LayeredJudge,
+    compute_variable_pr,
     egress_attempts,
     escalation_summary_gaps,
     leaked_secrets,
     memory_leaks,
     model_policy_violations,
+    pr_attribution,
     schema_violations,
 )
 from src.engine.privacy import secret_literals
@@ -303,6 +305,56 @@ def test_jcv_pass_reaches_llm_judge():
     assert result.judge_layer == "llm"
     assert result.strict_passed is True
     assert round(result.jcv_score, 3) == 0.667
+
+
+def test_compute_variable_pr_table():
+    """G1-lite：P/R 纯函数表驱动，覆盖命中/漏抽/冗余/空抽取/无预期。"""
+    # (预期, 实际, 期望P, 期望R)
+    cases = [
+        (["a", "b"], ["a", "b"], 1.0, 1.0),        # 完全命中
+        (["a", "b", "c"], ["a", "b"], 1.0, 2 / 3),   # 漏抽一个：precision 满、recall 掉
+        (["a"], ["a", "b", "c"], 1 / 3, 1.0),        # 冗余两个：recall 满、precision 掉
+        (["a", "b"], [], None, 0.0),                 # 什么都没抽：P 无定义、R=0
+        ([], ["a"], None, None),                     # 无预期变量：P/R 均不适用
+        (["a"], ["b"], 0.0, 0.0),                    # 全错：抽了但不沾边
+    ]
+    for expected, actual, want_p, want_r in cases:
+        p, r = compute_variable_pr(expected, actual)
+        gp = round(p, 4) if p is not None else None
+        gr = round(r, 4) if r is not None else None
+        assert (gp, gr) == (round(want_p, 4) if want_p is not None else None,
+                            round(want_r, 4) if want_r is not None else None), (expected, actual, p, r)
+
+
+def test_pr_attribution_labels():
+    """归因文案：取更低侧为主缺陷；实际为空(P=None)只可能是漏抽。"""
+    assert pr_attribution(None, None) == ""
+    assert "主要漏抽" in pr_attribution(1.0, 0.5)          # recall 低
+    assert "主要冗余" in pr_attribution(0.33, 1.0)          # precision 低
+    assert "主要漏抽" in pr_attribution(None, 0.0)          # 没抽出任何
+    assert "并存" in pr_attribution(0.5, 0.5)               # 两侧相等
+
+
+def test_jcv_mismatch_records_precision_recall():
+    """JCV 判负仍只由 jcv_score 决定；P/R 只作为额外归因字段与 evidence 附上。"""
+    case = make_case(expected_variables=["age", "salary"])
+    trace = make_trace(extracted_variables=["age"])  # 漏了 salary：Jaccard=1/2=0.5, P=1.0, R=0.5
+    result = LayeredJudge().evaluate(case, trace)
+    assert result.fail_reason == "JCV_Mismatch"   # 判负口径不变
+    assert result.jcv_score == 0.5
+    assert result.jcv_precision == 1.0
+    assert result.jcv_recall == 0.5
+    assert "主要漏抽" in (result.evidence or "")
+
+
+def test_precision_recall_none_when_no_expected_variables():
+    """无预期变量的用例不产生 P/R（保持 None），与 _compute_jcv 返回 None 对齐。"""
+    result = LayeredJudge(client=FakeClient([judge_response(True, True)]), model="judge", samples=1).evaluate(
+        make_case(), make_trace()
+    )
+    assert result.jcv_score is None
+    assert result.jcv_precision is None
+    assert result.jcv_recall is None
 
 
 def test_canary_leak_is_critical_and_fails_standard():

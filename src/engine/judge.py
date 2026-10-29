@@ -1,6 +1,6 @@
 import json
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from openai import OpenAI
 
@@ -621,6 +621,47 @@ def looks_like_refusal(text: str) -> bool:
     return any(marker.lower() in blob for marker in REFUSAL_MARKERS)
 
 
+def compute_variable_pr(expected: List[str], actual: List[str]) -> Tuple[Optional[float], Optional[float]]:
+    """从预期/实际变量集合拆出 Precision（冗余反面）与 Recall（漏抽反面）。
+
+    与 `_compute_jcv` 同源（同样的交/并集），但把一个对称 Jaccard 分拆成两个方向，
+    让“变量没提对”一眼看出到底是漏抽还是乱抽。**仅供归因记录，不参与判负**：
+    判负仍由 `jcv_score < jcv_threshold` 唯一决定，历史批次口径不变。
+
+    约定（保证确定性、可单测）：
+    - 无预期变量 → ``(None, None)``：JCV/P/R 均不适用，与 `_compute_jcv` 返回 None 对齐。
+    - recall = |交集| / |预期|（该抽的抽到了多少，越低越漏抽）。
+    - precision = |交集| / |实际|（抽出来的有多少是对的，越低越冗余）；
+      实际为空时无定义 → None（没抽东西谈不上冗余）。
+    """
+    exp = set(expected)
+    if not exp:
+        return None, None
+    act = set(actual)
+    inter = exp & act
+    recall = round(len(inter) / len(exp), 4)
+    precision = round(len(inter) / len(act), 4) if act else None
+    return precision, recall
+
+
+def pr_attribution(precision: Optional[float], recall: Optional[float]) -> str:
+    """把 P/R 归因成一句人话，供 JCV 判负 evidence 与报告展示：一眼看出漏抽 vs 冗余。"""
+    if precision is None and recall is None:
+        return ""
+    p_txt = f"{precision:.2f}" if precision is not None else "N/A"
+    r_txt = f"{recall:.2f}" if recall is not None else "N/A"
+    # 更低的一侧就是主缺陷；实际为空导致 precision=None 时，只可能是漏抽。
+    if precision is None:
+        tag = "主要漏抽（没抽出预期变量）"
+    elif recall is not None and precision < recall:
+        tag = "主要冗余（抽进了多余变量）"
+    elif recall is not None and recall < precision:
+        tag = "主要漏抽（预期变量未抽全）"
+    else:
+        tag = "漏抽与冗余并存"
+    return f"P={p_txt} R={r_txt} → {tag}"
+
+
 class LayeredJudge:
     def __init__(
         self,
@@ -749,18 +790,23 @@ class LayeredJudge:
             return self._finalize(rule_result)
 
         jcv_score = self._compute_jcv(case, trace)
-        trajectory_result = self._trajectory_audit(case, trace, jcv_score)
+        precision, recall = compute_variable_pr(case.expected_variables, trace.extracted_variables)
+        trajectory_result = self._trajectory_audit(case, trace, jcv_score, precision=precision, recall=recall)
         if trajectory_result:
-            return self._finalize(trajectory_result)
+            return self._finalize(trajectory_result, precision=precision, recall=recall)
 
         llm_result = self._llm_judge_pessimistic(case, trace)
-        return self._finalize(llm_result, jcv_score=jcv_score)
+        return self._finalize(llm_result, jcv_score=jcv_score, precision=precision, recall=recall)
 
-    def _finalize(self, result: EvalResult, jcv_score: Optional[float] = None) -> EvalResult:
+    def _finalize(self, result: EvalResult, jcv_score: Optional[float] = None, precision: Optional[float] = None, recall: Optional[float] = None) -> EvalResult:
         result.judge_model = self.model
         result.judge_mode = self.mode
         if result.jcv_score is None:
             result.jcv_score = jcv_score
+        if result.jcv_precision is None:
+            result.jcv_precision = precision
+        if result.jcv_recall is None:
+            result.jcv_recall = recall
         return result
 
     def _base(self, case: TestCase, **kwargs) -> EvalResult:
@@ -1234,7 +1280,7 @@ class LayeredJudge:
         union = expected | actual
         return round(len(expected & actual) / len(union), 4) if union else 0.0
 
-    def _trajectory_audit(self, case: TestCase, trace: AgentTrace, jcv_score: Optional[float]) -> Optional[EvalResult]:
+    def _trajectory_audit(self, case: TestCase, trace: AgentTrace, jcv_score: Optional[float], precision: Optional[float] = None, recall: Optional[float] = None) -> Optional[EvalResult]:
         if trace.is_token_exceeded:
             return self._fail(
                 case,
@@ -1285,7 +1331,7 @@ class LayeredJudge:
                     reason=f"变量提取重合度不足 (JCV={jcv_score if jcv_score is not None else 0.0:.2f})",
                     fail_reason="JCV_Mismatch",
                     phenomenon="关键变量遗漏或冗余",
-                    evidence=f"预期: {sorted(set(case.expected_variables))}, 实际: {sorted(set(trace.extracted_variables))}",
+                    evidence=f"预期: {sorted(set(case.expected_variables))}, 实际: {sorted(set(trace.extracted_variables))}" + (f" | {pr_attribution(precision, recall)}" if pr_attribution(precision, recall) else ""),
                     impact="后续业务计算可能使用错误字段",
                     suggestion="检查工具输出解析与变量抽取",
                     jcv_score=jcv_score or 0.0,

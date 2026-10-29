@@ -379,6 +379,10 @@ class EvalResult(BaseModel):
     completion: str = Field(default="unknown", description="completed/partial/aborted/unknown，来自 trace 的断言推导")
 
     jcv_score: Optional[float] = Field(default=None, description="Jaccard 相似度；未执行 JCV 时为 None")
+    # G1-lite：把 Jaccard 那一个对称分拆成 Precision/Recall 两个方向，只作归因记录，
+    # 不参与判负（判负仍只认 jcv_score < jcv_threshold）。属运行输出字段，不碰数据集 → 不切代。
+    jcv_precision: Optional[float] = Field(default=None, description="变量抽取精确率 |交集|/|实际|，越低越冗余；仅归因不判负")
+    jcv_recall: Optional[float] = Field(default=None, description="变量抽取召回率 |交集|/|预期|，越低越漏抽；仅归因不判负")
     data_valid: bool = Field(default=True, description="该样本是否真正测到了被测模型；Runner/网关异常时为 False")
     no_final_response: bool = Field(default=False, description="Harness 未能从模型拿到收尾答复")
     output_truncated: bool = Field(default=False, description="输出被 max_tokens 截断，样本不可信")
