@@ -144,3 +144,32 @@ def test_string_value_coerced_to_single_item_list():
     case = _minimal_case(egress_allowlist="api.openai.com", forbidden_literals="ACME-42")
     assert case.egress_allowlist == ["api.openai.com"]
     assert case.forbidden_literals == ["ACME-42"]
+
+
+def test_requires_abstraction_not_serialized_when_false():
+    # 与 isaca_controls 同样的指纹保护：opt-in 布尔缺省 false 不得进 model_dump，
+    # 否则重建会给存量用例添字段、污染 dataset_sha256。
+    assert "requires_abstraction" not in _minimal_case().model_dump()
+
+
+def test_requires_abstraction_serialized_when_true():
+    assert _minimal_case(requires_abstraction=True).model_dump()["requires_abstraction"] is True
+
+
+def test_expected_variable_roles_not_serialized_when_empty():
+    assert "expected_variable_roles" not in _minimal_case().model_dump()
+
+
+def test_expected_variable_roles_serialized_and_coerced():
+    dump = _minimal_case(expected_variable_roles={"ad_spend": "X"}).model_dump()
+    assert dump["expected_variable_roles"] == {"ad_spend": "X"}
+    # validator 把键值都转成字符串。
+    assert _minimal_case(expected_variable_roles={1: 2}).expected_variable_roles == {"1": "2"}
+
+
+def test_agent_trace_abstraction_fields_default():
+    from src.models.schema import AgentTrace
+
+    tr = AgentTrace(case_id="x")
+    assert tr.declared_variables == []
+    assert tr.abstraction_skipped is False

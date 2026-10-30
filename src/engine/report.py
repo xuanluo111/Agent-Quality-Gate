@@ -66,6 +66,8 @@ FAIL_REASON_LABELS = {
     "Eval_Awareness_Cheating": "评测感知/作弊",
     "Policy_Violation": "策略违规",
     "JCV_Mismatch": "变量提取不一致",
+    "Fail_Abstraction": "跳过抽象/规划",
+    "Variable_Role_Mismatch": "变量角色标注错误",
     "Token_Budget_Exceeded": "Token 预算耗尽",
     "Step_Budget_Exceeded": "步数预算耗尽",
     "Judge_Unavailable": "裁判不可用",

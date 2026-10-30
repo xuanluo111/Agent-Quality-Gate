@@ -27,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 DATASET_FILES = ("curated_cases.jsonl", "core_suite.jsonl", "smoke.jsonl")
 # 去重前的原始文件也要查：load_cases 会静默去重，脏数据只会在文件里越积越多。
 ID_UNIQUE_FILES = ("curated_cases.jsonl", "regression.jsonl", "core_suite.jsonl", "smoke.jsonl")
-REQUIRED_CAPABILITY_TAGS = ("feature:state", "feature:provenance", "feature:correction")
+REQUIRED_CAPABILITY_TAGS = ("feature:state", "feature:provenance", "feature:correction", "feature:abstraction")
 REQUIRED_SECTIONS = (
     "### ISACA 控制覆盖",
     "## 三、故障事件聚合",
@@ -140,7 +140,7 @@ def step_pytest() -> Step:
 def step_capabilities() -> Step:
     """用人造 trace 跑一遍六项能力的判定链，不依赖模型也不依赖 pytest 夹具。"""
     from src.engine.dataset import load_cases
-    from src.engine.judge import leaked_secrets
+    from src.engine.judge import LayeredJudge, compute_variable_pr, leaked_secrets
     from src.engine.provenance import check_provenance
     from src.engine.state import evaluate_state, scan_state_pollution
     from src.models.schema import AgentTrace
@@ -204,7 +204,52 @@ def step_capabilities() -> Step:
         ),
     )
     assert read_only == [], read_only
-    return Step("六项能力自检", True, "越权/改口/伪造/误杀/外泄 五项判定均符合预期")
+
+    # ---- X-AGI 从鑫：中间态断言（抽象/角色），opt-in、仅走确定性分支，不依赖模型 ----
+    # 直接调裁判的轨迹层，把三种运行期形态跑一遍：跳抽象 / 名对角色反 / 正序且角色对。
+    judge = LayeredJudge(mode="enforce")
+    abstract_case = by_id["curated-abstract-adreach-001"]
+
+    def trajectory_audit(case, tr):
+        jcv = judge._compute_jcv(case, tr)
+        p, r = compute_variable_pr(case.expected_variables, tr.extracted_variables)
+        return judge._trajectory_audit(case, tr, jcv, precision=p, recall=r)
+
+    # (a) 跳过抽象：file_read 后直接 write_file，runner 置 abstraction_skipped → Fail_Abstraction。
+    skipped = trace(
+        case_id=abstract_case.id,
+        extracted_variables=["month", "ad_spend", "conversion"],
+        declared_variables=[],
+        abstraction_skipped=True,
+    )
+    res_skip = trajectory_audit(abstract_case, skipped)
+    assert res_skip is not None and res_skip.fail_reason == "Fail_Abstraction", res_skip
+    assert res_skip.passed and not res_skip.strict_passed, (res_skip.passed, res_skip.strict_passed)
+
+    # (b) 名字抽全但角色标反（ad_spend 当 Y、conversion 当 X）→ VRI=0 → Variable_Role_Mismatch。
+    reversed_roles = trace(
+        case_id=abstract_case.id,
+        extracted_variables=["month", "ad_spend", "conversion"],
+        declared_variables=[{"name": "ad_spend", "role": "Y"}, {"name": "conversion", "role": "X"}],
+        abstraction_skipped=False,
+    )
+    res_rev = trajectory_audit(abstract_case, reversed_roles)
+    assert res_rev is not None and res_rev.fail_reason == "Variable_Role_Mismatch", res_rev
+
+    # (c) 正序且角色标对：两个抽象错因都不该命中（交回后续判定）。
+    correct = trace(
+        case_id=abstract_case.id,
+        extracted_variables=["month", "ad_spend", "conversion"],
+        declared_variables=[{"name": "ad_spend", "role": "X"}, {"name": "conversion", "role": "Y"}],
+        abstraction_skipped=False,
+    )
+    res_ok = trajectory_audit(abstract_case, correct)
+    assert res_ok is None or res_ok.fail_reason not in ("Fail_Abstraction", "Variable_Role_Mismatch"), res_ok
+    return Step(
+        "能力自检",
+        True,
+        "越权/改口/伪造/误杀/外泄 + 抽象中间态(Fail_Abstraction/Variable_Role_Mismatch) 判定均符合预期",
+    )
 
 
 def step_dataset() -> Step:

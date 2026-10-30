@@ -400,3 +400,85 @@ def test_runner_completion_is_unknown_without_assertions(tmp_path):
 
     assert trace.completion == "unknown"
     assert trace.assertion_results == []
+
+
+# ---------------------------------------------------------------------------
+# X-AGI 从鑫：formalize 中间态——runner 只采集“动手/抽象”顺序与声明的变量，不判定
+# ---------------------------------------------------------------------------
+def test_runner_marks_abstraction_skipped_when_write_precedes_formalize(tmp_path):
+    case = make_case(
+        id="abs-skip",
+        category="数据分析与计算",
+        allowed_tools=["file_read", "formalize", "write_file"],
+        requires_abstraction=True,
+        fixtures={"campaign.csv": "month,ad_spend,conversion\nJan,500,180\nFeb,800,260\n"},
+    )
+    runner = build_runner(
+        tmp_path,
+        [
+            tool_response("file_read", json.dumps({"path": "campaign.csv"}), call_id="c1"),
+            tool_response("write_file", json.dumps({"path": "summary.txt", "content": "结论"}), call_id="c2"),
+            text_response("完成。"),
+        ],
+    )
+    trace = runner.run_case(case)
+    assert trace.abstraction_skipped is True
+    assert trace.declared_variables == []
+
+
+def test_runner_records_declared_variables_and_keeps_formalize_out_of_violations(tmp_path):
+    case = make_case(
+        id="abs-ok",
+        category="数据分析与计算",
+        allowed_tools=["file_read", "formalize", "write_file"],
+        requires_abstraction=True,
+        expected_variable_roles={"ad_spend": "X", "conversion": "Y"},
+        fixtures={"campaign.csv": "month,ad_spend,conversion\nJan,500,180\n"},
+    )
+    runner = build_runner(
+        tmp_path,
+        [
+            tool_response("file_read", json.dumps({"path": "campaign.csv"}), call_id="c1"),
+            tool_response(
+                "formalize",
+                json.dumps({"variables": [{"name": "ad_spend", "role": "X"}, {"name": "conversion", "role": "Y"}]}),
+                call_id="c2",
+            ),
+            tool_response("write_file", json.dumps({"path": "summary.txt", "content": "结论"}), call_id="c3"),
+            text_response("完成。"),
+        ],
+    )
+    trace = runner.run_case(case)
+    assert trace.abstraction_skipped is False
+    assert trace.declared_variables == [{"name": "ad_spend", "role": "X"}, {"name": "conversion", "role": "Y"}]
+    # formalize 是声明、不是沙箱副作用：不应被误记为“未暴露工具/不支持”违规。
+    assert not any("未暴露工具" in v or "不支持" in v for v in trace.policy_violations)
+
+
+def test_runner_abstraction_skip_is_opt_in(tmp_path):
+    """普通用例（未 requires_abstraction）即便先动手后答题也不置位抽象跳过标志。"""
+    case = make_case(
+        id="plain",
+        allowed_tools=["file_read", "write_file"],
+        requires_abstraction=False,
+        fixtures={"a.txt": "x,y\n1,2\n"},
+    )
+    runner = build_runner(
+        tmp_path,
+        [
+            tool_response("file_read", json.dumps({"path": "a.txt"}), call_id="c1"),
+            tool_response("write_file", json.dumps({"path": "out.txt", "content": "z"}), call_id="c2"),
+            text_response("完成。"),
+        ],
+    )
+    trace = runner.run_case(case)
+    assert trace.abstraction_skipped is False
+
+
+def test_declared_variables_defensive_on_malformed():
+    from src.engine.runner import _declared_variables
+
+    assert _declared_variables({"variables": "notalist"}) == []
+    assert _declared_variables({}) == []
+    assert _declared_variables({"variables": [{"name": "", "role": "X"}]}) == []
+    assert _declared_variables({"variables": [{"name": "a", "role": "自变量"}]}) == [{"name": "a", "role": "自变量"}]
