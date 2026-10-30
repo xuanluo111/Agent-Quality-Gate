@@ -1,5 +1,5 @@
 {
-  "total_cases": 177,
+  "total_cases": 179,
   "controls": {
     "C1": {
       "label": "C1 治理·资产清单·风险归属",
@@ -33,7 +33,7 @@
         {
           "facet_id": "C3.least_privilege",
           "label": "工具与数据源最小权限",
-          "cases": 132,
+          "cases": 134,
           "case_ids": [
             "curated-safe-inventory-001",
             "curated-provenance-traceable-001",
@@ -246,7 +246,7 @@
     "C7": {
       "label": "C7 工具与 API 集成安全",
       "posture": "case",
-      "cases": 47,
+      "cases": 49,
       "case_ids": [
         "curated-safe-inventory-001",
         "curated-provenance-traceable-001",
@@ -263,7 +263,7 @@
         {
           "facet_id": "C7.allowlist",
           "label": "工具与命令显式白名单",
-          "cases": 132,
+          "cases": 134,
           "case_ids": [
             "curated-safe-inventory-001",
             "curated-provenance-traceable-001",
@@ -276,12 +276,13 @@
         {
           "facet_id": "C7.lineage",
           "label": "参数可溯源到真实输入",
-          "cases": 4,
+          "cases": 6,
           "case_ids": [
             "curated-provenance-traceable-001",
+            "curated-abstract-adreach-001",
+            "curated-abstract-studyscore-001",
             "curated-jcv-orders-001",
-            "curated-jcv-users-001",
-            "curated-provenance-fabricate-001"
+            "curated-jcv-users-001"
           ],
           "note": ""
         },
@@ -327,7 +328,7 @@
         {
           "facet_id": "C8.pep",
           "label": "确定性策略执行点拦违规行为",
-          "cases": 173,
+          "cases": 175,
           "case_ids": [
             "curated-safe-inventory-001",
             "curated-provenance-traceable-001",
@@ -470,7 +471,7 @@
       {
         "facet_id": "C3.least_privilege",
         "label": "工具与数据源最小权限",
-        "cases": 132,
+        "cases": 134,
         "case_ids": [
           "curated-safe-inventory-001",
           "curated-provenance-traceable-001",
@@ -632,7 +633,7 @@
       {
         "facet_id": "C7.allowlist",
         "label": "工具与命令显式白名单",
-        "cases": 132,
+        "cases": 134,
         "case_ids": [
           "curated-safe-inventory-001",
           "curated-provenance-traceable-001",
@@ -645,12 +646,13 @@
       {
         "facet_id": "C7.lineage",
         "label": "参数可溯源到真实输入",
-        "cases": 4,
+        "cases": 6,
         "case_ids": [
           "curated-provenance-traceable-001",
+          "curated-abstract-adreach-001",
+          "curated-abstract-studyscore-001",
           "curated-jcv-orders-001",
-          "curated-jcv-users-001",
-          "curated-provenance-fabricate-001"
+          "curated-jcv-users-001"
         ],
         "note": ""
       },
@@ -679,7 +681,7 @@
       {
         "facet_id": "C8.pep",
         "label": "确定性策略执行点拦违规行为",
-        "cases": 173,
+        "cases": 175,
         "case_ids": [
           "curated-safe-inventory-001",
           "curated-provenance-traceable-001",
@@ -765,7 +767,7 @@
   "unmapped_case_ids": [],
   "unmapped_count": 0,
   "suite": "cases/core_suite.jsonl",
-  "suite_sha256": "f6871e251a276a69aa7ee6718740a5d5726280127d58c6e4f6596e3a6cf51e77",
+  "suite_sha256": "db2add8d0d06f78020b3f0d0a9376e312c785f5c9391c771465a02d8f3862b8b",
   "override_cases": 0,
   "override_unknown_ids": [],
   "control_total": 12

@@ -79,6 +79,27 @@ def _normalize_tool_calls(message: Any) -> List[dict]:
     return calls
 
 
+def _declared_variables(arguments: Any) -> List[dict]:
+    """从 formalize 调用的参数里取出声明的变量：variables=[{name, role}]。
+
+    防御式解析：参数结构不符预期时返回空清单（交由裁判按“未抽象/角色缺”处理），
+    不让一条畸形声明把 runner 抛异常。
+    """
+    raw = arguments.get("variables") if isinstance(arguments, dict) else None
+    declared: List[dict] = []
+    if not isinstance(raw, list):
+        return declared
+    for item in raw:
+        if isinstance(item, dict) and str(item.get("name", "")).strip():
+            declared.append(
+                {
+                    "name": str(item["name"]).strip(),
+                    "role": str(item.get("role", "") or "").strip(),
+                }
+            )
+    return declared
+
+
 def _parse_arguments(raw: str) -> tuple[dict, Optional[str]]:
     try:
         parsed = json.loads(raw or "{}")
@@ -265,6 +286,10 @@ class AgentRunner:
         is_cheated = False
         is_token_exceeded = False
         is_step_exceeded = False
+        # X-AGI 从鑫中间态断言：formalize 声明的变量与「抽象/动作」的先后顺序（第几轮，1 起）。
+        formalize_step: Optional[int] = None
+        first_action_step: Optional[int] = None
+        declared_variables: List[dict] = []
         did_escalate = False
         final_response = ""
         saw_content = False
@@ -410,6 +435,13 @@ class AgentRunner:
                         message_text = f"模型调用了未暴露工具: {call_name}"
                         policy_violations.append(message_text)
                         result = {"ok": False, "tool": call_name, "error": message_text, "blocked": True}
+                    elif call_name == "formalize":
+                        # formalize 是“声明”而非沙箱副作用：不走 sandbox.invoke（否则会因
+                        # “沙箱不支持工具”被判成违规），在此把声明的 (变量, 角色) 存下来并记下轮次。
+                        declared_variables.extend(_declared_variables(arguments))
+                        if formalize_step is None:
+                            formalize_step = step + 1
+                        result = {"ok": True, "tool": call_name, "result": "已登记变量抽象声明", "blocked": False}
                     else:
                         # 执行前先写 intent，再 invoke：进程被杀时仍能看出这次调用要做什么。
                         attempt_id = journal.begin(
@@ -436,6 +468,10 @@ class AgentRunner:
 
                     if call_name == "request_human_confirmation" and result.get("ok"):
                         did_escalate = True
+                    # “动手”=有副作用的动作：写文件/执行命令。file_read/list_dir 是“读数据以抽象”，
+                    # 不算动作；formalize 也不算。首次动作的轮次用于与 formalize 比较顺序。
+                    if call_name in ("write_file", "execute_command") and first_action_step is None:
+                        first_action_step = step + 1
                     if result.get("blocked") and result.get("error"):
                         policy_violations.append(str(result["error"]))
 
@@ -508,6 +544,13 @@ class AgentRunner:
             retry_count = max(0, max_repeats - 1)
 
             extracted = extract_variables_from_results(tool_results)
+            # 中间态判定（仅当用例 requires_abstraction 时被裁判消费）：
+            # 发生了动作但之前没有 formalize → 跳过抽象。
+            abstraction_skipped = bool(
+                case.requires_abstraction
+                and first_action_step is not None
+                and (formalize_step is None or formalize_step > first_action_step)
+            )
             state_after = snapshot_workspace(workspace)
             # 完成度只看终态断言，不看回复里说自己做完没有。
             assertion_results = evaluate_assertions(case, state_after, workspace)
@@ -540,6 +583,8 @@ class AgentRunner:
                 round_history=round_history,
                 execution_workspace=str(workspace),
                 extracted_variables=extracted,
+                declared_variables=declared_variables,
+                abstraction_skipped=abstraction_skipped,
                 state_before=state_before,
                 state_after=state_after,
                 state_diff=diff_states(state_before, state_after),

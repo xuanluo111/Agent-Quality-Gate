@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-28 14:23:25",
+  "generated_at": "2026-10-30 23:54:08",
   "inputs": [
     "cases/curated_cases.jsonl",
     "cases/regression.jsonl"
@@ -7,7 +7,7 @@
   "missing_inputs": [],
   "core": {
     "path": "cases/core_suite.jsonl",
-    "written": 177,
+    "written": 179,
     "duplicates_removed": 4,
     "input_duplicates": 0,
     "excluded_unsupported": [
@@ -588,33 +588,33 @@
         ]
       }
     ],
-    "sha256": "f6871e251a276a69aa7ee6718740a5d5726280127d58c6e4f6596e3a6cf51e77",
+    "sha256": "db2add8d0d06f78020b3f0d0a9376e312c785f5c9391c771465a02d8f3862b8b",
     "audit": {
-      "total": 177,
+      "total": 179,
       "by_category": {
         "事实可靠性": 2,
         "工具与行动安全": 39,
         "数据与上下文安全": 26,
-        "数据分析与计算": 5,
+        "数据分析与计算": 7,
         "谄媚攻击(Sycophancy)": 22,
         "跨领域风险涌现": 25,
         "身份与授权": 30,
         "运行环境与隔离": 28
       },
       "by_severity": {
-        "medium": 24,
+        "medium": 26,
         "low": 5,
         "critical": 71,
         "high": 77
       },
       "by_sensitivity": {
-        "S1": 172,
+        "S1": 174,
         "S2": 4,
         "S3": 1
       },
-      "expected_variables_cases": 2,
+      "expected_variables_cases": 4,
       "hitl_cases": 8,
-      "fixture_cases": 25,
+      "fixture_cases": 27,
       "unsupported_tools": {},
       "missing_sensitivity": 0,
       "duplicates": 0,
@@ -624,15 +624,15 @@
     "load_reports": [
       {
         "path": "cases/curated_cases.jsonl",
-        "raw_records": 47,
-        "loaded_cases": 47,
+        "raw_records": 49,
+        "loaded_cases": 49,
         "parse_errors": [],
         "validation_errors": [],
         "warnings": [],
         "duplicates": 0,
         "duplicate_conflicts": [],
         "missing_sensitivity": 0,
-        "dataset_sha256": "5136aa3390776715ad07f569270a789ccf41f3dcab38169d7b147cdbec6419ee"
+        "dataset_sha256": "42aab7224c5e23497cc84ec2279921b9622bd6b6afcbcb37a10dc68294531702"
       },
       {
         "path": "cases/regression.jsonl",
@@ -651,13 +651,13 @@
   "smoke": {
     "path": "cases/smoke.jsonl",
     "written": 18,
-    "sha256": "59e80519c3b96808d8aadf3d0c5b0f86481318a076ea0e1d64d21bd89cf587e1",
+    "sha256": "8f455b395738d803f802f4d260218bd9a0ad435133b4987e3721e46748905a7d",
     "audit": {
       "total": 18,
       "by_category": {
+        "数据分析与计算": 5,
         "身份与授权": 5,
-        "数据分析与计算": 4,
-        "工具与行动安全": 3,
+        "工具与行动安全": 2,
         "事实可靠性": 1,
         "数据与上下文安全": 2,
         "跨领域风险涌现": 1,
@@ -665,18 +665,18 @@
         "谄媚攻击(Sycophancy)": 1
       },
       "by_severity": {
+        "medium": 6,
         "high": 6,
-        "medium": 5,
         "low": 2,
-        "critical": 5
+        "critical": 4
       },
       "by_sensitivity": {
         "S1": 16,
         "S2": 2
       },
-      "expected_variables_cases": 2,
-      "hitl_cases": 6,
-      "fixture_cases": 12,
+      "expected_variables_cases": 3,
+      "hitl_cases": 5,
+      "fixture_cases": 13,
       "unsupported_tools": {},
       "missing_sensitivity": 0,
       "duplicates": 0,

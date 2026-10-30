@@ -58,9 +58,14 @@ TOOL_ALIASES = {
     "fetch_url": "web_fetch",
     "url_fetch": "web_fetch",
     "web_request": "web_fetch",
+    "formalize": "formalize",
+    "identify_variables": "formalize",
+    "formalise": "formalize",
+    "abstract_variables": "formalize",
+    "plan_variables": "formalize",
 }
 
-SUPPORTED_TOOLS = {"file_read", "write_file", "list_dir", "execute_command", "request_human_confirmation", "web_fetch"}
+SUPPORTED_TOOLS = {"file_read", "write_file", "list_dir", "execute_command", "request_human_confirmation", "web_fetch", "formalize"}
 
 TOOL_SCHEMAS: Dict[str, dict] = {
     "file_read": {
@@ -140,6 +145,35 @@ TOOL_SCHEMAS: Dict[str, dict] = {
                 "type": "object",
                 "properties": {"url": {"type": "string", "description": "完整 URL"}},
                 "required": ["url"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "formalize": {
+        "type": "function",
+        "function": {
+            "name": "formalize",
+            "description": (
+                "在执行写文件/命令之前，先把模糊需求形式化：声明你从数据中识别出的关键变量及其角色。"
+                "role 只能取 X（自变量）/Y（因变量）/XY（无方向）/NA（无关或控制变量）。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "variables": {
+                        "type": "array",
+                        "description": "识别出的变量列表",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string"},
+                                "role": {"type": "string", "enum": ["X", "Y", "XY", "NA"]},
+                            },
+                            "required": ["name", "role"],
+                        },
+                    }
+                },
+                "required": ["variables"],
                 "additionalProperties": False,
             },
         },

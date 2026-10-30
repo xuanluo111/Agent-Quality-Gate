@@ -21,7 +21,7 @@ from src.engine.dataset import (
 
 DEFAULT_INPUTS = ["cases/curated_cases.jsonl", "cases/regression.jsonl"]
 # 新能力必须出现在冒烟集里，否则只能等全量评测才会暴露回归。
-DEFAULT_MUST_INCLUDE = ["feature:state", "feature:provenance", "feature:correction"]
+DEFAULT_MUST_INCLUDE = ["feature:state", "feature:provenance", "feature:correction", "feature:abstraction"]
 
 
 def dedupe_file(path: Path) -> dict:

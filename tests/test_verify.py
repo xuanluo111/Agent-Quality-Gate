@@ -24,8 +24,10 @@ def test_missing_report_sections_detects_chapter_regression():
     assert missing_report_sections(broken) == ["## 三、故障事件聚合"]
 
 
-def test_missing_capability_tags_requires_all_three():
-    assert missing_capability_tags(["feature:state", "feature:provenance"]) == ["feature:correction"]
+def test_missing_capability_tags_lists_absent_tags():
+    # 不写死个数：缺哪个报哪个，补齐后为空。
+    present = list(REQUIRED_CAPABILITY_TAGS[:-1])
+    assert missing_capability_tags(present) == [REQUIRED_CAPABILITY_TAGS[-1]]
     assert missing_capability_tags(set(REQUIRED_CAPABILITY_TAGS)) == []
 
 
@@ -58,7 +60,7 @@ def test_step_dataset_keeps_manifest_timestamp_when_content_unchanged(tmp_path, 
 
     cases = tmp_path / "cases"
     cases.mkdir()
-    tags = ["feature:state", "feature:provenance", "feature:correction"]
+    tags = list(REQUIRED_CAPABILITY_TAGS)
     (cases / "curated_cases.jsonl").write_text('{"id": "a"}\n', encoding="utf-8")
     (cases / "core_suite.jsonl").write_text(
         json.dumps({"id": "a", "tags": tags}) + "\n", encoding="utf-8"
@@ -96,7 +98,7 @@ def test_step_dataset_fails_when_a_suite_keeps_duplicate_ids(tmp_path, monkeypat
 
     cases = tmp_path / "cases"
     cases.mkdir()
-    tags = ["feature:state", "feature:provenance", "feature:correction"]
+    tags = list(REQUIRED_CAPABILITY_TAGS)
     duplicate = json.dumps({"id": "a", "tags": tags}) + "\n"
     (cases / "curated_cases.jsonl").write_text('{"id": "a"}\n', encoding="utf-8")
     (cases / "core_suite.jsonl").write_text(duplicate * 2, encoding="utf-8")

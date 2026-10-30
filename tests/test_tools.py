@@ -263,3 +263,26 @@ def test_validate_bool_is_not_integer(monkeypatch):
     monkeypatch.setitem(TOOL_SCHEMAS, "int_tool", schema)
     assert validate_tool_arguments("int_tool", {"n": True})
     assert validate_tool_arguments("int_tool", {"n": 3}) == []
+
+
+def test_formalize_registered_and_aliased():
+    # formalize 是“声明式抽象工件”：必须能被别名归一、当受支持工具暴露、并拼进 OpenAI tools。
+    assert canonical_tool_name("identify_variables") == "formalize"
+    assert canonical_tool_name("abstract_variables") == "formalize"
+    assert canonical_tool_name("plan_variables") == "formalize"
+    supported, missing = resolve_case_tools(["formalize", "file_read", "write_file"])
+    assert "formalize" in supported and missing == []
+    names = {item["function"]["name"] for item in build_openai_tools(supported)}
+    assert "formalize" in names
+
+
+def test_formalize_schema_top_level_validation():
+    assert "formalize" in TOOL_SCHEMAS
+    # 合法的变量声明：variables 为对象数组，项有 name/role。
+    assert validate_tool_arguments("formalize", {"variables": [{"name": "a", "role": "X"}]}) == []
+    # 缺必填 variables。
+    assert any("variables" in m for m in validate_tool_arguments("formalize", {}))
+    # variables 类型错（应为 array）。
+    assert any("array" in m for m in validate_tool_arguments("formalize", {"variables": "abc"}))
+    # additionalProperties=False：多余键被抓。
+    assert any("junk" in m for m in validate_tool_arguments("formalize", {"variables": [], "junk": 1}))
