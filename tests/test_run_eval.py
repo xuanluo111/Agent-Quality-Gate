@@ -5,7 +5,7 @@
 """
 import argparse
 
-from run_eval import _attempts_payload
+from run_eval import _attempts_payload, _skipped_result, _trip_reason
 
 from src.config import add_run_args, config_from_args
 from src.engine.stability import merge_attempts
@@ -101,3 +101,61 @@ def test_regression_append_never_writes_the_same_id_twice(tmp_path):
 
     lines = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert len(lines) == 1
+
+
+def test_resilience_args_wire_into_config():
+    """C11 韧性参数走 CLI→config：默认开启退避+熔断，急停默认关（0）。"""
+    default = _config()
+    assert default.max_retries == 3
+    assert default.breaker_threshold == 5
+    assert default.abort_on_critical == 0  # 急停需显式开启，默认不改变既有行为
+    assert default.abort_file == ""
+    tuned = _config(
+        "--max-retries", "0",
+        "--retry-base-delay", "1.5",
+        "--breaker-threshold", "3",
+        "--abort-on-critical", "2",
+        "--abort-file", "/tmp/aqg-abort",
+    )
+    assert tuned.max_retries == 0
+    assert tuned.retry_base_delay == 1.5
+    assert tuned.breaker_threshold == 3
+    assert tuned.abort_on_critical == 2
+    assert tuned.abort_file == "/tmp/aqg-abort"
+
+
+def test_trip_reason_breaker_beats_critical_and_signal():
+    """三条护栏都命中时，熔断优先（网关整体挂了，继续只白烧额度）。"""
+    reason = _trip_reason(
+        consecutive_harness=5, critical_strict=9, breaker_threshold=5,
+        abort_on_critical=3, abort_file_present=True,
+    )
+    assert reason is not None and reason.startswith("熔断")
+
+
+def test_trip_reason_thresholds_gate_each_guard():
+    """阈值 0=关闭对应护栏；未达阈不触发；达阈才停。"""
+    assert _trip_reason(consecutive_harness=9, critical_strict=0, breaker_threshold=0,
+                        abort_on_critical=0, abort_file_present=False) is None
+    assert _trip_reason(consecutive_harness=4, critical_strict=0, breaker_threshold=5,
+                        abort_on_critical=0, abort_file_present=False) is None
+    assert _trip_reason(consecutive_harness=0, critical_strict=2, breaker_threshold=0,
+                        abort_on_critical=3, abort_file_present=False) is None
+    crit = _trip_reason(consecutive_harness=0, critical_strict=3, breaker_threshold=0,
+                        abort_on_critical=3, abort_file_present=False)
+    assert crit is not None and crit.startswith("急停") and "Critical" in crit
+    external = _trip_reason(consecutive_harness=0, critical_strict=0, breaker_threshold=0,
+                            abort_on_critical=0, abort_file_present=True)
+    assert external is not None and "外部信号" in external
+
+
+def test_skipped_result_is_unrated_environment_failure():
+    """停摆未评的用例：统一 Harness_Error、低风险、不当模型失分。"""
+    from tests.conftest import make_case
+
+    case = make_case(id="skipped-one")
+    result = _skipped_result(case, "run-1", "m", "熔断：连续 5 条 Harness_Error")
+    assert result.fail_reason == "Harness_Error"
+    assert result.passed is False and result.strict_passed is False
+    assert result.risk_level == "low"  # 不能把环境停摆标成高危，否则污染高危统计
+    assert result.judge_layer == "harness"

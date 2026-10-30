@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-25 20:38:14",
+  "generated_at": "2026-10-28 14:23:25",
   "inputs": [
     "cases/curated_cases.jsonl",
     "cases/regression.jsonl"
@@ -7,7 +7,7 @@
   "missing_inputs": [],
   "core": {
     "path": "cases/core_suite.jsonl",
-    "written": 161,
+    "written": 177,
     "duplicates_removed": 4,
     "input_duplicates": 0,
     "excluded_unsupported": [
@@ -102,13 +102,6 @@
         "source": "regression",
         "unsupported_tools": [
           "user_management"
-        ]
-      },
-      {
-        "id": "工具与行动安全-755755d247843e3edd787c056d",
-        "source": "regression",
-        "unsupported_tools": [
-          "http_request"
         ]
       },
       {
@@ -325,8 +318,7 @@
         "id": "工具与行动安全-fa094a0c0a193f1616fb2fcfa5",
         "source": "regression",
         "unsupported_tools": [
-          "file_search",
-          "http_request"
+          "file_search"
         ]
       },
       {
@@ -349,13 +341,6 @@
         "source": "regression",
         "unsupported_tools": [
           "network"
-        ]
-      },
-      {
-        "id": "数据与上下文安全-e8f6cedc30335ffeaca159b88b",
-        "source": "regression",
-        "unsupported_tools": [
-          "web_fetch"
         ]
       },
       {
@@ -450,13 +435,6 @@
         "unsupported_tools": [
           "process_manager",
           "resource_config"
-        ]
-      },
-      {
-        "id": "工具与行动安全-46cf88f63b7f9224ca28b56c87",
-        "source": "regression",
-        "unsupported_tools": [
-          "http_request"
         ]
       },
       {
@@ -610,33 +588,33 @@
         ]
       }
     ],
-    "sha256": "299ef92e66b9bd65db3b4fad5a6dc0984d8166e8477c832b65518e733c9482d8",
+    "sha256": "f6871e251a276a69aa7ee6718740a5d5726280127d58c6e4f6596e3a6cf51e77",
     "audit": {
-      "total": 161,
+      "total": 177,
       "by_category": {
         "事实可靠性": 2,
-        "工具与行动安全": 34,
-        "数据与上下文安全": 18,
+        "工具与行动安全": 39,
+        "数据与上下文安全": 26,
         "数据分析与计算": 5,
         "谄媚攻击(Sycophancy)": 22,
         "跨领域风险涌现": 25,
         "身份与授权": 30,
-        "运行环境与隔离": 25
+        "运行环境与隔离": 28
       },
       "by_severity": {
-        "medium": 21,
-        "low": 4,
-        "critical": 61,
-        "high": 75
+        "medium": 24,
+        "low": 5,
+        "critical": 71,
+        "high": 77
       },
       "by_sensitivity": {
-        "S1": 157,
-        "S2": 3,
+        "S1": 172,
+        "S2": 4,
         "S3": 1
       },
       "expected_variables_cases": 2,
       "hitl_cases": 8,
-      "fixture_cases": 16,
+      "fixture_cases": 25,
       "unsupported_tools": {},
       "missing_sensitivity": 0,
       "duplicates": 0,
@@ -646,15 +624,15 @@
     "load_reports": [
       {
         "path": "cases/curated_cases.jsonl",
-        "raw_records": 34,
-        "loaded_cases": 34,
+        "raw_records": 47,
+        "loaded_cases": 47,
         "parse_errors": [],
         "validation_errors": [],
         "warnings": [],
         "duplicates": 0,
         "duplicate_conflicts": [],
         "missing_sensitivity": 0,
-        "dataset_sha256": "f847164e183364d1a4e819d6020bd009f63f9a09b5d4ab6d177c049f94cb13bb"
+        "dataset_sha256": "5136aa3390776715ad07f569270a789ccf41f3dcab38169d7b147cdbec6419ee"
       },
       {
         "path": "cases/regression.jsonl",

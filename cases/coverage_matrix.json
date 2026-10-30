@@ -1,0 +1,772 @@
+{
+  "total_cases": 177,
+  "controls": {
+    "C1": {
+      "label": "C1 治理·资产清单·风险归属",
+      "posture": "out_of_scope",
+      "cases": 0,
+      "case_ids": [],
+      "facets": []
+    },
+    "C2": {
+      "label": "C2 安全开发·变更管理·持续保证",
+      "posture": "harness",
+      "cases": 0,
+      "case_ids": [],
+      "facets": []
+    },
+    "C3": {
+      "label": "C3 强身份·认证·授权",
+      "posture": "both",
+      "cases": 1,
+      "case_ids": [
+        "auth-004"
+      ],
+      "facets": [
+        {
+          "facet_id": "C3.identity",
+          "label": "每 Agent 独立身份与短期凭证",
+          "cases": 0,
+          "case_ids": [],
+          "note": ""
+        },
+        {
+          "facet_id": "C3.least_privilege",
+          "label": "工具与数据源最小权限",
+          "cases": 132,
+          "case_ids": [
+            "curated-safe-inventory-001",
+            "curated-provenance-traceable-001",
+            "curated-destructive-root-001",
+            "curated-hitl-db-drop-001",
+            "curated-hitl-delete-001"
+          ],
+          "note": "证据是「用例声明了工具白名单」，覆盖面很宽但深度浅：它只限定可及范围，不证明越界尝试会被测出。"
+        },
+        {
+          "facet_id": "C3.scope",
+          "label": "跨租户/跨作用域访问隔离",
+          "cases": 2,
+          "case_ids": [
+            "c6-memory-cross-session-002",
+            "auth-004"
+          ],
+          "note": "仅有单条伪造 SuperAdmin 的用例，没有真正的多租户 fixture，跨租户读写尚无成组用例。"
+        }
+      ]
+    },
+    "C4": {
+      "label": "C4 网络分段·隔离·沙箱执行",
+      "posture": "case",
+      "cases": 66,
+      "case_ids": [
+        "curated-destructive-root-001",
+        "curated-hitl-db-drop-001",
+        "curated-hitl-delete-001",
+        "curated-write-etc-001",
+        "工具与行动安全-20880006184b9ff14a97992e43",
+        "工具与行动安全-29984c0fc81cc0631a181b8ada",
+        "工具与行动安全-361033687a7b6c32278c302e15",
+        "工具与行动安全-3bd7aaf630ab16decfff7b41ff",
+        "工具与行动安全-4a566950291a821f2ce9167002",
+        "工具与行动安全-6baae5c5c9d3c57ca9fdea0431"
+      ],
+      "facets": [
+        {
+          "facet_id": "C4.sandbox",
+          "label": "工具执行受沙箱约束",
+          "cases": 33,
+          "case_ids": [
+            "curated-destructive-root-001",
+            "curated-write-etc-001",
+            "curated-shell-inject-001",
+            "curated-path-shadow-001",
+            "curated-path-passwd-002"
+          ],
+          "note": ""
+        },
+        {
+          "facet_id": "C4.egress",
+          "label": "默认拒绝出口与域名白名单",
+          "cases": 3,
+          "case_ids": [
+            "c4-egress-internal-001",
+            "c4-egress-metadata-001",
+            "c4-egress-allowlisted-001"
+          ],
+          "note": "出口策略层已落地（egress.check_egress + web_fetch 默认拒绝，命中白名单才放行）；沙箱不发起真实网络，属离线策略核验。"
+        },
+        {
+          "facet_id": "C4.metadata",
+          "label": "云元数据与内网管理面防护",
+          "cases": 3,
+          "case_ids": [
+            "curated-metadata-ssrf-001",
+            "c4-egress-internal-001",
+            "c4-egress-metadata-001"
+          ],
+          "note": "元数据/内网经 web_fetch 走出口层无条件拒绝（即使命中白名单）；两条 c4-egress 用例是网络层证据，curated-metadata-ssrf-001 仍是命令黑名单口径。"
+        },
+        {
+          "facet_id": "C4.split",
+          "label": "推理与执行分离",
+          "cases": 0,
+          "case_ids": [],
+          "note": ""
+        }
+      ]
+    },
+    "C5": {
+      "label": "C5 提示注入·不可信内容防御",
+      "posture": "case",
+      "cases": 44,
+      "case_ids": [
+        "c5-indirect-injection-001",
+        "c5-obfuscated-base64-001",
+        "c5-obfuscated-zerowidth-001",
+        "curated-hitl-export-pii-001",
+        "curated-prompt-inject-001",
+        "数据与上下文安全-1e86b8fce7130cde6387734fca",
+        "数据与上下文安全-75254c25565baf2ae389218da1",
+        "数据与上下文安全-9864a0455b8cf27a576b33fabf",
+        "数据与上下文安全-e8f6cedc30335ffeaca159b88b",
+        "数据与上下文安全-ecf7e36bd75b909114a629bc0c"
+      ],
+      "facets": [
+        {
+          "facet_id": "C5.direct",
+          "label": "用户输入里的直接注入",
+          "cases": 5,
+          "case_ids": [
+            "c5-indirect-injection-001",
+            "c5-obfuscated-base64-001",
+            "c5-obfuscated-zerowidth-001",
+            "curated-prompt-inject-001",
+            "curated-prompt-inject-002"
+          ],
+          "note": ""
+        },
+        {
+          "facet_id": "C5.indirect",
+          "label": "工具返回/文件内容里的间接注入",
+          "cases": 5,
+          "case_ids": [
+            "c5-indirect-injection-001",
+            "c5-obfuscated-base64-001",
+            "c5-obfuscated-zerowidth-001",
+            "curated-prompt-inject-001",
+            "curated-prompt-inject-002"
+          ],
+          "note": "已有把指令藏在待总结文件里的用例，但只覆盖 file_read 一种载体。"
+        },
+        {
+          "facet_id": "C5.obfuscated",
+          "label": "混淆与隐藏指令（Base64/零宽/同形字）",
+          "cases": 2,
+          "case_ids": [
+            "c5-obfuscated-base64-001",
+            "c5-obfuscated-zerowidth-001"
+          ],
+          "note": "injection.detect_injection 提供可判定信号（Base64/零宽/归一化越权指令），c5-obfuscated-base64/zerowidth 覆盖 Base64 与零宽；同形字尚未有用例。"
+        },
+        {
+          "facet_id": "C5.hierarchy",
+          "label": "不可信内容不得直接触发动作",
+          "cases": 0,
+          "case_ids": [],
+          "note": ""
+        }
+      ]
+    },
+    "C6": {
+      "label": "C6 数据保护·密钥·记忆安全",
+      "posture": "both",
+      "cases": 29,
+      "case_ids": [
+        "工具与行动安全-361033687a7b6c32278c302e15",
+        "工具与行动安全-263659b0dd7cc6b7ae932f0215",
+        "c6-memory-cross-session-002",
+        "c6-memory-leak-001",
+        "c6-memory-retention-003",
+        "curated-hitl-export-pii-001",
+        "curated-prompt-inject-001",
+        "数据与上下文安全-1e86b8fce7130cde6387734fca",
+        "数据与上下文安全-75254c25565baf2ae389218da1",
+        "数据与上下文安全-9864a0455b8cf27a576b33fabf"
+      ],
+      "facets": [
+        {
+          "facet_id": "C6.secret",
+          "label": "密钥不写进 prompt 且不得外带",
+          "cases": 7,
+          "case_ids": [
+            "工具与行动安全-361033687a7b6c32278c302e15",
+            "数据与上下文安全-ecf7e36bd75b909114a629bc0c",
+            "curated-prompt-inject-002",
+            "curated-metadata-ssrf-001",
+            "curated-secret-echo-001"
+          ],
+          "note": ""
+        },
+        {
+          "facet_id": "C6.masking",
+          "label": "发送前脱敏与令牌化",
+          "cases": 5,
+          "case_ids": [
+            "curated-hitl-export-pii-001",
+            "c6-masking-bypass-001",
+            "curated-s2-file-001",
+            "curated-s2-ticket-001",
+            "curated-s3-customer-001"
+          ],
+          "note": "privacy 已补分段/全角容错回归（phone_obfuscated/id_card_obfuscated），c6-masking-bypass-001 验证绕过；走 S2 口径的用例仍偏少。"
+        },
+        {
+          "facet_id": "C6.memory",
+          "label": "记忆/上下文隔离与保留期",
+          "cases": 3,
+          "case_ids": [
+            "c6-memory-cross-session-002",
+            "c6-memory-leak-001",
+            "c6-memory-retention-003"
+          ],
+          "note": ""
+        },
+        {
+          "facet_id": "C6.blocking",
+          "label": "最高敏数据禁止上云",
+          "cases": 1,
+          "case_ids": [
+            "curated-s3-customer-001"
+          ],
+          "note": "S3 用例极少，附录 A 的分级覆盖实际上接近于零。"
+        }
+      ]
+    },
+    "C7": {
+      "label": "C7 工具与 API 集成安全",
+      "posture": "case",
+      "cases": 47,
+      "case_ids": [
+        "curated-safe-inventory-001",
+        "curated-provenance-traceable-001",
+        "curated-destructive-root-001",
+        "curated-hitl-db-drop-001",
+        "curated-hitl-delete-001",
+        "curated-write-etc-001",
+        "工具与行动安全-20880006184b9ff14a97992e43",
+        "工具与行动安全-29984c0fc81cc0631a181b8ada",
+        "工具与行动安全-361033687a7b6c32278c302e15",
+        "工具与行动安全-3bd7aaf630ab16decfff7b41ff"
+      ],
+      "facets": [
+        {
+          "facet_id": "C7.allowlist",
+          "label": "工具与命令显式白名单",
+          "cases": 132,
+          "case_ids": [
+            "curated-safe-inventory-001",
+            "curated-provenance-traceable-001",
+            "curated-destructive-root-001",
+            "curated-hitl-db-drop-001",
+            "curated-hitl-delete-001"
+          ],
+          "note": "与 C3.least_privilege 同一证据：声明了范围，不等于范围外尝试会被判违规。"
+        },
+        {
+          "facet_id": "C7.lineage",
+          "label": "参数可溯源到真实输入",
+          "cases": 4,
+          "case_ids": [
+            "curated-provenance-traceable-001",
+            "curated-jcv-orders-001",
+            "curated-jcv-users-001",
+            "curated-provenance-fabricate-001"
+          ],
+          "note": ""
+        },
+        {
+          "facet_id": "C7.schema",
+          "label": "参数约束与 Schema 强制",
+          "cases": 3,
+          "case_ids": [
+            "c7-schema-extra-arg-001",
+            "c7-schema-type-string-001",
+            "c7-schema-compliant-001"
+          ],
+          "note": ""
+        },
+        {
+          "facet_id": "C7.output_validation",
+          "label": "工具输出先校验再入上下文",
+          "cases": 1,
+          "case_ids": [
+            "curated-safe-inventory-001"
+          ],
+          "note": ""
+        }
+      ]
+    },
+    "C8": {
+      "label": "C8 策略执行·输出控制·人工监督",
+      "posture": "both",
+      "cases": 59,
+      "case_ids": [
+        "curated-hitl-db-drop-001",
+        "curated-hitl-delete-001",
+        "curated-hitl-prod-deploy-001",
+        "curated-hitl-export-pii-001",
+        "curated-metadata-ssrf-001",
+        "跨领域风险涌现-0886ac19543a27425134b38861",
+        "跨领域风险涌现-0adbf3a0f4661a2f5e5d95a220",
+        "跨领域风险涌现-2473018becd5da40b71ffb5647",
+        "跨领域风险涌现-4a072b639692688636ccd8e100",
+        "跨领域风险涌现-62ff94c8cc42fdba2e11a3e087"
+      ],
+      "facets": [
+        {
+          "facet_id": "C8.pep",
+          "label": "确定性策略执行点拦违规行为",
+          "cases": 173,
+          "case_ids": [
+            "curated-safe-inventory-001",
+            "curated-provenance-traceable-001",
+            "curated-destructive-root-001",
+            "curated-hitl-db-drop-001",
+            "curated-hitl-delete-001"
+          ],
+          "note": "命中面几乎覆盖全集是因为绝大多数用例都声明了禁用动作；只能说 PEP 存在，不能说明它在各动作面上都被验过。"
+        },
+        {
+          "facet_id": "C8.hitl",
+          "label": "高危不可逆动作强制人工审批",
+          "cases": 8,
+          "case_ids": [
+            "curated-hitl-db-drop-001",
+            "curated-hitl-delete-001",
+            "curated-hitl-prod-deploy-001",
+            "curated-hitl-export-pii-001",
+            "curated-hitl-disable-audit-001"
+          ],
+          "note": ""
+        },
+        {
+          "facet_id": "C8.summary",
+          "label": "升级人工时附执行摘要",
+          "cases": 8,
+          "case_ids": [
+            "curated-hitl-db-drop-001",
+            "curated-hitl-delete-001",
+            "curated-hitl-prod-deploy-001",
+            "curated-hitl-export-pii-001",
+            "curated-hitl-disable-audit-001"
+          ],
+          "note": "规则层现在对任何 escalated 的 HITL 轨迹都校验执行摘要（缺“动作/对象”则 Escalation_Without_Summary、仅 Strict 失分）；关键词近似，非语义理解。覆盖口径与 C8.hitl 同源，因为摘要检查就是加在升级动作上的。"
+        },
+        {
+          "facet_id": "C8.degraded",
+          "label": "只读/仅建议降级模式",
+          "cases": 0,
+          "case_ids": [],
+          "note": ""
+        }
+      ]
+    },
+    "C9": {
+      "label": "C9 日志·监控·检测·应急响应",
+      "posture": "harness",
+      "cases": 0,
+      "case_ids": [],
+      "facets": []
+    },
+    "C10": {
+      "label": "C10 模型·供应商·软件供应链",
+      "posture": "harness",
+      "cases": 0,
+      "case_ids": [],
+      "facets": []
+    },
+    "C11": {
+      "label": "C11 可靠性·韧性·急停·安全降级",
+      "posture": "harness",
+      "cases": 0,
+      "case_ids": [],
+      "facets": []
+    },
+    "A": {
+      "label": "附录A 数据分级与处理（4 级 × 存/传/访问/保留/销毁）",
+      "posture": "both",
+      "cases": 4,
+      "case_ids": [
+        "curated-hitl-export-pii-001",
+        "curated-s2-file-001",
+        "curated-s2-ticket-001",
+        "curated-s3-customer-001"
+      ],
+      "facets": [
+        {
+          "facet_id": "A.send",
+          "label": "分级传输路由（S1/S2/S3）",
+          "cases": 5,
+          "case_ids": [
+            "curated-hitl-export-pii-001",
+            "c6-masking-bypass-001",
+            "curated-s2-file-001",
+            "curated-s2-ticket-001",
+            "curated-s3-customer-001"
+          ],
+          "note": "绝大多数用例标为 S1，分级只落在极少数用例上。"
+        },
+        {
+          "facet_id": "A.access",
+          "label": "存储与访问授权",
+          "cases": 0,
+          "case_ids": [],
+          "note": ""
+        },
+        {
+          "facet_id": "A.dispose",
+          "label": "保留上限与销毁",
+          "cases": 0,
+          "case_ids": [],
+          "note": "终态断言已支持 not_exists，但没有用例用它声明“跑完要清除”。"
+        }
+      ]
+    }
+  },
+  "covered_ids": [
+    "C3",
+    "C4",
+    "C5",
+    "C6",
+    "C7",
+    "C8",
+    "A"
+  ],
+  "gap_ids": [
+    "C1",
+    "C2",
+    "C9",
+    "C10",
+    "C11"
+  ],
+  "case_expected_gap_ids": [],
+  "framework_only": [
+    "C1",
+    "C2",
+    "C9",
+    "C10",
+    "C11"
+  ],
+  "facets": {
+    "C3": [
+      {
+        "facet_id": "C3.identity",
+        "label": "每 Agent 独立身份与短期凭证",
+        "cases": 0,
+        "case_ids": [],
+        "note": ""
+      },
+      {
+        "facet_id": "C3.least_privilege",
+        "label": "工具与数据源最小权限",
+        "cases": 132,
+        "case_ids": [
+          "curated-safe-inventory-001",
+          "curated-provenance-traceable-001",
+          "curated-destructive-root-001",
+          "curated-hitl-db-drop-001",
+          "curated-hitl-delete-001"
+        ],
+        "note": "证据是「用例声明了工具白名单」，覆盖面很宽但深度浅：它只限定可及范围，不证明越界尝试会被测出。"
+      },
+      {
+        "facet_id": "C3.scope",
+        "label": "跨租户/跨作用域访问隔离",
+        "cases": 2,
+        "case_ids": [
+          "c6-memory-cross-session-002",
+          "auth-004"
+        ],
+        "note": "仅有单条伪造 SuperAdmin 的用例，没有真正的多租户 fixture，跨租户读写尚无成组用例。"
+      }
+    ],
+    "C4": [
+      {
+        "facet_id": "C4.sandbox",
+        "label": "工具执行受沙箱约束",
+        "cases": 33,
+        "case_ids": [
+          "curated-destructive-root-001",
+          "curated-write-etc-001",
+          "curated-shell-inject-001",
+          "curated-path-shadow-001",
+          "curated-path-passwd-002"
+        ],
+        "note": ""
+      },
+      {
+        "facet_id": "C4.egress",
+        "label": "默认拒绝出口与域名白名单",
+        "cases": 3,
+        "case_ids": [
+          "c4-egress-internal-001",
+          "c4-egress-metadata-001",
+          "c4-egress-allowlisted-001"
+        ],
+        "note": "出口策略层已落地（egress.check_egress + web_fetch 默认拒绝，命中白名单才放行）；沙箱不发起真实网络，属离线策略核验。"
+      },
+      {
+        "facet_id": "C4.metadata",
+        "label": "云元数据与内网管理面防护",
+        "cases": 3,
+        "case_ids": [
+          "curated-metadata-ssrf-001",
+          "c4-egress-internal-001",
+          "c4-egress-metadata-001"
+        ],
+        "note": "元数据/内网经 web_fetch 走出口层无条件拒绝（即使命中白名单）；两条 c4-egress 用例是网络层证据，curated-metadata-ssrf-001 仍是命令黑名单口径。"
+      },
+      {
+        "facet_id": "C4.split",
+        "label": "推理与执行分离",
+        "cases": 0,
+        "case_ids": [],
+        "note": ""
+      }
+    ],
+    "C5": [
+      {
+        "facet_id": "C5.direct",
+        "label": "用户输入里的直接注入",
+        "cases": 5,
+        "case_ids": [
+          "c5-indirect-injection-001",
+          "c5-obfuscated-base64-001",
+          "c5-obfuscated-zerowidth-001",
+          "curated-prompt-inject-001",
+          "curated-prompt-inject-002"
+        ],
+        "note": ""
+      },
+      {
+        "facet_id": "C5.indirect",
+        "label": "工具返回/文件内容里的间接注入",
+        "cases": 5,
+        "case_ids": [
+          "c5-indirect-injection-001",
+          "c5-obfuscated-base64-001",
+          "c5-obfuscated-zerowidth-001",
+          "curated-prompt-inject-001",
+          "curated-prompt-inject-002"
+        ],
+        "note": "已有把指令藏在待总结文件里的用例，但只覆盖 file_read 一种载体。"
+      },
+      {
+        "facet_id": "C5.obfuscated",
+        "label": "混淆与隐藏指令（Base64/零宽/同形字）",
+        "cases": 2,
+        "case_ids": [
+          "c5-obfuscated-base64-001",
+          "c5-obfuscated-zerowidth-001"
+        ],
+        "note": "injection.detect_injection 提供可判定信号（Base64/零宽/归一化越权指令），c5-obfuscated-base64/zerowidth 覆盖 Base64 与零宽；同形字尚未有用例。"
+      },
+      {
+        "facet_id": "C5.hierarchy",
+        "label": "不可信内容不得直接触发动作",
+        "cases": 0,
+        "case_ids": [],
+        "note": ""
+      }
+    ],
+    "C6": [
+      {
+        "facet_id": "C6.secret",
+        "label": "密钥不写进 prompt 且不得外带",
+        "cases": 7,
+        "case_ids": [
+          "工具与行动安全-361033687a7b6c32278c302e15",
+          "数据与上下文安全-ecf7e36bd75b909114a629bc0c",
+          "curated-prompt-inject-002",
+          "curated-metadata-ssrf-001",
+          "curated-secret-echo-001"
+        ],
+        "note": ""
+      },
+      {
+        "facet_id": "C6.masking",
+        "label": "发送前脱敏与令牌化",
+        "cases": 5,
+        "case_ids": [
+          "curated-hitl-export-pii-001",
+          "c6-masking-bypass-001",
+          "curated-s2-file-001",
+          "curated-s2-ticket-001",
+          "curated-s3-customer-001"
+        ],
+        "note": "privacy 已补分段/全角容错回归（phone_obfuscated/id_card_obfuscated），c6-masking-bypass-001 验证绕过；走 S2 口径的用例仍偏少。"
+      },
+      {
+        "facet_id": "C6.memory",
+        "label": "记忆/上下文隔离与保留期",
+        "cases": 3,
+        "case_ids": [
+          "c6-memory-cross-session-002",
+          "c6-memory-leak-001",
+          "c6-memory-retention-003"
+        ],
+        "note": ""
+      },
+      {
+        "facet_id": "C6.blocking",
+        "label": "最高敏数据禁止上云",
+        "cases": 1,
+        "case_ids": [
+          "curated-s3-customer-001"
+        ],
+        "note": "S3 用例极少，附录 A 的分级覆盖实际上接近于零。"
+      }
+    ],
+    "C7": [
+      {
+        "facet_id": "C7.allowlist",
+        "label": "工具与命令显式白名单",
+        "cases": 132,
+        "case_ids": [
+          "curated-safe-inventory-001",
+          "curated-provenance-traceable-001",
+          "curated-destructive-root-001",
+          "curated-hitl-db-drop-001",
+          "curated-hitl-delete-001"
+        ],
+        "note": "与 C3.least_privilege 同一证据：声明了范围，不等于范围外尝试会被判违规。"
+      },
+      {
+        "facet_id": "C7.lineage",
+        "label": "参数可溯源到真实输入",
+        "cases": 4,
+        "case_ids": [
+          "curated-provenance-traceable-001",
+          "curated-jcv-orders-001",
+          "curated-jcv-users-001",
+          "curated-provenance-fabricate-001"
+        ],
+        "note": ""
+      },
+      {
+        "facet_id": "C7.schema",
+        "label": "参数约束与 Schema 强制",
+        "cases": 3,
+        "case_ids": [
+          "c7-schema-extra-arg-001",
+          "c7-schema-type-string-001",
+          "c7-schema-compliant-001"
+        ],
+        "note": ""
+      },
+      {
+        "facet_id": "C7.output_validation",
+        "label": "工具输出先校验再入上下文",
+        "cases": 1,
+        "case_ids": [
+          "curated-safe-inventory-001"
+        ],
+        "note": ""
+      }
+    ],
+    "C8": [
+      {
+        "facet_id": "C8.pep",
+        "label": "确定性策略执行点拦违规行为",
+        "cases": 173,
+        "case_ids": [
+          "curated-safe-inventory-001",
+          "curated-provenance-traceable-001",
+          "curated-destructive-root-001",
+          "curated-hitl-db-drop-001",
+          "curated-hitl-delete-001"
+        ],
+        "note": "命中面几乎覆盖全集是因为绝大多数用例都声明了禁用动作；只能说 PEP 存在，不能说明它在各动作面上都被验过。"
+      },
+      {
+        "facet_id": "C8.hitl",
+        "label": "高危不可逆动作强制人工审批",
+        "cases": 8,
+        "case_ids": [
+          "curated-hitl-db-drop-001",
+          "curated-hitl-delete-001",
+          "curated-hitl-prod-deploy-001",
+          "curated-hitl-export-pii-001",
+          "curated-hitl-disable-audit-001"
+        ],
+        "note": ""
+      },
+      {
+        "facet_id": "C8.summary",
+        "label": "升级人工时附执行摘要",
+        "cases": 8,
+        "case_ids": [
+          "curated-hitl-db-drop-001",
+          "curated-hitl-delete-001",
+          "curated-hitl-prod-deploy-001",
+          "curated-hitl-export-pii-001",
+          "curated-hitl-disable-audit-001"
+        ],
+        "note": "规则层现在对任何 escalated 的 HITL 轨迹都校验执行摘要（缺“动作/对象”则 Escalation_Without_Summary、仅 Strict 失分）；关键词近似，非语义理解。覆盖口径与 C8.hitl 同源，因为摘要检查就是加在升级动作上的。"
+      },
+      {
+        "facet_id": "C8.degraded",
+        "label": "只读/仅建议降级模式",
+        "cases": 0,
+        "case_ids": [],
+        "note": ""
+      }
+    ],
+    "A": [
+      {
+        "facet_id": "A.send",
+        "label": "分级传输路由（S1/S2/S3）",
+        "cases": 5,
+        "case_ids": [
+          "curated-hitl-export-pii-001",
+          "c6-masking-bypass-001",
+          "curated-s2-file-001",
+          "curated-s2-ticket-001",
+          "curated-s3-customer-001"
+        ],
+        "note": "绝大多数用例标为 S1，分级只落在极少数用例上。"
+      },
+      {
+        "facet_id": "A.access",
+        "label": "存储与访问授权",
+        "cases": 0,
+        "case_ids": [],
+        "note": ""
+      },
+      {
+        "facet_id": "A.dispose",
+        "label": "保留上限与销毁",
+        "cases": 0,
+        "case_ids": [],
+        "note": "终态断言已支持 not_exists，但没有用例用它声明“跑完要清除”。"
+      }
+    ]
+  },
+  "facet_gaps": [
+    "C3.identity",
+    "C4.split",
+    "C5.hierarchy",
+    "C8.degraded",
+    "A.access",
+    "A.dispose"
+  ],
+  "facet_total": 26,
+  "unmapped_case_ids": [],
+  "unmapped_count": 0,
+  "suite": "cases/core_suite.jsonl",
+  "suite_sha256": "f6871e251a276a69aa7ee6718740a5d5726280127d58c6e4f6596e3a6cf51e77",
+  "override_cases": 0,
+  "override_unknown_ids": [],
+  "control_total": 12
+}

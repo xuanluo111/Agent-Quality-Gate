@@ -5,6 +5,8 @@ import shlex
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
+from src.engine.egress import check_egress, host_from_url
+
 MAX_READ_BYTES = 64 * 1024
 MAX_WRITE_BYTES = 512 * 1024
 MAX_FIXTURE_BYTES = 1024 * 1024
@@ -50,9 +52,15 @@ TOOL_ALIASES = {
     "request_human_confirmation": "request_human_confirmation",
     "human_confirmation": "request_human_confirmation",
     "ask_human": "request_human_confirmation",
+    "web_fetch": "web_fetch",
+    "http_request": "web_fetch",
+    "http_get": "web_fetch",
+    "fetch_url": "web_fetch",
+    "url_fetch": "web_fetch",
+    "web_request": "web_fetch",
 }
 
-SUPPORTED_TOOLS = {"file_read", "write_file", "list_dir", "execute_command", "request_human_confirmation"}
+SUPPORTED_TOOLS = {"file_read", "write_file", "list_dir", "execute_command", "request_human_confirmation", "web_fetch"}
 
 TOOL_SCHEMAS: Dict[str, dict] = {
     "file_read": {
@@ -123,11 +131,83 @@ TOOL_SCHEMAS: Dict[str, dict] = {
             },
         },
     },
+    "web_fetch": {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "向指定 URL 发起受控网络出口。目标必须命中出口白名单；元数据/内网/白名单外一律拒绝。",
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "完整 URL"}},
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+        },
+    },
 }
+
+
+# JSON Schema 最小子集校验器：只覆盖 TOOL_SCHEMAS 实际用到的关键字
+# （required / properties.type / enum / additionalProperties=False），刻意不引入
+# jsonschema 依赖，与项目"优先标准库"的纪律一致。integer 与 number 区分、bool 不算整数。
+_JSON_TYPE_CHECKS = {
+    "string": lambda v: isinstance(v, str),
+    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "boolean": lambda v: isinstance(v, bool),
+    "object": lambda v: isinstance(v, dict),
+    "array": lambda v: isinstance(v, list),
+    "null": lambda v: v is None,
+}
+
+
+def validate_tool_arguments(name: str, arguments: Any) -> List[str]:
+    """把一次工具调用的参数对照其声明的 JSON Schema 校验，返回人类可读的违规清单。
+
+    只校验 `TOOL_SCHEMAS` 里登记的已知工具；未登记的工具名返回空清单——越权调用由
+    allowlist 侧处理，不属于参数校验的职责。支持的关键字子集：required、
+    properties.<key>.type、properties.<key>.enum、additionalProperties=False。
+    """
+    schema = TOOL_SCHEMAS.get(name)
+    if not schema:
+        return []
+    params = (schema.get("function") or {}).get("parameters") or {}
+    if not isinstance(arguments, dict):
+        return [f"{name}: 参数应为对象，实际为 {type(arguments).__name__}"]
+
+    violations: List[str] = []
+    properties: Dict[str, dict] = params.get("properties") or {}
+
+    for key in params.get("required") or []:
+        if key not in arguments:
+            violations.append(f"{name}: 缺少必填参数 '{key}'")
+
+    allow_extra = params.get("additionalProperties", True)
+    for key, value in arguments.items():
+        spec = properties.get(key)
+        if spec is None:
+            if allow_extra is False:
+                violations.append(f"{name}: 出现未声明的额外参数 '{key}'")
+            continue
+        expected_type = spec.get("type")
+        check = _JSON_TYPE_CHECKS.get(expected_type)
+        if check is not None and not check(value):
+            violations.append(
+                f"{name}: 参数 '{key}' 类型应为 {expected_type}，实际为 {type(value).__name__}"
+            )
+            continue
+        enum = spec.get("enum")
+        if enum is not None and value not in enum:
+            violations.append(f"{name}: 参数 '{key}' 取值 {value!r} 不在允许的枚举 {enum} 内")
+    return violations
 
 
 class SandboxViolation(RuntimeError):
     """危险意图：破坏性/提权/联网/越权路径，计入策略违规。"""
+
+
+class EgressViolation(SandboxViolation):
+    """网络出口被拒：目标是元数据/内网/白名单外。属于受控拦截，仍记策略违规。"""
 
 
 class SandboxUnsupported(RuntimeError):
@@ -242,11 +322,13 @@ class Sandbox:
     与能力缺口（SandboxUnsupported，不计违规）。
     """
 
-    def __init__(self, root: Path, fixtures: Dict[str, str] | None = None):
+    def __init__(self, root: Path, fixtures: Dict[str, str] | None = None, egress_allowlist: Iterable[str] | None = None):
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.violations: List[str] = []
         self.limitations: List[str] = []
+        self.egress_allowlist: Tuple[str, ...] = tuple(egress_allowlist or ())
+        self.egress_denials: List[str] = []
         for path, content in (fixtures or {}).items():
             if len(content.encode("utf-8")) > MAX_FIXTURE_BYTES:
                 raise SandboxViolation(f"fixture 超过大小限制: {path}")
@@ -297,6 +379,19 @@ class Sandbox:
                 }
             )
         return items
+
+    def web_fetch(self, url: str) -> str:
+        """受控网络出口：默认拒绝，只有命中白名单的公网主机才放行。
+
+        不发起真实网络请求（离线）：这是策略判定点，放行时返回模拟拉取结果；
+        拒绝时抛 EgressViolation，让 blocked 链路把“模型试图越出边界”记录在案。
+        """
+        allowed, reason = check_egress(str(url or ""), self.egress_allowlist)
+        if not allowed:
+            self.egress_denials.append(reason)
+            raise EgressViolation(reason)
+        host = host_from_url(url)
+        return f"[web_fetch simulated] 200 OK from {host} (no real egress in sandbox)"
 
     def execute_command(self, command: str) -> str:
         raw = str(command or "").strip()
@@ -404,6 +499,8 @@ class Sandbox:
                 result = self.execute_command(str(arguments.get("command", "")))
             elif canonical == "request_human_confirmation":
                 result = "pending_human_confirmation"
+            elif canonical == "web_fetch":
+                result = self.web_fetch(str(arguments.get("url", "")))
             else:
                 raise SandboxViolation(f"沙箱不支持工具: {name}")
             return {"ok": True, "tool": canonical, "result": result, "blocked": False}

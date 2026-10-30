@@ -187,14 +187,77 @@ def test_runner_marks_api_exception_as_failure(tmp_path):
 
 
 def test_runner_keeps_rate_limit_out_of_policy_violations(tmp_path):
-    """429 是环境故障，写进 policy_violations 会被 judge 判成越权尝试。"""
+    """429 是环境故障，写进 policy_violations 会被 judge 判成越权尝试。
+
+    本例只验“429 归类”、不验退避；关掉重试（max_retries=0）让首个 429 直接传播，
+    否则退避会耗尽单条 fake 队列后抛“no fake response left”，把归类断言带偏。退避行为
+    由下方 test_runner_backoff_* 专项覆盖。
+    """
     case = make_case(id="rate-limit", allowed_tools=[], fixtures={})
     error = "Error code: 429 - {'error': {'message': '达到用户并发上限(10)', 'code': 'rate_limit_exceeded'}}"
-    runner = build_runner(tmp_path, [RuntimeError(error)])
+    runner = build_runner(tmp_path, [RuntimeError(error)], max_retries=0)
     trace = runner.run_case(case)
     assert trace.is_success is False
     assert "429" in trace.error_message
     assert trace.policy_violations == []
+
+
+def test_runner_backoff_retries_transient_then_succeeds(tmp_path):
+    """429/超时是瞬态故障：先指数退避重试，恢复后不应烧成 Harness_Error。"""
+    delays = []
+    case = make_case(id="blip", allowed_tools=[], fixtures={})
+    responses = [
+        RuntimeError("Error code: 429 - rate_limit_exceeded"),
+        RuntimeError("Request timed out."),
+        text_response("done"),
+    ]
+    runner = build_runner(
+        tmp_path,
+        responses,
+        max_retries=3,
+        retry_base_delay=1.0,
+        sleep_fn=delays.append,
+    )
+    trace = runner.run_case(case)
+    assert trace.is_success is True
+    assert trace.agent_response == "done"
+    assert len(delays) == 2  # 两次瞬态失败→两次退避
+    assert trace.backoff_ms > 0  # 累计等待可观测（区分环境慢与模型慢）
+    assert all(0.4 <= d <= 2.0 for d in delays)  # base*2^k 经 jitter 后的区间
+
+
+def test_runner_backoff_gives_up_after_max_retries(tmp_path):
+    """持续瞬态故障：退避到上限后如实失败，错误保留 429 不被吞。"""
+    delays = []
+    case = make_case(id="stuck", allowed_tools=[], fixtures={})
+    responses = [RuntimeError("Error code: 429 - rate limit") for _ in range(4)]
+    runner = build_runner(
+        tmp_path,
+        responses,
+        max_retries=3,
+        retry_base_delay=0.5,
+        sleep_fn=delays.append,
+    )
+    trace = runner.run_case(case)
+    assert trace.is_success is False
+    assert "429" in trace.error_message
+    assert len(delays) == 3  # max_retries=3 → 退避 3 次后第 4 次直接报错
+
+
+def test_runner_backoff_skips_non_transient_errors(tmp_path):
+    """内容审核 403 重试无效：不能白等，退避只针对瞬态故障。"""
+    delays = []
+    case = make_case(id="blocked", allowed_tools=[], fixtures={})
+    err = "Error code: 403 - {'error': {'code': 'content_policy_violation'}}"
+    runner = build_runner(
+        tmp_path,
+        [RuntimeError(err)],
+        max_retries=3,
+        sleep_fn=delays.append,
+    )
+    trace = runner.run_case(case)
+    assert trace.is_success is False
+    assert delays == []  # 非瞬态，零退避
 
 
 def test_runner_records_retry_storm(tmp_path):

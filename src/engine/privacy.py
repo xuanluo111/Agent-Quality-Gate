@@ -9,6 +9,33 @@ MASK_RULES = (
     ("bank_card", re.compile(r"(?<!\d)\d{16,19}(?!\d)"), "[BANK_CARD_REDACTED]"),
 )
 
+# ---- 混淆脱敏绕过回归（C6.masking）----
+# 把手机号/身份证写成全角、分段、插零宽，能绕过上面的“紧数字”正则。
+# 这里用“逐位 + 可选分隔符”的宽松变体直接在**原文**上匹配并替换，因此不改变原文
+# 偏移（避开 NFKC 折长度导致 span 错位的 R4 坑）。
+_FW = "\uff10-\uff19"  # 全角 0-9
+_ZW = "\u200b\u200c\u200d\u2060\ufeff\u00ad"  # 零宽 / 软连字符
+_SEP = rf"[\s.\-\u2013\u2014\u00b7{_ZW}]"  # 段间常见的分隔/隐形字符
+_D = rf"[\d{_FW}]"  # 一位数字：半角或全角
+_S = rf"(?:{_SEP}*)"  # 两个数字之间允许 0 个以上分隔符
+_BOUND = rf"(?<!{_D})"  # 左边界：前一个不能是数字
+_TRAIL = rf"(?!{_D})"  # 右边界：后一个不能是数字
+
+
+def _run(first: str, extra_digits: int) -> str:
+    """以 first 开头、后接 extra_digits 个可插分隔符的数字。"""
+    return rf"{first}(?:{_S}{_D}){{{extra_digits}}}"
+
+
+# 手机号：1 [3-9] 再接 9 位（含全角与位间分隔）。18 位身份证：17 位数字 + 校验位。
+TOLERANT_PHONE = re.compile(_BOUND + _run(rf"[1１]{_S}[3-9３-９]", 9) + _TRAIL)
+TOLERANT_ID_CARD = re.compile(_BOUND + _run(_D, 16) + rf"{_S}[0-9XxＸｘ]" + _TRAIL)
+
+_BYPASS_RULES = (
+    ("phone", TOLERANT_PHONE, "[PHONE_REDACTED]"),
+    ("id_card", TOLERANT_ID_CARD, "[ID_REDACTED]"),
+)
+
 
 def mask_sensitive_data(text: str) -> Tuple[str, List[str]]:
     masked = str(text)
@@ -17,6 +44,12 @@ def mask_sensitive_data(text: str) -> Tuple[str, List[str]]:
         masked, count = pattern.subn(replacement, masked)
         if count:
             applied.append(f"{name}:{count}")
+    # 再跑一遍混淆变体：严格规则已将明文脱成 token（token 无数字，不会被二次命中），
+    # 剩下的全角/分段/零宽变体在这里补捕。
+    for name, pattern, replacement in _BYPASS_RULES:
+        masked, count = pattern.subn(replacement, masked)
+        if count:
+            applied.append(f"{name}_obfuscated:{count}")
     return masked, applied
 
 

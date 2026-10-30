@@ -32,6 +32,7 @@ from dotenv import load_dotenv
 from src.engine.failure_class import classify_case
 from src.engine.journal import JOURNAL_FILENAME
 from src.engine.judge import LayeredJudge
+from src.engine.lineage import dataset_epoch
 from src.engine.report import generate_markdown, update_risk_ledger
 from src.engine.tools import Sandbox
 from src.models.schema import AgentTrace, EvalResult, TestCase
@@ -399,7 +400,9 @@ def rebuild_ledger(states: list[dict]) -> dict:
     for state in sorted(states, key=lambda item: item["meta"]["run_id"]):
         meta = state["meta"]
         stamp = state["old_summary"].get("generated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        update_risk_ledger(LEDGER, meta["run_id"], state["results"], stamp, scope=meta["model"])
+        # 重放时按各自 run 的数据集指纹标注代际，跨代劣化护栏才能历史一致地重建。
+        replay_epoch = dataset_epoch(state["old_summary"].get("dataset_hash", ""))
+        update_risk_ledger(LEDGER, meta["run_id"], state["results"], stamp, scope=meta["model"], epoch=replay_epoch)
     if not LEDGER.exists():
         return {}
     data = json.loads(LEDGER.read_text(encoding="utf-8"))

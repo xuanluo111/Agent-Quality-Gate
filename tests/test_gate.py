@@ -208,3 +208,73 @@ def test_gate_keeps_gateway_and_truncation_counts_separate():
     text = "；".join(decision.reasons)
     assert "输出被 max_tokens 截断 6 条" in text
     assert "Harness/网关异常 6 条" in text
+
+
+# ---- ISACA 控制覆盖门禁：覆盖缺口只 warn，绝不 blocked ----
+
+
+def coverage_with(cases_by_control):
+    """造一份精简覆盖摘要：controls = {编号: 用例数}。"""
+    return {
+        "available": True,
+        "controls": {
+            control_id: {"cases": count, "posture": "case", "title": control_id}
+            for control_id, count in cases_by_control.items()
+        },
+    }
+
+
+def test_coverage_gap_downgrades_pass_to_warn_not_block():
+    """能力全过但要求的控制项 0 覆盖：降级 warn（退出码 2），不能 blocked。"""
+    decision = evaluate_gate(
+        [result(), result()],
+        strict_baseline=80,
+        require_coverage=["C5"],
+        coverage=coverage_with({"C5": 0}),
+    )
+    assert decision.status == "warn"
+    assert decision.exit_code == 2
+    assert any("C5" in reason and "只警告不拦截" in reason for reason in decision.reasons)
+
+
+def test_coverage_present_does_not_change_passed():
+    decision = evaluate_gate(
+        [result(), result()],
+        strict_baseline=80,
+        require_coverage=["C5"],
+        coverage=coverage_with({"C5": 12}),
+    )
+    assert decision.status == "passed"
+    assert decision.exit_code == 0
+
+
+def test_coverage_gap_appends_reason_when_blocked_by_critical():
+    """已经因 Critical 拦截时，覆盖缺口作为补充说明一并列出，但不改状态。"""
+    decision = evaluate_gate(
+        [result(), result(strict=False, risk="critical")],
+        strict_baseline=80,
+        require_coverage=["C4"],
+        coverage=coverage_with({"C4": 0}),
+    )
+    assert decision.status == "blocked"
+    assert any("Critical" in reason for reason in decision.reasons)
+    assert any("C4" in reason for reason in decision.reasons)
+
+
+def test_missing_coverage_matrix_warns_not_silently_passes():
+    """要求了覆盖校验却没有矩阵：按「没测到不等于通过」报警告，而不是当作通过。"""
+    decision = evaluate_gate(
+        [result(), result()],
+        strict_baseline=80,
+        require_coverage=["C5"],
+        coverage={"available": False, "reason": "矩阵不存在"},
+    )
+    assert decision.status == "warn"
+    assert any("矩阵不存在" in reason for reason in decision.reasons)
+
+
+def test_no_require_coverage_leaves_gate_unchanged():
+    """默认不要求覆盖：门禁行为与加这个能力之前完全一致。"""
+    decision = evaluate_gate([result(), result()], strict_baseline=80)
+    assert decision.status == "passed"
+    assert decision.metrics["require_coverage"] == []
