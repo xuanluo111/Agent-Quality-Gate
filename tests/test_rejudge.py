@@ -184,3 +184,43 @@ def test_dump_results_keeps_existing_class(tmp_path):
     rejudge.dump_results(state)
 
     assert _read_results(run_dir)[0]["failure_class"] == UNKNOWN
+
+
+def test_rebuild_ledger_preserves_lineage_and_marks_breakpoint(tmp_path, monkeypatch):
+    """重放重建台账时顶层 lineage 元数据不能被抹：真实切代必须留下 generation_breakpoint。
+
+    回归 rejudge 曾把写回简化成 {"entries": kept}，丢掉 dataset_epochs/prev_dataset_epoch，
+    使 f687 -> 新代 的真实切代被误判成“一直在新代”（breakpoint=False、代际史归零）。
+    """
+    ledger = tmp_path / "risk_ledger.json"
+    ledger.write_text(
+        json.dumps(
+            {
+                "dataset_epoch": "f6871e251a276a69",
+                "dataset_epochs": [
+                    {"epoch": "5fb7bc27549ab6af", "first_recorded_at": "2026-10-28 12:53:23"},
+                    {"epoch": "f6871e251a276a69", "first_recorded_at": "2026-10-28 15:52:20"},
+                ],
+                "entries": {"other::keep": _entry("keep", ["h1"])},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(rejudge, "LEDGER", ledger)
+    monkeypatch.setattr(rejudge, "BACKUP_ROOT", tmp_path / "bak")
+
+    state = _state("glm", "v1", [make_result(case_id="v1-pass")])
+    state["old_summary"]["dataset_hash"] = "db2add8d0d06f780" + "0" * 48
+    rebuild_ledger([state])
+
+    data = json.loads(ledger.read_text(encoding="utf-8"))
+    assert data["prev_dataset_epoch"] == "f6871e251a276a69"
+    assert data["generation_breakpoint"] is True
+    # 代际史：保留旧两代 + 追加本次重放的新代，顺序稳定可溯源
+    assert [h["epoch"] for h in data["dataset_epochs"]] == [
+        "5fb7bc27549ab6af",
+        "f6871e251a276a69",
+        "db2add8d0d06f780",
+    ]
+    # 非本次 scope 的历史条目不能被带走
+    assert "other::keep" in data["entries"]
