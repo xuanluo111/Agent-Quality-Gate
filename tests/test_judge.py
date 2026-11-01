@@ -1098,3 +1098,24 @@ def test_compute_role_accuracy():
     assert compute_role_accuracy(exp, [{"name": "a", "role": "Y"}, {"name": "a", "role": "X"}, {"name": "b", "role": "Y"}]) == 1.0
     # 中文角色归一化后相等
     assert compute_role_accuracy({"a": "X"}, [{"name": "a", "role": "自变量"}]) == 1.0
+
+
+def test_compute_role_accuracy_ignores_name_gloss():
+    """回归：模型给变量名加中文注释不应被判漏标（真批次 mimo/spark-4b 假阳性）。"""
+    exp = {"ad_spend": "X", "conversion": "Y"}
+    # 半/全角括号、斜杠、冒号注释 + 大小写差异 → 去注释后仍匹配，角色对 → 1.0
+    assert compute_role_accuracy(exp, [
+        {"name": "ad_spend(投放花费)", "role": "X"},
+        {"name": "conversion（成交数/转化）", "role": "Y"},
+    ]) == 1.0
+    assert compute_role_accuracy(exp, [
+        {"name": "AD_SPEND ：花费", "role": "X"},
+        {"name": "conversion", "role": "Y"},
+    ]) == 1.0
+    # 但纯中文名不含基础列名 → 仍算漏标（真该判负，如 spark-1.7b）
+    assert compute_role_accuracy(exp, [
+        {"name": "投放投入", "role": "X"},
+        {"name": "成交产出", "role": "Y"},
+    ]) == 0.0
+    # 不做子串误配：ad_spend_total 不应匹配 ad_spend
+    assert compute_role_accuracy({"ad_spend": "X"}, [{"name": "ad_spend_total", "role": "X"}]) == 0.0

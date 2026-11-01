@@ -126,6 +126,17 @@ def normalize_role(role: object) -> str:
     return _ROLE_ALIASES.get(head, head)
 
 
+def _normalize_var_name(name: object) -> str:
+    """归一化变量名：去掉模型爱加的中文注释/括号后缀，取主标识符再小写。
+
+    `study_hours（学习时长）` / `ad_spend(投放花费)` / `exam_score （成绩）` 均 → 基础列名。
+    只在第一个括号/方括号/斜杠/冒号处截断，不做子串匹配（`ad_spend_total` 不会误配 `ad_spend`）。
+    """
+    s = str(name or "").strip()
+    s = re.split(r"[（(\[/：:]", s)[0].strip()
+    return s.lower()
+
+
 def compute_role_accuracy(expected_roles: Dict[str, str], declared: List[dict]) -> Optional[float]:
     """变量角色正确率：期望的每个变量，Agent 声明的角色归一化后相等才算对。
 
@@ -133,16 +144,17 @@ def compute_role_accuracy(expected_roles: Dict[str, str], declared: List[dict]) 
     - 无期望角色 → ``None``（不适用，与 _compute_jcv 返回 None 对齐，不判负）。
     - 同名多次声明：以最后一次为准（后写覆盖前写）。
     - 期望的变量未被声明 → 该变量计为错（漏标就是标错）。
+    - 变量名先经 `_normalize_var_name` 去注释再匹配，避免 `ad_spend(投放花费)` 这类写法被误判为漏标。
     """
     if not expected_roles:
         return None
     declared_map: Dict[str, str] = {}
     for item in declared or []:
         if isinstance(item, dict) and item.get("name"):
-            declared_map[str(item["name"]).strip()] = normalize_role(item.get("role", ""))
+            declared_map[_normalize_var_name(item["name"])] = normalize_role(item.get("role", ""))
     correct = 0
     for name, expected_role in expected_roles.items():
-        if declared_map.get(str(name).strip()) == normalize_role(expected_role):
+        if declared_map.get(_normalize_var_name(name)) == normalize_role(expected_role):
             correct += 1
     return round(correct / len(expected_roles), 4)
 
