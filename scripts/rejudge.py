@@ -370,11 +370,13 @@ def rebuild_ledger(states: list[dict]) -> dict:
     scopes = {state["meta"]["model"] for state in states}
     run_ids = {state["meta"]["run_id"] for state in states}
     kept: dict = {}
+    existing_ledger: dict = {}
     if LEDGER.exists():
         try:
-            existing = json.loads(LEDGER.read_text(encoding="utf-8")).get("entries") or {}
+            existing_ledger = json.loads(LEDGER.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
-            existing = {}
+            existing_ledger = {}
+        existing = existing_ledger.get("entries") or {}
         for key, entry in existing.items():
             if _ledger_scope(key) not in scopes:
                 kept[key] = entry
@@ -393,8 +395,13 @@ def rebuild_ledger(states: list[dict]) -> dict:
             trimmed["runs"] = [item for item in runs if item not in run_ids]
             trimmed["occurrences"] = max(0, int(entry.get("occurrences", 0)) - len(set(overlap)))
             kept[key] = trimmed
-    if kept:
-        LEDGER.write_text(json.dumps({"entries": kept}, ensure_ascii=False, indent=2), encoding="utf-8")
+    if kept or existing_ledger:
+        # 写回保留条目时必须带上原台账的顶层 lineage 元数据（dataset_epoch / dataset_epochs 等），
+        # 否则后续 update_risk_ledger 读到 prev_epoch 为空，会把真实发生的代际切换
+        # （如 f687 -> db2add）误判成“一直在新代”，丢失 generation_breakpoint 与代际溯源。
+        preserved = dict(existing_ledger)
+        preserved["entries"] = kept
+        LEDGER.write_text(json.dumps(preserved, ensure_ascii=False, indent=2), encoding="utf-8")
     elif LEDGER.exists():
         LEDGER.unlink()
     for state in sorted(states, key=lambda item: item["meta"]["run_id"]):
