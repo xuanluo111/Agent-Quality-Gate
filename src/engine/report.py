@@ -715,9 +715,20 @@ def update_risk_ledger(
     else:
         ledger = {}
     entries = ledger.get("entries") or {}
-    # 保留上一代标识与历史 epoch 列表，写回时用于断点判定与代际滘源。
+    # 保留上一代标识与历史 epoch 列表，写回时用于断点判定与代际溯源。
     prev_epoch = str(ledger.get("dataset_epoch") or "")
     epoch_history = list(ledger.get("dataset_epochs") or [])
+    # 同一代内连续更新（一个批次跑多个模型）会把 prev 读成当前代，把首个 run 写下的
+    # 切代断点抹成 False：台账顶层沿用已有的上一代与断点标记（溯源语义），
+    # 保证“本代是从哪一切过来的”在整个代期内稳定可见；
+    # 而 switched_this_run 保留事件语义（本次更新是不是切代那一次），供报告横幅使用，
+    # 同代重跑不会反复刷“数据集换代”噪声。
+    switched_this_run = is_breakpoint(prev_epoch, epoch)
+    if epoch and prev_epoch == epoch:
+        prev_epoch = str(ledger.get("prev_dataset_epoch") or "")
+        generation_breakpoint = bool(ledger.get("generation_breakpoint")) or switched_this_run
+    else:
+        generation_breakpoint = switched_this_run
     items = list(results)
 
     for result in items:
@@ -781,7 +792,7 @@ def update_risk_ledger(
     statuses = Counter(entry.get("status", "open") for entry in entries.values())
     open_risks = [entry for entry in entries.values() if entry.get("status") in {"open", "regressed"}]
     open_risks.sort(key=lambda item: (RISK_ORDER.get(item.get("risk_level", ""), 9), item.get("case_id", "")))
-    # 代际历史：只在 epoch 非空且未曾记录时追加，供跨批次分组与滘源回溯。
+    # 代际历史：只在 epoch 非空且未曾记录时追加，供跨批次分组与溯源回溯。
     if epoch and epoch not in {str(h.get("epoch") or "") for h in epoch_history}:
         epoch_history.append({"epoch": epoch, "first_recorded_at": generated_at})
     ledger = {
@@ -789,7 +800,8 @@ def update_risk_ledger(
         "last_run_id": run_id,
         "dataset_epoch": epoch,
         "prev_dataset_epoch": prev_epoch,
-        "generation_breakpoint": is_breakpoint(prev_epoch, epoch),
+        "generation_breakpoint": generation_breakpoint,
+        "switched_this_run": switched_this_run,
         "dataset_epochs": epoch_history,
         "entries": entries,
         "status_counts": dict(statuses),
@@ -852,7 +864,8 @@ def generate_markdown(
             epoch=cur_epoch,
         )
         summary["prev_dataset_epoch"] = str(ledger.get("prev_dataset_epoch") or "")
-        summary["generation_breakpoint"] = bool(ledger.get("generation_breakpoint", False))
+        # 报告横幅走事件语义：只有真正发生切代的那一次 run 才喊“数据集换代”。
+        summary["generation_breakpoint"] = bool(ledger.get("switched_this_run", False))
     else:
         # 重判场景：台账由单独的重建流程负责，这里只读不算，避免同一批结果被重复计数。
         try:
@@ -868,7 +881,7 @@ def generate_markdown(
         "status_counts": ledger.get("status_counts", {}),
         "dataset_epoch": ledger.get("dataset_epoch", cur_epoch),
         "dataset_epochs": ledger.get("dataset_epochs", []),
-        "generation_breakpoint": summary["generation_breakpoint"],
+        "generation_breakpoint": bool(ledger.get("generation_breakpoint", summary["generation_breakpoint"])),
     }
 
     failures = [item for item in results if not item.strict_passed]
