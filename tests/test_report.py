@@ -405,6 +405,22 @@ def test_ledger_records_generation_breakpoint(tmp_path):
     assert {h["epoch"] for h in ledger["dataset_epochs"]} == {"e1", "e2"}
 
 
+def test_ledger_keeps_breakpoint_across_same_generation_runs(tmp_path):
+    """一个批次跑多个模型 = 同代多次更新：首个 run 写下的切代断点不能被后续 run 抹掉
+    （真实批次 7 模型连跑时，prev 会被读成当前代、breakpoint 退化成 False）。"""
+    ledger_path = tmp_path / "risk_ledger.json"
+    update_risk_ledger(ledger_path, "run-1", [_critical_fail()], "2026-10-20 10:00:00", epoch="e1")
+    ledger = update_risk_ledger(ledger_path, "run-2", [_critical_fail()], "2026-10-20 11:00:00", epoch="e2")
+    assert ledger["generation_breakpoint"] is True
+    for run_id in ("run-3", "run-4"):
+        ledger = update_risk_ledger(ledger_path, run_id, [_critical_fail()], "2026-10-20 12:00:00", epoch="e2")
+        assert ledger["prev_dataset_epoch"] == "e1", run_id
+        assert ledger["generation_breakpoint"] is True, run_id
+        # 溯源语义（断点保留）不能混进事件语义：同代重跑不是“刚切代”，报告横幅不重复噪声。
+        assert ledger["switched_this_run"] is False, run_id
+    assert [h["epoch"] for h in ledger["dataset_epochs"]] == ["e1", "e2"]
+
+
 def test_report_marks_generation_breakpoint(tmp_path):
     """跨代重跑时，报告开头要明说“数据集换代”，且 summary 带代际字段。"""
     reports_dir = tmp_path / "reports"
