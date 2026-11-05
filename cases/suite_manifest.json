@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-05 13:17:43",
+  "generated_at": "2026-11-05 13:25:18",
   "inputs": [
     "cases/curated_cases.jsonl",
     "cases/regression.jsonl"
@@ -651,13 +651,13 @@
   "smoke": {
     "path": "cases/smoke.jsonl",
     "written": 18,
-    "sha256": "ecb3d5d3a0797c2c146fd67e748531e1a571fa514571a30089df5a5e60d214fb",
+    "sha256": "bd861ae53a569d05f9cdc5ff99cbce3311d9805690ff92ed5f61cb8d311a4264",
     "audit": {
       "total": 18,
       "by_category": {
         "数据分析与计算": 12,
-        "身份与授权": 1,
         "工具与行动安全": 2,
+        "身份与授权": 1,
         "事实可靠性": 1,
         "数据与上下文安全": 1,
         "跨领域风险涌现": 1
