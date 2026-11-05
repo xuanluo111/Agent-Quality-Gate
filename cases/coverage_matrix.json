@@ -1,5 +1,5 @@
 {
-  "total_cases": 179,
+  "total_cases": 204,
   "controls": {
     "C1": {
       "label": "C1 治理·资产清单·风险归属",
@@ -33,7 +33,7 @@
         {
           "facet_id": "C3.least_privilege",
           "label": "工具与数据源最小权限",
-          "cases": 134,
+          "cases": 159,
           "case_ids": [
             "curated-safe-inventory-001",
             "curated-provenance-traceable-001",
@@ -58,24 +58,24 @@
     "C4": {
       "label": "C4 网络分段·隔离·沙箱执行",
       "posture": "case",
-      "cases": 66,
+      "cases": 74,
       "case_ids": [
         "curated-destructive-root-001",
         "curated-hitl-db-drop-001",
         "curated-hitl-delete-001",
         "curated-write-etc-001",
+        "mut-rmtmp-enc-001",
+        "mut-rmtmp-role-001",
+        "mut-rmtmp-urgent-001",
+        "mut-rmtmp-voice-001",
         "工具与行动安全-20880006184b9ff14a97992e43",
-        "工具与行动安全-29984c0fc81cc0631a181b8ada",
-        "工具与行动安全-361033687a7b6c32278c302e15",
-        "工具与行动安全-3bd7aaf630ab16decfff7b41ff",
-        "工具与行动安全-4a566950291a821f2ce9167002",
-        "工具与行动安全-6baae5c5c9d3c57ca9fdea0431"
+        "工具与行动安全-29984c0fc81cc0631a181b8ada"
       ],
       "facets": [
         {
           "facet_id": "C4.sandbox",
           "label": "工具执行受沙箱约束",
-          "cases": 33,
+          "cases": 37,
           "case_ids": [
             "curated-destructive-root-001",
             "curated-write-etc-001",
@@ -119,18 +119,18 @@
     "C5": {
       "label": "C5 提示注入·不可信内容防御",
       "posture": "case",
-      "cases": 44,
+      "cases": 47,
       "case_ids": [
         "c5-indirect-injection-001",
         "c5-obfuscated-base64-001",
         "c5-obfuscated-zerowidth-001",
         "curated-hitl-export-pii-001",
         "curated-prompt-inject-001",
+        "mut-inject-file-001",
+        "mut-inject-voice-001",
         "数据与上下文安全-1e86b8fce7130cde6387734fca",
         "数据与上下文安全-75254c25565baf2ae389218da1",
-        "数据与上下文安全-9864a0455b8cf27a576b33fabf",
-        "数据与上下文安全-e8f6cedc30335ffeaca159b88b",
-        "数据与上下文安全-ecf7e36bd75b909114a629bc0c"
+        "数据与上下文安全-9864a0455b8cf27a576b33fabf"
       ],
       "facets": [
         {
@@ -181,7 +181,7 @@
     "C6": {
       "label": "C6 数据保护·密钥·记忆安全",
       "posture": "both",
-      "cases": 29,
+      "cases": 36,
       "case_ids": [
         "工具与行动安全-361033687a7b6c32278c302e15",
         "工具与行动安全-263659b0dd7cc6b7ae932f0215",
@@ -190,21 +190,21 @@
         "c6-memory-retention-003",
         "curated-hitl-export-pii-001",
         "curated-prompt-inject-001",
-        "数据与上下文安全-1e86b8fce7130cde6387734fca",
-        "数据与上下文安全-75254c25565baf2ae389218da1",
-        "数据与上下文安全-9864a0455b8cf27a576b33fabf"
+        "mut-inject-file-001",
+        "mut-inject-voice-001",
+        "数据与上下文安全-1e86b8fce7130cde6387734fca"
       ],
       "facets": [
         {
           "facet_id": "C6.secret",
           "label": "密钥不写进 prompt 且不得外带",
-          "cases": 7,
+          "cases": 11,
           "case_ids": [
             "工具与行动安全-361033687a7b6c32278c302e15",
             "数据与上下文安全-ecf7e36bd75b909114a629bc0c",
             "curated-prompt-inject-002",
             "curated-metadata-ssrf-001",
-            "curated-secret-echo-001"
+            "mut-cred-debug-001"
           ],
           "note": ""
         },
@@ -246,7 +246,7 @@
     "C7": {
       "label": "C7 工具与 API 集成安全",
       "posture": "case",
-      "cases": 49,
+      "cases": 63,
       "case_ids": [
         "curated-safe-inventory-001",
         "curated-provenance-traceable-001",
@@ -254,16 +254,16 @@
         "curated-hitl-db-drop-001",
         "curated-hitl-delete-001",
         "curated-write-etc-001",
-        "工具与行动安全-20880006184b9ff14a97992e43",
-        "工具与行动安全-29984c0fc81cc0631a181b8ada",
-        "工具与行动安全-361033687a7b6c32278c302e15",
-        "工具与行动安全-3bd7aaf630ab16decfff7b41ff"
+        "mut-rmtmp-enc-001",
+        "mut-rmtmp-role-001",
+        "mut-rmtmp-urgent-001",
+        "mut-rmtmp-voice-001"
       ],
       "facets": [
         {
           "facet_id": "C7.allowlist",
           "label": "工具与命令显式白名单",
-          "cases": 134,
+          "cases": 159,
           "case_ids": [
             "curated-safe-inventory-001",
             "curated-provenance-traceable-001",
@@ -276,13 +276,13 @@
         {
           "facet_id": "C7.lineage",
           "label": "参数可溯源到真实输入",
-          "cases": 6,
+          "cases": 14,
           "case_ids": [
             "curated-provenance-traceable-001",
             "curated-abstract-adreach-001",
-            "curated-abstract-studyscore-001",
-            "curated-jcv-orders-001",
-            "curated-jcv-users-001"
+            "curated-abstract-gloss-001",
+            "curated-abstract-lag-001",
+            "curated-abstract-mediation-001"
           ],
           "note": ""
         },
@@ -311,24 +311,24 @@
     "C8": {
       "label": "C8 策略执行·输出控制·人工监督",
       "posture": "both",
-      "cases": 59,
+      "cases": 63,
       "case_ids": [
         "curated-hitl-db-drop-001",
         "curated-hitl-delete-001",
         "curated-hitl-prod-deploy-001",
         "curated-hitl-export-pii-001",
         "curated-metadata-ssrf-001",
+        "mut-cred-debug-001",
+        "mut-cred-decode-001",
         "跨领域风险涌现-0886ac19543a27425134b38861",
         "跨领域风险涌现-0adbf3a0f4661a2f5e5d95a220",
-        "跨领域风险涌现-2473018becd5da40b71ffb5647",
-        "跨领域风险涌现-4a072b639692688636ccd8e100",
-        "跨领域风险涌现-62ff94c8cc42fdba2e11a3e087"
+        "跨领域风险涌现-2473018becd5da40b71ffb5647"
       ],
       "facets": [
         {
           "facet_id": "C8.pep",
           "label": "确定性策略执行点拦违规行为",
-          "cases": 175,
+          "cases": 200,
           "case_ids": [
             "curated-safe-inventory-001",
             "curated-provenance-traceable-001",
@@ -471,7 +471,7 @@
       {
         "facet_id": "C3.least_privilege",
         "label": "工具与数据源最小权限",
-        "cases": 134,
+        "cases": 159,
         "case_ids": [
           "curated-safe-inventory-001",
           "curated-provenance-traceable-001",
@@ -496,7 +496,7 @@
       {
         "facet_id": "C4.sandbox",
         "label": "工具执行受沙箱约束",
-        "cases": 33,
+        "cases": 37,
         "case_ids": [
           "curated-destructive-root-001",
           "curated-write-etc-001",
@@ -585,13 +585,13 @@
       {
         "facet_id": "C6.secret",
         "label": "密钥不写进 prompt 且不得外带",
-        "cases": 7,
+        "cases": 11,
         "case_ids": [
           "工具与行动安全-361033687a7b6c32278c302e15",
           "数据与上下文安全-ecf7e36bd75b909114a629bc0c",
           "curated-prompt-inject-002",
           "curated-metadata-ssrf-001",
-          "curated-secret-echo-001"
+          "mut-cred-debug-001"
         ],
         "note": ""
       },
@@ -633,7 +633,7 @@
       {
         "facet_id": "C7.allowlist",
         "label": "工具与命令显式白名单",
-        "cases": 134,
+        "cases": 159,
         "case_ids": [
           "curated-safe-inventory-001",
           "curated-provenance-traceable-001",
@@ -646,13 +646,13 @@
       {
         "facet_id": "C7.lineage",
         "label": "参数可溯源到真实输入",
-        "cases": 6,
+        "cases": 14,
         "case_ids": [
           "curated-provenance-traceable-001",
           "curated-abstract-adreach-001",
-          "curated-abstract-studyscore-001",
-          "curated-jcv-orders-001",
-          "curated-jcv-users-001"
+          "curated-abstract-gloss-001",
+          "curated-abstract-lag-001",
+          "curated-abstract-mediation-001"
         ],
         "note": ""
       },
@@ -681,7 +681,7 @@
       {
         "facet_id": "C8.pep",
         "label": "确定性策略执行点拦违规行为",
-        "cases": 175,
+        "cases": 200,
         "case_ids": [
           "curated-safe-inventory-001",
           "curated-provenance-traceable-001",
@@ -767,7 +767,7 @@
   "unmapped_case_ids": [],
   "unmapped_count": 0,
   "suite": "cases/core_suite.jsonl",
-  "suite_sha256": "db2add8d0d06f78020b3f0d0a9376e312c785f5c9391c771465a02d8f3862b8b",
+  "suite_sha256": "2fd4a5646accb8d750722a13bf666e79b1e6e8d9bd1643116c2d2bdea769b6df",
   "override_cases": 0,
   "override_unknown_ids": [],
   "control_total": 12
