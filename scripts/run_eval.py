@@ -324,6 +324,7 @@ def main() -> int:
         run_id=config.run_id,
         max_rounds=config.max_rounds,
         token_budget=config.token_budget,
+        case_time_budget=config.case_time_budget,
         max_tokens=config.max_tokens,
         temperature=config.temperature,
         timeout=config.request_timeout,
