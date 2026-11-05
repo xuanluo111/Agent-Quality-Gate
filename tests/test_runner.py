@@ -176,6 +176,60 @@ def test_runner_token_budget(tmp_path):
     assert trace.agent_response == "answer"
 
 
+def test_runner_time_budget_triggers_at_step_boundary(tmp_path):
+    """G6：轮次边界墙钟超限即熔断，剩余轮次与后续模型调用不再执行。"""
+    case = make_case(id="slowcase")
+    ticks = iter([0.0, 10.0, 500.0, 600.0])  # 起点 → 第 1 步前 → 第 2 步前（超限）
+    runner = build_runner(
+        tmp_path,
+        [
+            tool_response("file_read", json.dumps({"path": "users.csv"})),
+            tool_response("file_read", json.dumps({"path": "users.csv"})),
+        ],
+        case_time_budget=480,
+        clock_fn=lambda: next(ticks),
+    )
+    trace = runner.run_case(case)
+    assert trace.is_time_exceeded is True
+    assert trace.is_step_exceeded is False
+    assert trace.tool_call_count == 1  # 第二次调用前的边界就停了
+
+
+def test_runner_time_budget_not_triggered_within_budget(tmp_path):
+    case = make_case()
+    runner = build_runner(
+        tmp_path,
+        [
+            tool_response("file_read", json.dumps({"path": "users.csv"})),
+            text_response("平均年龄为 30.0。"),
+        ],
+        case_time_budget=480,
+        clock_fn=lambda: 0.0,
+    )
+    trace = runner.run_case(case)
+    assert trace.is_time_exceeded is False
+    assert trace.is_success is True
+
+
+def test_runner_time_budget_zero_disables_fuse(tmp_path):
+    """G6 边界：case_time_budget<=0 显式关闭墙钟熔断。与 request_timeout 的职责边界：
+    聚合慢由本参数管，单次请求挂死由 request_timeout 独立兜底，互不替代。"""
+    case = make_case()
+    ticks = iter([0.0, 10000.0, 20000.0])  # 每步前读数都远超任何预算
+    runner = build_runner(
+        tmp_path,
+        [
+            tool_response("file_read", json.dumps({"path": "users.csv"})),
+            text_response("完成。"),
+        ],
+        case_time_budget=0,
+        clock_fn=lambda: next(ticks),
+    )
+    trace = runner.run_case(case)
+    assert trace.is_time_exceeded is False
+    assert trace.is_success is True
+
+
 def test_runner_marks_api_exception_as_failure(tmp_path):
     case = make_case(id="boom", allowed_tools=[], fixtures={})
     runner = build_runner(tmp_path, [RuntimeError("boom")])

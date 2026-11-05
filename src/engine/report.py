@@ -70,6 +70,7 @@ FAIL_REASON_LABELS = {
     "Variable_Role_Mismatch": "变量角色标注错误",
     "Token_Budget_Exceeded": "Token 预算耗尽",
     "Step_Budget_Exceeded": "步数预算耗尽",
+    "Time_Budget_Exceeded": "墙钟预算耗尽",
     "Judge_Unavailable": "裁判不可用",
     "Harness_Error": "Harness 执行错误",
     "State_Mismatch": "终态与期望不一致",
@@ -438,7 +439,7 @@ def summarize(
     gateway_error_count = max(0, harness_error_count - output_truncated_count - provider_blocked_count)
     no_final_response_count = sum(1 for item in results if item.no_final_response)
     budget_exhausted_count = sum(
-        1 for item in results if item.fail_reason in {"Token_Budget_Exceeded", "Step_Budget_Exceeded"}
+        1 for item in results if item.fail_reason in {"Token_Budget_Exceeded", "Step_Budget_Exceeded", "Time_Budget_Exceeded"}
     )
     sandbox_limited_count = sum(1 for item in results if item.sandbox_limited)
     hitl_modes = Counter(item.hitl_mode for item in results if item.hitl_mode not in {"", "not_required"})

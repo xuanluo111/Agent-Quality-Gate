@@ -71,6 +71,9 @@ class RunConfig:
     max_tokens: int = 1024
     temperature: float = 0.1
     request_timeout: int = 300
+    # G6 聚合墙钟熔断：单用例从第一步到收尾的总耗时上限（秒）。与 request_timeout
+    # （单次模型调用的网络超时）正交：前者兜「慢循环/重试风暴」，后者兜「单请求挂死」。
+    case_time_budget: int = 480
     judge_samples: int = 2
     jcv_threshold: float = 0.6
 
@@ -169,6 +172,7 @@ class RunConfig:
             "workers": self.workers,
             "max_rounds": self.max_rounds,
             "token_budget": self.token_budget,
+            "case_time_budget": self.case_time_budget,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
             "judge_samples": self.judge_samples,
@@ -207,6 +211,12 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--max-tokens", type=int, default=1024)
     parser.add_argument("--temperature", type=float, default=0.1)
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument(
+        "--case-time-budget",
+        type=int,
+        default=480,
+        help="单用例聚合墙钟上限（秒），<=0 表示关闭（G6）",
+    )
     parser.add_argument("--jcv-threshold", type=float, default=0.6)
     parser.add_argument("--strict-baseline", type=float, default=80.0)
     parser.add_argument("--max-high", type=int, default=3)
@@ -288,6 +298,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         "seed",
         "max_rounds",
         "token_budget",
+        "case_time_budget",
         "max_tokens",
         "temperature",
         "judge_samples",

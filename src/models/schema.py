@@ -322,6 +322,8 @@ class AgentTrace(BaseModel):
     is_cheated: bool = Field(default=False)
     is_token_exceeded: bool = Field(default=False)
     is_step_exceeded: bool = Field(default=False)
+    # G6 聚合墙钟：整个 case 从第一步前到收尾的总耗时熔断（区别于单请求的 request_timeout）。
+    is_time_exceeded: bool = Field(default=False)
     finish_reason: str = Field(default="", description="最后一轮模型返回的 finish_reason；length 表示被 max_tokens 截断")
     output_truncated: bool = Field(
         default=False, description="输出打满 max_tokens，且全程没有正文与工具调用——该样本没测到模型真实能力"

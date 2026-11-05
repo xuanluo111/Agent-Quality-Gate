@@ -162,10 +162,12 @@ class AgentRunner:
         max_tokens: int = 1024,
         temperature: float = 0.1,
         timeout: int = 300,
+        case_time_budget: int = 480,
         seed: Optional[int] = None,
         max_retries: int = 3,
         retry_base_delay: float = 2.0,
         sleep_fn: Any = time.sleep,
+        clock_fn: Any = time.monotonic,
         client: Any = None,
         local_client: Any = None,
         canary_token: Optional[str] = None,
@@ -184,12 +186,16 @@ class AgentRunner:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout = timeout
+        # G6 聚合墙钟预算：只在轮次边界检查；<=0 表示关闭。
+        self.case_time_budget = case_time_budget
         self.seed = seed
         # C11 真退避：瞬态故障不再直接烧成 Harness_Error，而是先受控重试；
         # sleep_fn 可注入：单测用假 sleep 记录等待序列，零真实耗时。
         self.max_retries = max(0, int(max_retries))
         self.retry_base_delay = max(0.0, float(retry_base_delay))
         self.sleep_fn = sleep_fn
+        # clock_fn 可注入：单测用假时钟精确控制“每步前的墙钟读数”，零真实耗时。
+        self.clock_fn = clock_fn
         self.backoff_ms_total = 0.0
         self.canary_token = canary_token or f"SECRET_{uuid.uuid4().hex[:8]}"
         # WAL：每次工具调用执行前先落盘 intent，崩溃后仍能还原“本来要做什么”。
@@ -273,6 +279,7 @@ class AgentRunner:
         attempt>0 时使用独立工作目录，保证 repeat 场景下每次尝试互不污染。
         """
         started = time.time()
+        case_started = self.clock_fn()
         self.backoff_ms_total = 0.0
         token_cost = 0
         input_tokens = 0
@@ -286,6 +293,7 @@ class AgentRunner:
         is_cheated = False
         is_token_exceeded = False
         is_step_exceeded = False
+        is_time_exceeded = False
         # X-AGI 从鑫中间态断言：formalize 声明的变量与「抽象/动作」的先后顺序（第几轮，1 起）。
         formalize_step: Optional[int] = None
         first_action_step: Optional[int] = None
@@ -379,6 +387,11 @@ class AgentRunner:
                     break
                 if token_cost >= self.token_budget:
                     is_token_exceeded = True
+                    break
+                # G6 聚合墙钟：只在轮次边界检查（不打断进行中的调用），兜住慢循环/重试风暴；
+                # 单次请求挂死由 request_timeout 独立兜底，两者职责互不替代。
+                if self.case_time_budget > 0 and self.clock_fn() - case_started >= self.case_time_budget:
+                    is_time_exceeded = True
                     break
 
                 response = self._completion(client, model, messages, tools)
@@ -557,7 +570,7 @@ class AgentRunner:
             completion = infer_completion(
                 assertion_results,
                 has_spec=bool(case.state_assertions or case.expected_final_state),
-                stopped=is_token_exceeded or is_step_exceeded or bool(stopped_at),
+                stopped=is_token_exceeded or is_step_exceeded or is_time_exceeded or bool(stopped_at),
             )
             return AgentTrace(
                 case_id=case.id,
@@ -573,6 +586,7 @@ class AgentRunner:
                 is_cheated=is_cheated,
                 is_token_exceeded=is_token_exceeded,
                 is_step_exceeded=is_step_exceeded,
+                is_time_exceeded=is_time_exceeded,
                 finish_reason=finish_reason,
                 output_truncated=output_truncated,
                 precondition_failed=precondition_failed,

@@ -48,6 +48,7 @@ PASSTHROUGH = {
     "timeout": "--timeout",
     "max_rounds": "--max-rounds",
     "token_budget": "--token-budget",
+    "case_time_budget": "--case-time-budget",
     "max_tokens": "--max-tokens",
     "judge_samples": "--judge-samples",
     "judge_model": "--judge-model",
