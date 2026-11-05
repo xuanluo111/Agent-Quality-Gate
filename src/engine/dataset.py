@@ -306,10 +306,23 @@ def select_smoke(
     selected: List[TestCase] = []
     required = {tag for tag in (must_tags or []) if tag}
     if required:
+        # 先按 tag 轮转，每个必备 tag 各取一条排在最前：若某类新能力用例数一多
+        # （如抽象用例扩容后 10 条），按分排序会把它整个顶到头部，把其他能力
+        # 挤出 smoke 前 6 条，快速回归就测不到那些能力了。
+        for tag in sorted(required):
+            if len(selected) >= max_cases:
+                break
+            for case in ordered:
+                if case in selected:
+                    continue
+                if tag in case.tags:
+                    selected.append(case)
+                    break
+        # 轮转之后再按原规则补齐其余 must_tags 命中的用例。
         for case in ordered:
             if len(selected) >= max_cases:
                 break
-            if required & set(case.tags):
+            if required & set(case.tags) and case not in selected:
                 selected.append(case)
     categories = {case.category for case in selected}
     for case in ordered:

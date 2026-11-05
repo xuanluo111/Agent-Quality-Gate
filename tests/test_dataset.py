@@ -209,6 +209,24 @@ def test_select_smoke_must_tags_are_guaranteed_and_first():
     assert len(smoke) == 3
 
 
+def test_select_smoke_must_tags_round_robin_keeps_all_capabilities_in_front():
+    """单一能力的用例数一多（如抽象扩容到 10 条）会按分把头部整个占满，
+    把其他必备能力挤出 smoke 前 6 条（verify 曾抓到）。必备 tag 必须先轮转各占一条。"""
+    cases = [TestCase(**row(f"abs{i}", "abs", tags=["feature:abstraction"])) for i in range(10)]
+    cases += [
+        TestCase(**row("state1", "state", tags=["feature:state"])),
+        TestCase(**row("prov1", "prov", tags=["feature:provenance"])),
+        TestCase(**row("corr1", "corr", tags=["feature:correction"])),
+    ]
+    smoke = select_smoke(
+        cases,
+        max_cases=10,
+        must_tags=["feature:state", "feature:provenance", "feature:correction", "feature:abstraction"],
+    )
+    front_tags = {tag for case in smoke[:4] for tag in case.tags}
+    assert {"feature:state", "feature:provenance", "feature:correction", "feature:abstraction"} <= front_tags
+
+
 def test_select_smoke_without_must_tags_is_unchanged():
     cases = [TestCase(**row("plain", "plain")), TestCase(**row("hitl", "hitl", requires_human_confirm=True))]
     assert [case.id for case in select_smoke(cases, max_cases=3)] == ["hitl", "plain"]
