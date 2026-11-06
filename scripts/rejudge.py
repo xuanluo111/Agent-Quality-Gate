@@ -32,7 +32,7 @@ from dotenv import load_dotenv
 from src.engine.failure_class import classify_case
 from src.engine.journal import JOURNAL_FILENAME
 from src.engine.judge import LayeredJudge
-from src.engine.lineage import dataset_epoch
+from src.engine.lineage import dataset_epoch, normalize_epoch
 from src.engine.report import generate_markdown, update_risk_ledger
 from src.engine.tools import Sandbox
 from src.models.schema import AgentTrace, EvalResult, TestCase
@@ -300,6 +300,8 @@ def build_run_meta(state: dict) -> dict:
         "judge_model": str(config.get("judge_model") or ""),
         "judge_same_as_sut": str(config.get("judge_model") or "") == model,
         "dataset": str(config.get("dataset") or ""),
+        # 视图声明的代际（子集视图/探针集用它表明自己属于哪一代语料）。
+        "dataset_generation": normalize_epoch(config.get("dataset_generation") or ""),
         "seed": config.get("seed"),
         "git_sha": old.get("git_sha", ""),
         "started_at": old.get("started_at", ""),
@@ -408,7 +410,14 @@ def rebuild_ledger(states: list[dict]) -> dict:
         meta = state["meta"]
         stamp = state["old_summary"].get("generated_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         # 重放时按各自 run 的数据集指纹标注代际，跨代劣化护栏才能历史一致地重建。
-        replay_epoch = dataset_epoch(state["old_summary"].get("dataset_hash", ""))
+        # 优先级：run 声明的代际 > run 自己记录的代际 > 按文件指纹重算。
+        # 声明必须排第一：子集视图（探针集）的文件指纹与语料不同，按指纹重算会
+        # 把它当成“下一代数据集”，在台账里伪造一次代际切换。
+        replay_epoch = (
+            normalize_epoch(meta.get("dataset_generation") or "")
+            or normalize_epoch(state["old_summary"].get("dataset_epoch") or "")
+            or dataset_epoch(state["old_summary"].get("dataset_hash", ""))
+        )
         update_risk_ledger(LEDGER, meta["run_id"], state["results"], stamp, scope=meta["model"], epoch=replay_epoch)
     if not LEDGER.exists():
         return {}
@@ -612,6 +621,9 @@ def main() -> int:
             stats=build_stats(state),
             ledger_path=LEDGER,
             write_ledger=False,
+            # 声明代际要一路带到报告层：否则重生成后的 summary.json 会退回
+            # “按文件指纹算”，与台账里记录的代际对不上（视图 ≠ 语料）。
+            epoch_override=state["meta"].get("dataset_generation", ""),
         )
         state["summary"] = summary
         print(

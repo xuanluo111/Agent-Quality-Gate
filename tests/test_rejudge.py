@@ -224,3 +224,50 @@ def test_rebuild_ledger_preserves_lineage_and_marks_breakpoint(tmp_path, monkeyp
     ]
     # 非本次 scope 的历史条目不能被带走
     assert "other::keep" in data["entries"]
+
+
+def test_rebuild_ledger_prefers_declared_generation_over_file_fingerprint(tmp_path, monkeypatch):
+    """重放时“声明的代际”必须压过“按文件指纹重算”。
+
+    探针集是 core 语料的子集视图，文件指纹不同。按指纹重算会把它当成下一代数据集，
+    在台账里伪造一次代际切换，并把跨代劣化护栏（同一代内 resolved→open 才算劣化）
+    的基准指到子集文件上。
+    """
+    ledger = tmp_path / "risk_ledger.json"
+    ledger.write_text(
+        json.dumps(
+            {
+                "dataset_epoch": "2fd4a5646accb8d7",
+                "dataset_epochs": [{"epoch": "2fd4a5646accb8d7", "first_recorded_at": "2026-11-05 18:27:07"}],
+                "entries": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(rejudge, "LEDGER", ledger)
+    monkeypatch.setattr(rejudge, "BACKUP_ROOT", tmp_path / "bak")
+
+    state = _state("glm", "v1", [make_result(case_id="v1-pass")])
+    # 子集视图的文件指纹（另一个代）
+    state["old_summary"]["dataset_hash"] = "a014b04076fd14c3" + "0" * 48
+    state["old_summary"]["dataset_epoch"] = "a014b04076fd14c3"
+    # 但 run 自己声明了它属于语料本代
+    state["meta"]["dataset_generation"] = "deff7501007cff61"
+
+    rebuild_ledger([state])
+
+    data = json.loads(ledger.read_text(encoding="utf-8"))
+    assert data["dataset_epoch"] == "deff7501007cff61"
+    assert data["prev_dataset_epoch"] == "2fd4a5646accb8d7"
+    # 声明的是语料本代 → 相对上一代是真换代，相对台账当前代不是伪造切换
+    assert data["switched_this_run"] is True
+    assert "a014b04076fd14c3" not in [h["epoch"] for h in data["dataset_epochs"]]
+
+
+def test_build_run_meta_carries_declared_generation():
+    """声明代际要从 config.json 传进 run_meta，否则重放时又退回按指纹算。"""
+    state = {
+        "config": {"model": "glm-4.5-flash", "run_id": "v1", "dataset_generation": "DEFF7501007CFF61"},
+        "old_summary": {"generated_at": "2026-11-06 12:00:00"},
+    }
+    assert rejudge.build_run_meta(state)["dataset_generation"] == "deff7501007cff61"

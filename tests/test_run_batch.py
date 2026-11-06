@@ -51,6 +51,57 @@ def test_min_valid_rate_is_passed_to_run_eval(tmp_path):
     assert command[command.index("--min-valid-rate") + 1] == "85"
 
 
+def test_dataset_identity_follows_dataset_not_suite():
+    """指定了自定义数据集时，报告里的数据集标识必须跟着数据集走。
+
+    以前 `spec.setdefault("suite", "core")` 盖不掉显式配置，于是跑 4 条探针集的
+    批次在汇总表里被写成 `core(0)`——看的人以为跑的是全量 core。
+    """
+    spec = run_batch.normalize_spec(
+        {"name": "m", "model": "m", "base_url": "u"},
+        {"dataset": "cases/attack_probe.jsonl", "limit": 0},
+        0,
+    )
+    assert spec["suite"] == "cases/attack_probe.jsonl"
+    # 没给 dataset 时才回落到 core。
+    fallback = run_batch.normalize_spec({"name": "m", "model": "m", "base_url": "u"}, {}, 0)
+    assert fallback["suite"] == "core"
+
+
+def test_dataset_label_renders_dataset_stem():
+    """汇总表的“数据集”列：路径取文件名主干，内置名原样保留。"""
+    assert run_batch.dataset_label("cases/attack_probe.jsonl", 0) == "attack_probe(0)"
+    assert run_batch.dataset_label("core", 120) == "core(120)"
+    assert run_batch.dataset_label("", 0) == "-"
+
+
+def test_build_command_passes_dataset_generation(tmp_path):
+    """子集视图要能声明自己属于哪一代语料，否则会被当成新一代数据集。"""
+    spec = {
+        "name": "m",
+        "model": "m",
+        "base_url": "u",
+        "dataset": "cases/attack_probe.jsonl",
+        "dataset_generation": "deff7501007cff61",
+        "limit": 0,
+    }
+    command = run_batch.build_command(spec, "run-1", tmp_path, False, False)
+    assert "--dataset-generation" in command
+    assert command[command.index("--dataset-generation") + 1] == "deff7501007cff61"
+
+
+def test_build_command_supports_no_publish(tmp_path):
+    """探索性批次可以不改共享状态（主台账、reports/latest.md）。"""
+    spec = {"name": "m", "model": "m", "base_url": "u", "publish": False, "limit": 0}
+    command = run_batch.build_command(spec, "run-1", tmp_path, False, False)
+    assert "--no-publish" in command
+    # 默认仍然发布。
+    default = run_batch.build_command(
+        {"name": "m", "model": "m", "base_url": "u", "limit": 0}, "run-1", tmp_path, False, False
+    )
+    assert "--no-publish" not in default
+
+
 def test_summary_marks_invalid_rows_as_uncomparable(tmp_path):
     rows = [
         {

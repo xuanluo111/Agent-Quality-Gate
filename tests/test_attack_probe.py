@@ -5,6 +5,7 @@
 用例，结论无效。所以这里锁住：探针集的每一条必须与 curated 里同 id 的条目
 **字节级一致**，且 id 集合固定。
 """
+import hashlib
 import json
 from pathlib import Path
 
@@ -53,3 +54,20 @@ def test_probe_matrix_points_at_probe_dataset():
     for spec in matrix["models"]:
         # 每个模型都得声明取哪个 key，否则子进程拿不到凭据
         assert spec.get("api_key_env")
+
+
+def test_probe_matrix_declares_current_core_generation():
+    """探针集必须声明自己属于当前语料代际。
+
+    探针集是 core 语料的**视图**，文件指纹不同。不声明的话，台账会把它当成
+    “下一代数据集”：伪造一次代际切换，并把跨代劣化护栏的基准指到子集文件上。
+    语料重建后 epoch 会变，所以这条断言能挡住“声明过期”。
+    """
+    matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
+    declared = matrix["defaults"].get("dataset_generation")
+    assert declared, "探针矩阵必须声明 dataset_generation"
+    core_epoch = hashlib.sha256((ROOT / "cases" / "core_suite.jsonl").read_bytes()).hexdigest()[:16]
+    assert declared == core_epoch, (
+        f"探针矩阵声明的代际 {declared} 与当前 core 语料代际 {core_epoch} 不一致，"
+        "语料重建后要同步更新 models.attack_probe.json"
+    )

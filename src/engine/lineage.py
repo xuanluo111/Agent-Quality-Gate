@@ -19,8 +19,23 @@
 """
 from __future__ import annotations
 
+import re
+
 # 与报告展示的指纹长度保持一致：报告里 `dataset_hash[:16]`，这里也用 16。
 EPOCH_PREFIX_LEN = 16
+
+# 代际指纹的形状：16 位十六进制。声明代际时会校验，避免把路径/中文误当指纹传下去。
+EPOCH_PATTERN = re.compile(r"^[0-9a-f]{16}$")
+
+
+def is_valid_epoch(value: str) -> bool:
+    """这个字符串是不是一个合法的代际指纹（16 位十六进制）。"""
+    return bool(EPOCH_PATTERN.match(str(value or "").strip().lower()))
+
+
+def normalize_epoch(value: str) -> str:
+    """把声明的代际指纹规整成小写十六进制串；空值原样返回。"""
+    return str(value or "").strip().lower()
 
 
 def dataset_epoch(dataset_hash: str) -> str:

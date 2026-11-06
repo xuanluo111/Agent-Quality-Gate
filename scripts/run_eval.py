@@ -488,6 +488,7 @@ def main() -> int:
         stats=stats,
         ledger_path="reports/risk_ledger.json",
         write_ledger=config.publish,
+        epoch_override=config.dataset_generation,
     )
     # --no-publish（自检/调试）：跑出来的结论只留在本轮 run 目录，不覆盖对外副本。
     if config.publish:

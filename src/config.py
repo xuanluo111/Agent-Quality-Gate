@@ -9,6 +9,8 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+from src.engine.lineage import is_valid_epoch, normalize_epoch
+
 load_dotenv()
 
 SUITE_PATHS = {
@@ -61,6 +63,9 @@ class RunConfig:
     local_api_key: str = field(default_factory=lambda: _env("AQG_LOCAL_API_KEY"))
 
     dataset: str = "cases/core_suite.jsonl"
+    # 数据集视图声明自己属于哪一代语料（如探针集是 core 语料的子集视图）。
+    # 空串 = 不声明，按本数据集文件自身的指纹算代际。
+    dataset_generation: str = ""
     limit: int = 120
     workers: int = 5
     mode: str = "enforce"
@@ -168,6 +173,7 @@ class RunConfig:
             "mode": self.mode,
             "seed": self.seed,
             "dataset": self.dataset,
+            "dataset_generation": self.dataset_generation,
             "limit": self.limit,
             "workers": self.workers,
             "max_rounds": self.max_rounds,
@@ -284,6 +290,15 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="不覆盖 reports/latest.md / observability.json，也不写风险台账（自检用）",
     )
+    parser.add_argument(
+        "--dataset-generation",
+        default="",
+        help=(
+            "声明本轮数据集视图所属的代际指纹（16 位十六进制）。"
+            "探针集等子集视图用：它们的文件指纹与语料不同，不声明会被当成新一代数据集，"
+            "伪造一次代际切换并冲掉跨代劣化护栏"
+        ),
+    )
 
 
 def config_from_args(args: argparse.Namespace) -> RunConfig:
@@ -327,6 +342,12 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     config.request_timeout = args.timeout
     config.update_regression = not args.no_regression
     config.publish = not getattr(args, "no_publish", False)
+    generation = normalize_epoch(getattr(args, "dataset_generation", "") or "")
+    if generation and not is_valid_epoch(generation):
+        raise SystemExit(
+            f"--dataset-generation 必须是 16 位十六进制代际指纹，收到: {generation}"
+        )
+    config.dataset_generation = generation
     for attr in ("base_url", "model", "model_version", "judge_base_url", "judge_model"):
         value = getattr(args, attr, None)
         if value:

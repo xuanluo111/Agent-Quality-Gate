@@ -500,7 +500,10 @@ def summarize(
         "dataset": run_meta.get("dataset", ""),
         "dataset_hash": stats.get("dataset_hash", ""),
         # 代际标识：把 dataset_hash 钉成 epoch，供跨批次分组与劣化护栏使用。
+        # 子集视图（探针集等）可以声明自己属于哪一代语料：它们的文件指纹与语料不同，
+        # 不声明就会被当成“下一代数据集”，伪造一次代际切换并冲掉跨代劣化护栏。
         "dataset_epoch": dataset_epoch(stats.get("dataset_hash", "")),
+        "dataset_epoch_source": "computed",
         "seed": run_meta.get("seed"),
         "git_sha": run_meta.get("git_sha", ""),
         "started_at": run_meta.get("started_at", ""),
@@ -770,8 +773,10 @@ def update_risk_ledger(
     items = list(results)
 
     for result in items:
-        if is_untrusted(result):
+        if is_untrusted(result) or (not result.strict_passed and result.failure_class == UNKNOWN):
             # 没测到就不是模型风险：既不新增 open，也不把历史上已修复的条目重新判成 regressed。
+            # UNKNOWN（超时/截断/预算耗尽）是“根本没测到模型能力”，与模型答错无关：
+            # 把它写进台账，等于用环境故障冒充模型风险。
             continue
         key = _ledger_key(scope, result.case_id)
         entry = entries.get(key)
@@ -858,6 +863,7 @@ def generate_markdown(
     stats: dict | None = None,
     ledger_path: str | Path | None = None,
     write_ledger: bool = True,
+    epoch_override: str = "",
 ) -> dict:
     baseline = baseline or {}
     run_meta = run_meta or {}
@@ -885,6 +891,12 @@ def generate_markdown(
         require_coverage=require_coverage,
         coverage=coverage,
     )
+    # 声明的代际优先于算出来的：子集视图（探针集等）的文件指纹与语料不同，
+    # 不声明就会被当成“下一代数据集”，在台账里伪造成一次代际切换，
+    # 并把跨代劣化护栏（同一代内 resolved→open 才算劣化）冲掉。
+    if epoch_override:
+        summary["dataset_epoch"] = epoch_override
+        summary["dataset_epoch_source"] = "declared"
     timestamp = summary["generated_at"]
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)

@@ -58,6 +58,9 @@ PASSTHROUGH = {
     "min_valid_rate": "--min-valid-rate",
     "repeat": "--repeat",
     "collateral_risk": "--collateral-risk",
+    # 数据集视图声明所属代际：探针集是语料的子集，文件指纹与语料不同，
+    # 不声明就会被当成"新一代数据集"，伪造一次代际切换并冲掉跨代劣化护栏。
+    "dataset_generation": "--dataset-generation",
 }
 
 # 环境故障线索：命中这些模式说明是 Key/配额/网关问题，而不是模型答错。
@@ -130,7 +133,13 @@ def normalize_spec(raw: dict, defaults: dict, index: int) -> dict:
     spec["name"] = name
     spec["model"] = model
     spec["base_url"] = base_url
-    spec.setdefault("suite", "core")
+    # dataset 优先于 suite：build_command 也是这个优先级。两边都给时必须让
+    # 报告里的数据集标识与实际跑的一致，否则汇总表会把探针集标成 core(0)，
+    # 看的人以为跑的是全量 core。
+    if str(spec.get("dataset") or "").strip():
+        spec["suite"] = str(spec.get("dataset")).strip()
+    else:
+        spec.setdefault("suite", "core")
     spec.setdefault("limit", 50)
     spec.setdefault("workers", 3)
     return spec
@@ -210,6 +219,12 @@ def build_command(spec: dict, run_id: str, output_root: Path, dry_run: bool, upd
         command.append("--require-stable")
     if spec.get("provenance_enabled") is False:
         command.append("--no-provenance")
+    # 探索性批次（探针/回归子集）默认不改共享状态：主台账与 reports/latest.md
+    # 描述的是正式语料，探针视图写进去会让台账的代际指针指向子集文件。
+    # 注意：不能写成 `spec.get("publish") or ""`——False 会被 or 吞成空串。
+    publish = spec.get("publish")
+    if publish is not None and str(publish).strip().lower() in {"0", "false", "no"}:
+        command.append("--no-publish")
     if not update_regression:
         command.append("--no-regression")
     command += ["--output-root", str(output_root), "--run-id", run_id]
@@ -277,6 +292,22 @@ def read_run_epoch(run_dir: Path) -> str:
     except json.JSONDecodeError:
         return ""
     return str(data.get("dataset_epoch") or "")
+
+
+def dataset_label(suite: str, limit) -> str:
+    """汇总表里的“数据集”列。
+
+    suite 可能是内置名（core/smoke），也可能是自定义数据集路径。路径直接写进
+    表格会很长，但去掉路径又会回到“看不出跑的是哪套数据”——曾经就因为这里
+    写死 core，探针集批次被标成 `core(0)`，看的人以为跑的是全量 core。
+    所以：路径取文件名主干，内置名原样保留。
+    """
+    text = str(suite or "").strip()
+    if not text:
+        return "-"
+    if "/" in text or text.endswith(".jsonl"):
+        text = Path(text).stem
+    return f"{text}({limit})"
 
 
 def already_done(output_root: Path, name: str) -> bool:
@@ -438,7 +469,7 @@ def render_summary(batch_id: str, meta: dict, rows: list[dict]) -> str:
                 i=index,
                 name=row["name"],
                 status=row["status"],
-                dataset=f"{row['suite']}({row['limit']})",
+                dataset=dataset_label(row.get("suite"), row.get("limit")),
                 total=_cell(metrics.get("total_cases")),
                 valid=_cell(metrics.get("valid_cases")),
                 std=_cell(metrics.get("std_pass_rate"), "%"),

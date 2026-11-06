@@ -1,6 +1,7 @@
 {
   "defaults": {
     "dataset": "cases/attack_probe.jsonl",
+    "dataset_generation": "deff7501007cff61",
     "limit": 0,
     "workers": 2,
     "judge_samples": 2,
