@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-11-05 13:25:18",
+  "generated_at": "2026-11-06 11:04:13",
   "inputs": [
     "cases/curated_cases.jsonl",
     "cases/regression.jsonl"
@@ -7,8 +7,8 @@
   "missing_inputs": [],
   "core": {
     "path": "cases/core_suite.jsonl",
-    "written": 204,
-    "duplicates_removed": 4,
+    "written": 207,
+    "duplicates_removed": 7,
     "input_duplicates": 0,
     "excluded_unsupported": [
       {
@@ -588,33 +588,33 @@
         ]
       }
     ],
-    "sha256": "2fd4a5646accb8d750722a13bf666e79b1e6e8d9bd1643116c2d2bdea769b6df",
+    "sha256": "deff7501007cff61945bea699095a4aeb87c20f1bfa9ffe12380981f8a9d2563",
     "audit": {
-      "total": 204,
+      "total": 207,
       "by_category": {
         "事实可靠性": 2,
         "工具与行动安全": 43,
-        "数据与上下文安全": 29,
+        "数据与上下文安全": 30,
         "数据分析与计算": 17,
         "谄媚攻击(Sycophancy)": 22,
         "跨领域风险涌现": 27,
         "身份与授权": 32,
-        "运行环境与隔离": 32
+        "运行环境与隔离": 34
       },
       "by_severity": {
         "medium": 34,
         "low": 5,
-        "critical": 87,
-        "high": 78
+        "critical": 89,
+        "high": 79
       },
       "by_sensitivity": {
-        "S1": 199,
+        "S1": 202,
         "S2": 4,
         "S3": 1
       },
       "expected_variables_cases": 12,
       "hitl_cases": 8,
-      "fixture_cases": 40,
+      "fixture_cases": 42,
       "unsupported_tools": {},
       "missing_sensitivity": 0,
       "duplicates": 0,
@@ -624,57 +624,59 @@
     "load_reports": [
       {
         "path": "cases/curated_cases.jsonl",
-        "raw_records": 74,
-        "loaded_cases": 74,
+        "raw_records": 77,
+        "loaded_cases": 77,
         "parse_errors": [],
         "validation_errors": [],
         "warnings": [],
         "duplicates": 0,
         "duplicate_conflicts": [],
         "missing_sensitivity": 0,
-        "dataset_sha256": "ff74e239848a635f91be4c4d31e489e427b3945b7839ab76c371a417d8dbde8c"
+        "dataset_sha256": "0a6bc40e9875d8882a471b56b7f82a6b44929d0e4a6c28703a93f50db17f29e3"
       },
       {
         "path": "cases/regression.jsonl",
-        "raw_records": 214,
-        "loaded_cases": 214,
+        "raw_records": 217,
+        "loaded_cases": 217,
         "parse_errors": [],
         "validation_errors": [],
         "warnings": [],
         "duplicates": 0,
         "duplicate_conflicts": [],
         "missing_sensitivity": 117,
-        "dataset_sha256": "a3a2014a17512671208ea3955e8e18f8989a2bef6739bea1096a1add22e4580b"
+        "dataset_sha256": "c3c6960fae75ac0c12169c1d415054e4c8e58650d9e4e8a16b4fcc32c63e7f25"
       }
     ]
   },
   "smoke": {
     "path": "cases/smoke.jsonl",
     "written": 18,
-    "sha256": "bd861ae53a569d05f9cdc5ff99cbce3311d9805690ff92ed5f61cb8d311a4264",
+    "sha256": "4582db1db66f94992a562a320cf3c8cf968205d4c7d4d2e7014fdd7a5f6ae8c3",
     "audit": {
       "total": 18,
       "by_category": {
-        "数据分析与计算": 12,
+        "数据分析与计算": 5,
+        "运行环境与隔离": 2,
         "工具与行动安全": 2,
-        "身份与授权": 1,
+        "身份与授权": 4,
+        "数据与上下文安全": 2,
         "事实可靠性": 1,
-        "数据与上下文安全": 1,
-        "跨领域风险涌现": 1
+        "跨领域风险涌现": 1,
+        "谄媚攻击(Sycophancy)": 1
       },
       "by_severity": {
-        "medium": 12,
-        "high": 4,
-        "low": 1,
-        "critical": 1
+        "medium": 6,
+        "critical": 6,
+        "high": 5,
+        "low": 1
       },
       "by_sensitivity": {
         "S1": 17,
         "S2": 1
       },
-      "expected_variables_cases": 10,
-      "hitl_cases": 1,
-      "fixture_cases": 14,
+      "expected_variables_cases": 3,
+      "hitl_cases": 4,
+      "fixture_cases": 12,
       "unsupported_tools": {},
       "missing_sensitivity": 0,
       "duplicates": 0,

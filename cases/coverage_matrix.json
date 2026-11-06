@@ -1,5 +1,5 @@
 {
-  "total_cases": 204,
+  "total_cases": 207,
   "controls": {
     "C1": {
       "label": "C1 治理·资产清单·风险归属",
@@ -33,7 +33,7 @@
         {
           "facet_id": "C3.least_privilege",
           "label": "工具与数据源最小权限",
-          "cases": 159,
+          "cases": 162,
           "case_ids": [
             "curated-safe-inventory-001",
             "curated-provenance-traceable-001",
@@ -58,7 +58,7 @@
     "C4": {
       "label": "C4 网络分段·隔离·沙箱执行",
       "posture": "case",
-      "cases": 74,
+      "cases": 76,
       "case_ids": [
         "curated-destructive-root-001",
         "curated-hitl-db-drop-001",
@@ -75,7 +75,7 @@
         {
           "facet_id": "C4.sandbox",
           "label": "工具执行受沙箱约束",
-          "cases": 37,
+          "cases": 39,
           "case_ids": [
             "curated-destructive-root-001",
             "curated-write-etc-001",
@@ -119,7 +119,7 @@
     "C5": {
       "label": "C5 提示注入·不可信内容防御",
       "posture": "case",
-      "cases": 47,
+      "cases": 48,
       "case_ids": [
         "c5-indirect-injection-001",
         "c5-obfuscated-base64-001",
@@ -181,7 +181,7 @@
     "C6": {
       "label": "C6 数据保护·密钥·记忆安全",
       "posture": "both",
-      "cases": 36,
+      "cases": 37,
       "case_ids": [
         "工具与行动安全-361033687a7b6c32278c302e15",
         "工具与行动安全-263659b0dd7cc6b7ae932f0215",
@@ -263,7 +263,7 @@
         {
           "facet_id": "C7.allowlist",
           "label": "工具与命令显式白名单",
-          "cases": 159,
+          "cases": 162,
           "case_ids": [
             "curated-safe-inventory-001",
             "curated-provenance-traceable-001",
@@ -328,7 +328,7 @@
         {
           "facet_id": "C8.pep",
           "label": "确定性策略执行点拦违规行为",
-          "cases": 200,
+          "cases": 203,
           "case_ids": [
             "curated-safe-inventory-001",
             "curated-provenance-traceable-001",
@@ -471,7 +471,7 @@
       {
         "facet_id": "C3.least_privilege",
         "label": "工具与数据源最小权限",
-        "cases": 159,
+        "cases": 162,
         "case_ids": [
           "curated-safe-inventory-001",
           "curated-provenance-traceable-001",
@@ -496,7 +496,7 @@
       {
         "facet_id": "C4.sandbox",
         "label": "工具执行受沙箱约束",
-        "cases": 37,
+        "cases": 39,
         "case_ids": [
           "curated-destructive-root-001",
           "curated-write-etc-001",
@@ -633,7 +633,7 @@
       {
         "facet_id": "C7.allowlist",
         "label": "工具与命令显式白名单",
-        "cases": 159,
+        "cases": 162,
         "case_ids": [
           "curated-safe-inventory-001",
           "curated-provenance-traceable-001",
@@ -681,7 +681,7 @@
       {
         "facet_id": "C8.pep",
         "label": "确定性策略执行点拦违规行为",
-        "cases": 200,
+        "cases": 203,
         "case_ids": [
           "curated-safe-inventory-001",
           "curated-provenance-traceable-001",
@@ -767,7 +767,7 @@
   "unmapped_case_ids": [],
   "unmapped_count": 0,
   "suite": "cases/core_suite.jsonl",
-  "suite_sha256": "2fd4a5646accb8d750722a13bf666e79b1e6e8d9bd1643116c2d2bdea769b6df",
+  "suite_sha256": "deff7501007cff61945bea699095a4aeb87c20f1bfa9ffe12380981f8a9d2563",
   "override_cases": 0,
   "override_unknown_ids": [],
   "control_total": 12
