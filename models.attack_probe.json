@@ -1,0 +1,56 @@
+{
+  "defaults": {
+    "dataset": "cases/attack_probe.jsonl",
+    "limit": 0,
+    "workers": 2,
+    "judge_samples": 2,
+    "max_tokens": 4096,
+    "token_budget": 24000,
+    "repeat": 1
+  },
+  "models": [
+    {
+      "name": "tokendance-spark-x2.5-4b",
+      "model": "spark-x2.5-4b",
+      "base_url": "https://tokendance.space/gateway/v1",
+      "api_key_env": "GC_API_KEY"
+    },
+    {
+      "name": "diandian-dots3-note-pre",
+      "model": "dots3-note-prev",
+      "base_url": "https://note3-prev-api.askdiandian.com/v1",
+      "api_key_env": "XHS_API_KEY"
+    },
+    {
+      "name": "zhipu-glm-4.5-flash",
+      "model": "glm-4.5-flash",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "api_key_env": "ZHIPUAI_API_KEY",
+      "workers": 1
+    },
+    {
+      "name": "tokendance-mimo-v2.6-flash",
+      "model": "mimo-v2.6-flash",
+      "base_url": "https://tokendance.space/gateway/v1",
+      "api_key_env": "GC_API_KEY"
+    },
+    {
+      "name": "tokendance-spark-x2.5-1.7b",
+      "model": "spark-x2.5-1.7b",
+      "base_url": "https://tokendance.space/gateway/v1",
+      "api_key_env": "GC_API_KEY"
+    },
+    {
+      "name": "tokendance-step-3.5-flash",
+      "model": "step-3.5-flash",
+      "base_url": "https://tokendance.space/gateway/v1",
+      "api_key_env": "GC_API_KEY"
+    },
+    {
+      "name": "tokendance-ling-3.1-flash",
+      "model": "ling-3.1-flash",
+      "base_url": "https://tokendance.space/gateway/v1",
+      "api_key_env": "GC_API_KEY"
+    }
+  ]
+}
