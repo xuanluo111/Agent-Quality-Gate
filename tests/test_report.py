@@ -459,6 +459,86 @@ def test_report_marks_generation_breakpoint(tmp_path):
     assert "数据集换代" not in report_c.read_text(encoding="utf-8")
 
 
+def test_declared_generation_is_used_for_epoch_and_ledger(tmp_path):
+    """子集视图可以声明所属代际：声明后不伪造代际切换，也不改写跨代护栏的基准。
+
+    探针集是 core 语料的子集，文件指纹不同。以前它会被当成“下一代数据集”，
+    在台账里留下一次假换代，并把跨代劣化护栏（同一代内 resolved→open 才算劣化）
+    的基准指到子集文件上。
+    """
+    reports_dir = tmp_path / "reports"
+    ledger_path = reports_dir / "risk_ledger.json"
+    declared = "deff7501007cff61"
+
+    probe_stats = stats()
+    probe_stats["dataset_hash"] = "a" * 64
+    summary = generate_markdown(
+        sample_results(),
+        str(reports_dir / "runs" / "run-probe" / "report.md"),
+        run_meta=dict(run_meta(), run_id="run-probe"),
+        stats=probe_stats,
+        ledger_path=str(ledger_path),
+        epoch_override=declared,
+    )
+    assert summary["dataset_epoch"] == declared
+    assert summary["dataset_epoch_source"] == "declared"
+
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert ledger["dataset_epoch"] == declared
+    # 声明的代际与台账当前代一致 → 不算换代。
+    assert ledger["switched_this_run"] is False
+
+    # 正式批次跑在语料本代（同一个声明代际）时也不应该报换代。
+    core_stats = stats()
+    core_stats["dataset_hash"] = "b" * 64
+    core_summary = generate_markdown(
+        sample_results(),
+        str(reports_dir / "runs" / "run-core" / "report.md"),
+        run_meta=dict(run_meta(), run_id="run-core"),
+        stats=core_stats,
+        ledger_path=str(ledger_path),
+        epoch_override=declared,
+    )
+    assert core_summary["generation_breakpoint"] is False
+
+
+def test_ledger_skips_unknown_failures(tmp_path):
+    """“没测到”的失败不进风险台账。
+
+    超时（Time_Budget_Exceeded）归 unknown：样本根本没测到模型能力，
+    写进台账等于用环境故障冒充模型风险。
+    """
+    ledger_path = tmp_path / "risk_ledger.json"
+    timeout = make_result(
+        case_id="slow-1",
+        category="运行环境与隔离",
+        passed=False,
+        strict_passed=False,
+        risk_level="high",
+        judge_layer="trajectory",
+        fail_reason="Time_Budget_Exceeded",
+        failure_class="unknown",
+    )
+    update_risk_ledger(ledger_path, "run-1", [timeout], "2026-11-06 10:00:00", scope="m")
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert ledger["entries"] == {}
+
+    # 真失败（不是 unknown）仍然要记。
+    violation = make_result(
+        case_id="bad-1",
+        category="运行环境与隔离",
+        passed=False,
+        strict_passed=False,
+        risk_level="critical",
+        judge_layer="rule",
+        fail_reason="Policy_Violation",
+    )
+    update_risk_ledger(ledger_path, "run-2", [violation], "2026-11-06 10:01:00", scope="m")
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert "m::bad-1" in ledger["entries"]
+    assert ledger["entries"]["m::bad-1"]["status"] == "open"
+
+
 def test_visualization_prefers_summary_when_present(tmp_path):
     reports_dir = tmp_path / "reports"
     run_dir = reports_dir / "runs" / "run-1"

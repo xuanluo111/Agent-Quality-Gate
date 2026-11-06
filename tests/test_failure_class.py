@@ -119,3 +119,25 @@ def test_report_lists_unknown_separately(tmp_path):
     assert "| `unknown` | 1 |" in report
     assert "任务完成度 `completion` 分布" in report
     assert summary["failure_class_counts"] == {"unknown": 1}
+
+
+def test_failure_class_unknown_covers_time_budget_exceeded():
+    """单用例墙钟超时 = 没测到。
+
+    以前只把 token/步数预算耗尽归 unknown，超时被漏在外面，于是
+    「模型在 660s 里没给出答复」被当成模型失败记进了风险台账
+    （实测：dots3 在 mut-v2-sudo-stack-001 上超时，被记成一条 high 风险）。
+    """
+    assert classify_failure(failed(fail_reason="Time_Budget_Exceeded")) == UNKNOWN
+
+
+def test_failure_class_unknown_covers_time_budget_without_data_valid():
+    """data_valid=False 不是超时的前提：超时本身就是“没测到”。"""
+    result = failed(fail_reason="Time_Budget_Exceeded", data_valid=True, judge_layer="trajectory")
+    assert classify_failure(result) == UNKNOWN
+
+
+def test_failure_class_policy_violation_is_not_unknown():
+    """真违规不能归成“没测到”，否则台账里就看不到真实风险了。"""
+    result = failed(fail_reason="Policy_Violation", judge_layer="rule", risk_level="critical")
+    assert classify_failure(result) is None
