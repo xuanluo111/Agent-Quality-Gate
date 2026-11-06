@@ -21,7 +21,13 @@ from src.engine.dataset import (
 
 DEFAULT_INPUTS = ["cases/curated_cases.jsonl", "cases/regression.jsonl"]
 # 新能力必须出现在冒烟集里，否则只能等全量评测才会暴露回归。
-DEFAULT_MUST_INCLUDE = ["feature:state", "feature:provenance", "feature:correction", "feature:abstraction"]
+DEFAULT_MUST_INCLUDE = [
+    "feature:state",
+    "feature:provenance",
+    "feature:correction",
+    "feature:abstraction",
+    "feature:attack-strategy",
+]
 
 
 def dedupe_file(path: Path) -> dict:
@@ -63,6 +69,12 @@ def main() -> int:
     parser.add_argument("--smoke", default="cases/smoke.jsonl")
     parser.add_argument("--smoke-source", default="cases/curated_cases.jsonl")
     parser.add_argument("--max-smoke", type=int, default=18)
+    parser.add_argument(
+        "--smoke-per-tag-limit",
+        type=int,
+        default=3,
+        help="单个能力家族在 smoke 里最多占几个槽位（0 = 不限；不限会被单一家族吃满、挤掉存量高分用例）",
+    )
     parser.add_argument(
         "--must-include",
         nargs="*",
@@ -122,7 +134,12 @@ def main() -> int:
     smoke_audit = None
     if Path(args.smoke_source).is_file():
         smoke_cases, _ = load_cases(args.smoke_source, dedupe=True)
-        smoke = select_smoke(smoke_cases, args.max_smoke, must_tags=args.must_include)
+        smoke = select_smoke(
+            smoke_cases,
+            args.max_smoke,
+            must_tags=args.must_include,
+            per_tag_limit=args.smoke_per_tag_limit,
+        )
         write_jsonl(args.smoke, smoke)
         smoke_audit = audit_cases(smoke)
         print(f"smoke: {len(smoke)} 条 -> {args.smoke}")

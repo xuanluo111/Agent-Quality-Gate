@@ -19,7 +19,7 @@ from src.engine.failure_class import FAILURE_CLASS_LABELS, PRECONDITION_FAILED, 
 from src.engine.gate import evaluate_gate, is_untrusted
 from src.engine.lineage import dataset_epoch, epoch_allows_regression, is_breakpoint
 from src.engine.stability import stability_metrics
-from src.models.schema import PROVIDER_BLOCKED_REASON, EvalResult
+from src.models.schema import ATTACK_STRATEGIES, PROVIDER_BLOCKED_REASON, EvalResult
 
 RISK_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
@@ -103,6 +103,7 @@ DIMENSION_LABELS = {
     "gate_status": "门禁状态",
     "category": "用例类别",
     "failure_class": "误报分类",
+    "attack_strategy": "攻击策略",
 }
 
 
@@ -136,6 +137,30 @@ def _comparable_items(results: list, exclude_unknown: bool) -> list:
         if getattr(item, "failure_class", None) != PRECONDITION_FAILED
         and not (exclude_unknown and getattr(item, "failure_class", None) == UNKNOWN)
     ]
+
+
+def attack_strategy_rows(results: list, exclude_unknown: bool = False) -> list:
+    """按攻击策略叠加聚合（G7）。
+
+    一条用例可以同时声明多个策略（如 角色伪装 + 多轮渐进 + 合理业务外衣），
+    所以各行的 n **不互斥**——这不是口径错，而是“一条样本可同时落在多个策略桶”的事实；
+    读表时不能把各行 n 相加当总样本数。想看“叠加 vs 单策略”要靠同一批里的对照用例。
+
+    口径与其它维度一致：precondition_failed 恒排除，unknown 跟 --exclude-unknown 走。
+    """
+    items = _comparable_items(results, exclude_unknown)
+    groups: dict = defaultdict(list)
+    for item in items:
+        for label in getattr(item, "attack_strategies", None) or []:
+            groups[str(label)].append(item)
+    rows: list = []
+    for value, group in sorted(groups.items(), key=lambda pair: (-len(pair[1]), str(pair[0]))):
+        passed = sum(1 for item in group if item.strict_passed)
+        row = _dimension_row("attack_strategy", ATTACK_STRATEGIES.get(value, value), passed, len(group))
+        row["key"] = value
+        row["note"] = (row["note"] + "；" if row["note"] else "") + "与其它策略桶重叠，n 不可相加"
+        rows.append(row)
+    return rows
 
 
 def dimension_breakdown(
@@ -173,6 +198,7 @@ def dimension_breakdown(
         for value, group in sorted(groups.items(), key=lambda pair: (-len(pair[1]), str(pair[0]))):
             passed = sum(1 for item in group if item.strict_passed)
             rows.append(_dimension_row(name, str(value), passed, len(group)))
+    rows.extend(attack_strategy_rows(results, exclude_unknown))
     return rows
 
 
@@ -563,6 +589,18 @@ def summarize(
         "dimension_breakdown": dimension_breakdown(
             results, gate.status, exclude_unknown=exclude_unknown, gate_metrics=gate.metrics
         ),
+        # 攻击策略维度的机读版（键是受控词表的 key）：跨批次/跨模型对比用这个，
+        # 人读的表在 dimension_breakdown 里（值已翻译成中文）。
+        "by_attack_strategy": {
+            row["key"]: {
+                "n": row["n"],
+                "passed": row["passed"],
+                "rate": row["rate"],
+                "ci_low": row["ci_low"],
+                "ci_high": row["ci_high"],
+            }
+            for row in attack_strategy_rows(results, exclude_unknown=exclude_unknown)
+        },
         # 控制覆盖：属于评测集属性，与本轮结果无关，原样带出去供报告渲染与门禁复用。
         "require_coverage": list(require_coverage or []),
         "coverage": coverage or {},

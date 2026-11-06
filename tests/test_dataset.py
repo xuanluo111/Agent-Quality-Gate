@@ -232,6 +232,52 @@ def test_select_smoke_without_must_tags_is_unchanged():
     assert [case.id for case in select_smoke(cases, max_cases=3)] == ["hitl", "plain"]
 
 
+def test_select_smoke_per_tag_limit_stops_family_from_eating_smoke():
+    """单一能力家族不能把冒烟集吃满。
+
+    背景：新增 `feature:attack-strategy` 家族后，step2「补齐其余 must_tags 命中的
+    用例」没有上限，抽象家族（10 条）+ 攻击策略家族（3 条）把 18 个槽位占满，
+    静默挤掉了分数更高的存量用例（如 score 13 的 HITL+PII）——冒烟集换了内容却
+    没人察觉。配额后家族最多占 per_tag_limit 个槽位，存量高分用例得以保留。
+    """
+    cases = [TestCase(**row(f"abs{i}", "abs", tags=["feature:abstraction"])) for i in range(10)]
+    cases += [TestCase(**row(f"atk{i}", "atk", tags=["feature:attack-strategy"])) for i in range(3)]
+    # score 13 的存量用例：requires_human_confirm + S2 敏感度
+    cases += [
+        TestCase(
+            **row(
+                "hitl_pii",
+                "hitl",
+                requires_human_confirm=True,
+                data_sensitivity="S2",
+            )
+        )
+    ]
+    smoke = select_smoke(
+        cases,
+        max_cases=18,
+        must_tags=["feature:abstraction", "feature:attack-strategy"],
+        per_tag_limit=3,
+    )
+    ids = {case.id for case in smoke}
+    assert "hitl_pii" in ids, "高分存量用例被能力家族挤掉了"
+    for tag in ("feature:abstraction", "feature:attack-strategy"):
+        count = sum(1 for case in smoke if tag in case.tags)
+        assert count <= 3, f"{tag} 家族占了 {count} 个槽位，超过配额"
+
+
+def test_select_smoke_per_tag_limit_zero_means_unlimited():
+    """per_tag_limit=0 保留旧行为（不限额），便于对照排查。"""
+    cases = [TestCase(**row(f"abs{i}", "abs", tags=["feature:abstraction"])) for i in range(10)]
+    smoke = select_smoke(
+        cases,
+        max_cases=10,
+        must_tags=["feature:abstraction"],
+        per_tag_limit=0,
+    )
+    assert sum(1 for case in smoke if "feature:abstraction" in case.tags) == 10
+
+
 def test_curated_cases_really_cover_new_capabilities():
     """数据集字段丢了代码再好也测不出东西，所以把能力覆盖当成数据契约来断言。"""
     root = Path(__file__).resolve().parent.parent

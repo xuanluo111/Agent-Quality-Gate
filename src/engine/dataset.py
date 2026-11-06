@@ -280,13 +280,21 @@ def two_proportion_z_test(
 
 
 def select_smoke(
-    cases: List[TestCase], max_cases: int = 12, must_tags: Optional[List[str]] = None
+    cases: List[TestCase],
+    max_cases: int = 12,
+    must_tags: Optional[List[str]] = None,
+    per_tag_limit: int = 3,
 ) -> List[TestCase]:
     """挑选冒烟集。
 
     must_tags 命中的用例优先入选并排在最前：新能力如果只看分打分，会被 HITL 这类
     高分用例全挤掉，`--limit` 截断后快速回归就永远测不到它们。其余名额仍按特征
     打分与类别多样性补齐。
+
+    per_tag_limit 限制**单个能力家族最多占多少槽位**。没有这个上限时，一个用例数
+    多的家族（抽象用例扩到 10 条、又新增 3 条攻击策略用例）会把冒烟集整个吃满，
+    静默挤掉分数更高的存量用例（如 score 13 的 HITL+PII 用例）——冒烟集悄悄换了
+    内容却没人察觉。冒烟集是快速回归探针，不是全量样本：家族在 core 里仍然全覆盖。
     """
     def score(case: TestCase) -> tuple:
         feature = 0
@@ -305,6 +313,23 @@ def select_smoke(
     ordered = sorted(cases, key=score)
     selected: List[TestCase] = []
     required = {tag for tag in (must_tags or []) if tag}
+    # 每个能力家族已占用的槽位数
+    used: Counter = Counter()
+
+    def family_tags(case: TestCase) -> List[str]:
+        return [tag for tag in case.tags if tag in required]
+
+    def quota_exceeded(case: TestCase) -> bool:
+        """该用例是否会突破任一能力家族的槽位配额（per_tag_limit=0 表示不限）。"""
+        if per_tag_limit <= 0:
+            return False
+        return any(used[tag] >= per_tag_limit for tag in family_tags(case))
+
+    def add(case: TestCase) -> None:
+        selected.append(case)
+        for tag in family_tags(case):
+            used[tag] += 1
+
     if required:
         # 先按 tag 轮转，每个必备 tag 各取一条排在最前：若某类新能力用例数一多
         # （如抽象用例扩容后 10 条），按分排序会把它整个顶到头部，把其他能力
@@ -316,28 +341,32 @@ def select_smoke(
                 if case in selected:
                     continue
                 if tag in case.tags:
-                    selected.append(case)
+                    add(case)
                     break
         # 轮转之后再按原规则补齐其余 must_tags 命中的用例。
         for case in ordered:
             if len(selected) >= max_cases:
                 break
-            if required & set(case.tags) and case not in selected:
-                selected.append(case)
+            if not (required & set(case.tags)) or case in selected:
+                continue
+            if quota_exceeded(case):
+                continue
+            add(case)
     categories = {case.category for case in selected}
     for case in ordered:
         if len(selected) >= max_cases:
             break
-        if case in selected:
+        if case in selected or quota_exceeded(case):
             continue
         if case.category not in categories or len(selected) < 6:
-            selected.append(case)
+            add(case)
             categories.add(case.category)
     for case in ordered:
         if len(selected) >= max_cases:
             break
-        if case not in selected:
-            selected.append(case)
+        if case in selected or quota_exceeded(case):
+            continue
+        add(case)
     return selected
 
 

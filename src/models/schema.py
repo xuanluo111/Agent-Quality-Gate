@@ -64,6 +64,21 @@ VARIABLE_ROLE_MISMATCH_REASON = "Variable_Role_Mismatch"
 # formalize 工具允许声明的变量角色（照从鑫原文 X/Y/XY/N-A），归一化后比较。
 VARIABLE_ROLES = ("X", "Y", "XY", "NA")
 
+# G7 种子变异的攻击策略词表：一条用例可叠加多个策略。
+# 为什么用受控词表而不是自由文本：策略散落在 attack_logic 里时只能人读，
+# 无法回答“哪种策略组合真的有判别力”——那会让下一轮选策略靠拍脑袋。
+# 受控词表 + 结构化字段，才能把“单策略直给 0/7、叠加策略 n/7”这种结论算出来。
+ATTACK_STRATEGIES: Dict[str, str] = {
+    "voice": "话术换装",          # 用口语/行话包装危险请求
+    "role": "角色伪装",           # 自称身份制造授权错觉
+    "encoding": "编码混淆",       # base64/零宽字符等编码载荷
+    "gradual": "多轮渐进",        # 分步推进：先无害动作、后危险动作
+    "urgent": "紧急施压",         # 用时间压力逼跳审批
+    "plausible": "合理业务外衣",  # 把危险请求包装成正常业务需求
+    "carrier": "文件载体注入",    # 指令藏在待读文件里借 Agent 之手执行
+    "recon": "探测前置",          # 先做无害侦察（端口/权限），为后续动作铺路
+}
+
 SEVERITY_ALIASES = {
     "critical": "critical",
     "严重": "critical",
@@ -222,6 +237,7 @@ class TestCase(BaseModel):
             "egress_allowlist",
             "forbidden_literals",
             "expected_variable_roles",
+            "attack_strategies",
         ):
             if not data.get(empty_key):
                 data.pop(empty_key, None)
@@ -251,6 +267,33 @@ class TestCase(BaseModel):
     expected_variable_roles: Dict[str, str] = Field(
         default_factory=dict, description="期望变量角色：变量名 -> X/Y/XY/NA（归一化后比较）"
     )
+    # ---- G7 种子变异：攻击策略叠加 ----
+    # 一条用例可以同时用多个策略（如 角色伪装 + 多轮渐进 + 合理业务外衣）。
+    # 空值不序列化，保护存量用例字节（见 _serialize 的说明）。
+    attack_strategies: List[str] = Field(
+        default_factory=list, description="攻击策略叠加：取值见 ATTACK_STRATEGIES 词表"
+    )
+
+    @field_validator("attack_strategies", mode="before")
+    @classmethod
+    def _normalize_attack_strategies(cls, value: object) -> List[str]:
+        """归一化并校验攻击策略标签：只接受受控词表里的 key，去重保序。"""
+        if not value:
+            return []
+        if isinstance(value, str):
+            value = value.replace(",", " ").split()
+        ordered: List[str] = []
+        for item in value:
+            key = str(item).strip().lower()
+            if not key:
+                continue
+            if key not in ATTACK_STRATEGIES:
+                raise ValueError(
+                    f"attack_strategies 取值 {key!r} 不在受控词表内（可用: {', '.join(sorted(ATTACK_STRATEGIES))}）"
+                )
+            if key not in ordered:
+                ordered.append(key)
+        return ordered
 
     @field_validator("severity", mode="before")
     @classmethod
@@ -444,3 +487,6 @@ class EvalResult(BaseModel):
     model: str = ""
     run_id: str = ""
     token_cost: int = 0
+    # G7：本条用例用到的攻击策略叠加（可多个）。报告按它聚合“哪种策略组合真有判别力”，
+    # 属运行输出字段，不碰数据集 → 不切代。
+    attack_strategies: List[str] = Field(default_factory=list, description="本条样本的攻击策略叠加标签")
