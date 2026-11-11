@@ -2,7 +2,8 @@
 """一键自检：离线层证明代码没坏，--live 再花少量调用证明链路真的通。
 
 分两层：
-- 默认（离线）：pytest、六项能力端到端自检、数据集重建与确定性、dry-run 采样。
+- 默认（离线）：pytest、六项能力端到端自检、数据集重建与确定性、题面地基体检
+  （C01 判据自检 / C04 可判率 / C03 spec_leak）、dry-run 采样。
   全程 0 成本，不读 API Key，可以反复跑。
 - --live：真机跑 smoke 前几条，体检产物与报告章节；再加 --repeat 验证 pass^k。
 
@@ -363,6 +364,76 @@ def step_coverage() -> Step:
 
 
 # --------------------------------------------------------------------------
+# 题面地基体检（CCF C01 / C03 / C04）：纯离线、零 API、不改用例
+# --------------------------------------------------------------------------
+def _load_core_cases():
+    from src.engine.dataset import load_cases
+
+    cases, _ = load_cases(str(ROOT / "cases" / "core_suite.jsonl"), dedupe=True)
+    return cases
+
+
+def step_oracle_selfcheck() -> Step:
+    """C01 判据自检：正反参照离线喂确定性闸门，DEAD_CASE／LEAKY 必须为 0。
+
+    这是「题能不能区分对错」的地基：C01 塌了整批分数不可引用，所以作阻断项——
+    一旦出现死题或漏网，verify 直接失败，逼着修题走评审切代，而不是带病跑批。
+    UNDETERMINED 只反映离线不可判比例，不阻断（交给语义裁判层与 C04 口径）。
+    """
+    from src.engine.judge import LayeredJudge
+    from src.engine.oracle import selfcheck_suite
+
+    cases = _load_core_cases()
+    if not cases:
+        return Step("C01 判据自检", False, "core_suite 为空，无法自检")
+    summary = selfcheck_suite(LayeredJudge(), cases)  # 不传 client：llm 层落 local_fallback → NOT_DETERMINISTIC
+    dead = summary["dead_cases"]
+    leaky = summary["leaky_cases"]
+    detail = (
+        f"{summary['total_cases']} 条 | OK {summary['ok']} | DEAD {len(dead)} | LEAKY {len(leaky)} | "
+        f"UNDET {len(summary['undetermined_cases'])} | 变异捕获 "
+        f"{summary['mutation_caught']}/{summary['mutation_total']}(rate={summary['capture_rate']})"
+    )
+    if dead or leaky:
+        preview = ", ".join((dead + leaky)[:8])
+        return Step("C01 判据自检", False, f"{detail} | 失效用例: {preview}")
+    return Step("C01 判据自检", True, detail)
+
+
+def step_judgeability() -> Step:
+    """C04 可判率：每条用例至少绑一个机械 target，豁免外新增缺口即失败（防可判率悄悄劣化）。"""
+    from src.engine import suite_audit
+
+    cases = _load_core_cases()
+    summary = suite_audit.judgeability_summary(cases)
+    detail = f"可判率 {summary['judgeable']}/{summary['total']}({summary['rate'] * 100:.2f}%)"
+    if summary["known_gaps"]:
+        detail += f" | 已知豁免 {len(summary['known_gaps'])} 条: {', '.join(summary['known_gaps'])}"
+    if summary["unexpected_gaps"]:
+        return Step(
+            "C04 可判率",
+            False,
+            f"{detail} | 豁免外新增缺口(未绑任何机械 target): {', '.join(summary['unexpected_gaps'])}",
+        )
+    return Step("C04 可判率", True, detail)
+
+
+def step_spec_leak() -> Step:
+    """C03 spec_leak：题面是否把判分依据写给被测。只报告、不阻断（拒绝/改口型必然命中，交人工分诊）。"""
+    from src.engine import suite_audit
+
+    cases = _load_core_cases()
+    summary = suite_audit.spec_leak_summary(cases)
+    dist = summary["by_level"]
+    detail = (
+        f"命中 {summary['leaked']}/{summary['total']}({summary['rate'] * 100:.2f}%) | "
+        f"file {dist['file']} / test {dist['test']} / symbol {dist['symbol']} | "
+        f"仅为人工分诊线索(拒绝/改口型题面天然复述判据)，不阻断"
+    )
+    return Step("C03 spec_leak", True, detail)
+
+
+# --------------------------------------------------------------------------
 # 第 2 层：真机
 # --------------------------------------------------------------------------
 def _capability_cases(limit: int):
@@ -510,7 +581,17 @@ def main() -> int:
     print(f"Agent-Quality-Gate 自检 | 模式: {'离线 + 真机' if args.live else '仅离线'}")
     print("=" * 66)
 
-    steps = [step_environment(), step_pytest(), step_capabilities(), step_dataset(), step_coverage(), step_dry_run()]
+    steps = [
+        step_environment(),
+        step_pytest(),
+        step_capabilities(),
+        step_dataset(),
+        step_coverage(),
+        step_oracle_selfcheck(),
+        step_judgeability(),
+        step_spec_leak(),
+        step_dry_run(),
+    ]
     if args.live:
         key = os.environ.get("AQG_API_KEY") or os.environ.get("GC_API_KEY")
         if not key:
