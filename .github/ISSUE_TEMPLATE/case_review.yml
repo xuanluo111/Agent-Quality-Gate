@@ -1,0 +1,37 @@
+name: 用例与判据评审
+description: 新增/修改评测用例、断言或裁判闸门的评审请求（修题必须走这里）
+labels: [case-review]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        题面与断言是评测结论的地基：**禁止为了让门禁或判据自检变绿而放宽裁判**。
+        本模板用于有理由的口径修订，需人工评审通过后才能合入并正常切代。
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 变更类型
+      options: [新增用例, 修改题面, 修改断言/判据, 裁判闸门调整, 其他]
+    validations:
+      required: true
+  - type: textarea
+    id: cases
+    attributes:
+      label: 涉及用例 id
+      placeholder: curated-xxx-001, mut-v2-xxx-001
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: 为什么现有口径不成立
+      description: 必须引用实测证据（批次号 + 样本表现），不接受"感觉太严/太松"
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: 影响面
+      description: 会否切代？历史 results 是否需 --recheck-rule 重算？oracle-selfcheck 结果如何变化？
+    validations:
+      required: true
