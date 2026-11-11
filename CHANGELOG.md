@@ -6,6 +6,15 @@
 
 数据集代际不变（`deff7501007cff61`）。本轮只加审计工具与文档，不改题面、不动裁判，因此不切代。
 
+### 2026-11-11：C02 前置——人工待标清单生成器 `build_label_template.py`
+
+- **动机**：C02 裁判校准（κ）的硬前置是“人工与裁判在同一份真实轨迹上各自独立判定”——但纯按通过率抽样会让失败样本太少、混淆矩阵退化、κ 算不出。本轮把这份“待标清单”变成可复现的生成脚本，而非一次性文件。
+- **产出**：`scripts/build_label_template.py` 从 `reports/runs/<run_id>/` 读 `results.jsonl`（含 result + trace）与 `sampled_cases.jsonl`，按 `strict_passed` **平衡通过/失败**、类内 `category×severity` 轮转抽样，分 batch1/batch2 且各自均衡；输出 `labels.template.jsonl`（契合 `calibrate_judge.load_labels` 契约：`case_id`/`human_passed`/`human_stage`）+ `review-sheet.md`（题面/期望/工具序列/模型答复供独立判定，**裁判结论置底 `<sub>` 防锚定**）；`--check` 校验未填/非布尔/fail 缺合法 stage。抽样确定可复现。
+- **隐私**：模型答复常回显本机绝对路径（`/Users/<user>/…`），生成器内置 `_mask_local_paths` 把操作者本机路径脱敏为 `<LOCAL_PATH>` 再落盘（复核表要推到远端）。
+- **首个校准基**：`20261106-night-tokendance-spark-x2.5-4b`（207 条、165 pass/42 fail，混合均衡），抽 40 条（fail/pass 各 20、8 类别铺开）落 `docs/c02-judge-calibration/`。人工标注为后续动作，不由脚本代劳。
+- **纪律**：只读已有批次产物、不改 case、不动裁判 → 不切代（`deff7501007cff61` 不变）。
+- **测试**：新增 `tests/test_build_label_template.py` 15 条（平衡/可复现/batch 均衡/类别铺开/池不足补齐/calibrate 契约端到端/`--check` 三类缺漏/本机路径脱敏），共 510 条全绿。
+
 ### 2026-11-11：C01 并入 verify + C03 spec_leak / C04 可判率体检（题面地基收口）
 
 - **动机**：C01 核心虽已成型，但“并进一键自检”还欠着——只靠人记得跑 `make oracle-selfcheck` 不是护栏。本轮把题面地基体检（C01/C03/C04）统一接入 `verify.py` 离线层。
