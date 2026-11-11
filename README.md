@@ -2,7 +2,7 @@
 
 [![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
 
-> CI 跑的是离线层：279 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
+> CI 跑的是离线层：480 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
 
 一个面向工具型 AI Agent 的可复现质量评测与发布门禁。它不只检查最终回答，而是审计完整执行轨迹：真实 function calling、受控工具执行、数据路由、变量抽取、人工确认、成本预算、分层裁判、双轨门禁、风险台账和可视化报告。
 
@@ -53,7 +53,8 @@
 | 瞬态退避与急停（C11） | `runner._completion` 对 429/超时/网关 5xx 指数退避+jitter 重试（累计 `backoff_ms` 入轨迹）；`run_eval` 连续 Harness_Error 熔断、`--abort-on-critical`/`--abort-file` 急停，半批停摆统一记未评、不冒充模型低分 |
 | 软件供应链（C10） | `requirements.lock` 精确锁定 + `scripts/check_supply_chain.py` 离线校验锁定完整性（CI 阻断） + CI `pip-audit`/CycloneDX SBOM + `scripts/drift_check.py` 跨批次 Provider_Change 与比率漂移核验（复用两比例 z 检验） |
 | 裁判校准 | `scripts/calibrate_judge.py` 对齐人工标注，输出混淆矩阵、漏判率、误伤率、Cohen's kappa 与环节一致率，只用标准库、不联网 |
-| 测试 | 457 个 pytest 用例，覆盖 runner（含瞬态退避、聚合墙钟）、judge（含工具参数 Schema 校验、抽象判别）、gate、tools（含参数校验）、dataset（含两比例 z 检验、select_smoke 轮转）、report（含台账代际双语义）、state、provenance、stability、calibrate、rejudge、run_eval（含熔断/急停）、supply_chain、drift、verify 与可视化解析 |
+| 判据自检回路（C01） | `src/engine/oracle.py`：不调模型，给每条用例离线合成一份「完美执行的正面样本」+ 一组「每条确定性断言各破坏一次」的反面变异样本，只喂裁判的**确定性闸门链**（`rule` → `trajectory/jcv/vri`）——正面过不了记 `DEAD_CASE`（完美执行也拿不到分，压所有人 0 分且不携带信息），反面过了闸门记 `LEAKY`（破坏断言照样得分，在给“没做到”发分）；语义裁决离线未执行的部分诚实记 `NOT_DETERMINISTIC`，不假阳性也不掩盖。`scripts/selfcheck_oracles.py`（`make oracle-selfcheck`）产出 `reports/oracle_selfcheck.{json,md}`；只报告、不修改用例，修题是人的决定。首份 207 条基线：`dead=0 leaky=0`，789 个适用变异全被闸门捕获 |
+| 测试 | 480 个 pytest 用例，覆盖 runner（含瞬态退避、聚合墙钟）、judge（含工具参数 Schema 校验、抽象判别）、oracle（判据自检：家族样例 / LEAKY 检出 / 分流词表 / 适用性四组钉桩）、gate、tools（含参数校验）、dataset（含两比例 z 检验、select_smoke 轮转）、report（含台账代际双语义）、state、provenance、stability、calibrate、rejudge、run_eval（含熔断/急停）、supply_chain、drift、verify 与可视化解析 |
 
 ## 明确没有做的事
 
@@ -65,6 +66,7 @@
 | 语义级变量等价 | JCV 是启发式集合重合度，不是语义证明 |
 | 通用 DLP | 只覆盖邮箱、手机号、身份证、银行卡、常见 API Key 的 regex 脱敏 |
 | 自动修复 | 报告会给出影响与建议，但不会自动修改 Agent 或代码 |
+| 题目审计闭环 | C01 判据自检只报告 `DEAD_CASE`／`LEAKY`，不自动修题；修复走人工评审与正常切代 |
 | 生产级并发/重试 | 线程池并发；已对供应商限流/超时/网关 5xx 做**指数退避+jitter 自动重试**（`--max-retries`），并有批次级**熔断**（连续 Harness_Error）与**急停**（`--abort-on-critical`/`--abort-file`）；仍是同一进程内的单次评测，非跨机断点续跑——中断后靠逐条落盘的 `results.jsonl` 与批量层 `--skip-existing` 增量重跑 |
 
 ## 快速开始
@@ -82,6 +84,9 @@ cp .env.example .env
 python scripts/build_suite.py
 python scripts/run_eval.py --suite smoke --dry-run --limit 0
 python -m pytest -q
+
+# 判据自检：正反参照离线喂裁判闸门，审计“题目本身可不可信”（0 成本）
+python scripts/selfcheck_oracles.py   # 等价于 make oracle-selfcheck
 
 # 一条命令把上面三件事按顺序做完，并加一段六项能力的端到端自检（0 成本）
 python scripts/verify.py        # 等价于 make verify
@@ -109,6 +114,7 @@ make test         # 离线单测
 make verify       # 一键自检：单测+六项能力+数据集+dry-run（0 成本）
 make verify-live  # 自检 + 真机 6 条能力用例 + pass^k（会产生费用）
 make build-suite  # 重建 core/smoke 与审计清单
+make oracle-selfcheck  # C01 判据自检：题目可信度审计（0 成本）
 make dry-run      # 数据校验
 make smoke        # 真实模型冒烟评测
 make visualize    # 生成 HTML/PNG 图表
@@ -210,7 +216,7 @@ cases/regression.jsonl ────┼─> build_suite.py ─> core_suite.jsonl 
 
 ## 数据集
 
-- `cases/curated_cases.jsonl`：74 条手工设计的作品集用例，覆盖 JCV、HITL、S2、S3、路径穿越、命令注入、提示词注入、谄媚、权限边界，以及终态断言、参数血缘、改口污染、改口轮次、抽象判别（10 条，G3/VRI）与 17 条种子变异对抗用例（`source=mutation-v1`）（`iRTE2026` 标签）。
+- `cases/curated_cases.jsonl`：77 条手工设计的作品集用例，覆盖 JCV、HITL、S2、S3、路径穿越、命令注入、提示词注入、谄媚、权限边界，以及终态断言、参数血缘、改口污染、改口轮次、抽象判别（10 条，G3/VRI）与 17 条种子变异对抗用例（`source=mutation-v1`）（`iRTE2026` 标签）。
 - `cases/regression.jsonl`：217 条历次评测中 Strict 失败的 Critical/High 用例沉淀；默认按 `id` 和输入哈希去重后追加。历史遗留的重复行用 `python scripts/build_suite.py --dedupe-inputs` 清理（按 `id` 保留首条，同 `id` 但内容不同的会列为冲突）。
 - `cases/generated.jsonl`：可选的模型生成用例，不参与默认构建。
 - `cases/core_suite.jsonl`：由 curated + regression 构建的可执行全量集；不支持的 allowed_tools 会被排除并记录，避免「看起来执行了、实际没有执行」。
@@ -227,7 +233,7 @@ python scripts/build_suite.py \
 
 `--must-include` 命中的用例强制进 smoke 并排在最前，且**按 tag 轮转**各取一条再按分补齐：只看特征打分的话，新能力用例会被同类高分用例挤掉，`--limit` 截断后就永远测不到。传入 `--must-include ""` 可退回纯打分选择。
 
-当前 core 集约 204 条（数据集代 `2fd4a5646accb8d7`），其中抽象判别 10 条、种子变异 17 条、S2 用例 4 条、S3 用例 1 条、JCV 用例 12 条、HITL 用例 8 条。每次重建数据集都会换一代指纹，风险台账据此区分“模型退化”与“换了数据集”——跨代对比不能直接读通过率。
+当前 core 集 207 条（数据集代 `deff7501007cff61`），其中抽象判别 10 条、种子变异 17 条、S2 用例 4 条、S3 用例 1 条、HITL 用例 8 条。每次重建数据集都会换一代指纹，风险台账据此区分“模型退化”与“换了数据集”——跨代对比不能直接读通过率。
 
 这个规模适合演示流程与回归；模型排名的结论不只看通过率，以 Wilson 95% 区间与双比例 z 检验为准（见「排名与显著性」），且两代之间的分数不可直接相减。
 
@@ -344,6 +350,8 @@ reports/
 │       └── summary.json         # 可视化与下游消费的结构化摘要
 ├── latest.md                    # 最近一次“会发布”的报告副本（不入库，每次发布被覆盖）
 ├── risk_ledger.json             # 跨期风险台账（同一模型的多个 run 各自记账，入库）
+├── oracle_selfcheck.json        # C01 判据自检全量矩阵（用例 × 变异组 → 裁决 + 裁判 reason，入库）
+├── oracle_selfcheck.md          # 自检摘要（DEAD_CASE／LEAKY 清单、捕获率、按 category 聚合，入库）
 ├── observability.json           # 最近一次“会发布”的 summary 副本（不入库）
 └── charts/                      # 入库：README 引用的图 + 可离线打开的仪表盘
     ├── dashboard.html           # ECharts 交互仪表盘（含三原色图板）
@@ -462,9 +470,10 @@ python scripts/rejudge.py --runs 'reports/runs/*' --collateral-risk critical
 
 ```bash
 python -m pytest -q
+python scripts/selfcheck_oracles.py   # C01 判据自检：题目可信度审计（同样 0 成本）
 ```
 
-测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、门禁分支、数据加载/去重/采样、报告与台账、Markdown/summary 可视化解析。
+测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、判据自检回路（正反参照/漏网检出/诚实分母）、门禁分支、数据加载/去重/采样、报告与台账、Markdown/summary 可视化解析。
 
 GitHub Actions 主要做离线检查：安装依赖、运行 pytest、校验供应链锁定完整性、重建数据集、执行 smoke dry-run，不会调用真实模型；另有一个 `supply-chain` 作业从 `requirements.lock` 生成 CycloneDX SBOM 并跑 `pip-audit`（咨询级漏洞扫描）。真实评测请在本地配置 `.env` 后手动运行。
 
@@ -480,6 +489,7 @@ src/
     ├── privacy.py          # 正则脱敏与本地/拒绝意图识别
     ├── variables.py        # 工具结果变量抽取（JCV 输入）
     ├── judge.py            # 规则/轨迹/LLM 分层裁判
+    ├── oracle.py           # C01 判据自检：合成正反参照，喂确定性闸门链
     ├── state.py            # 工作区快照、终态断言、副作用与改口脏状态扫描
     ├── provenance.py       # 工具参数血缘（ID/金额/日期溯源）
     ├── stability.py        # pass@k / pass^k / flaky 汇总
@@ -494,6 +504,7 @@ scripts/
 ├── generate_cases.py       # 可选的模型生成用例
 ├── clean_and_fix_cases.py  # 规范化/审计/去重
 ├── calibrate_judge.py      # 裁判校准（混淆矩阵 / 漏判率 / 误伤率 / kappa）
+├── selfcheck_oracles.py    # C01 判据自检 runner（离线、零 API，出 DEAD/LEAKY 报告）
 ├── check_supply_chain.py   # C10 供应链：校验 requirements.lock 锁定完整性（离线）
 ├── drift_check.py          # 跨批次漂移：换代可比较性 / Provider_Change / 比率显著性（复用 z 检验）
 ├── verify.py               # 一键自检：离线层 + 可选真机层
@@ -531,6 +542,15 @@ reports/                    # 运行产物、台账、图表
 - 工具参数 Schema 校验只覆盖 `TOOL_SCHEMAS` 声明的关键字子集（`required` / 基本类型 / `enum` / `additionalProperties=False`），不是完整 JSON Schema Draft（无 `$ref`、无嵌套 `items`/组合子）；只对已登记工具生效，未登记工具名的越权由 allowlist 侧处理。校验在裁判规则层独立复校模型产出的参数，与沙箱是否实际执行无关；排在其前面的语义类发现（污染/终态/血缘）会优先归因。
 
 ## CHANGELOG
+
+### 2026-11：C01 判据自检回路（题目可信度审计，P0 首项提前收口）
+
+- **动机**：对比批一旦先出跑分，“题本身可不可信”就永远问不出口。C01 用两类合成样本反向审计题目：不调模型，给每条用例合成“完美执行的正面样本”与“每条确定性断言各破坏一次”的反面变异，离线喂裁判。
+- **关键取舍（踩坑后修正）**：自检只走**确定性闸门链**（`_rule_based` → `_trajectory_audit`）而不走整条 `judge.evaluate`——离线无客户端时 llm 层被兜底成 `Judge_Unavailable`（local_fallback 判负），会把“漏网断言”伪装成“离线不可判”，自检回路形同虚设。因此反面过了闸门即记 LEAKY（契约：声明的确定性断言必须被闸门自己拦住，靠 LLM 兜网不算数），正面过闸门才记 NOT_DETERMINISTIC。
+- **修掉的合成器缺陷**：HITL 升级摘要若不用 `forbidden_actions` 原词复述 + 数字范围 + 可逆性，会被真闸门 `Escalation_Without_Summary` 判成假 DEAD——修的是合成器，没动裁判一行代码。
+- **产出**：`src/engine/oracle.py` + `scripts/selfcheck_oracles.py`（`make oracle-selfcheck`）+ `docs/c01-oracle-selfcheck/00-设计.md`；首份 207 条基线报告 `reports/oracle_selfcheck.{json,md}`：`dead=0 leaky=0`，789 个适用变异全被闸门捕获；199/207 条正面语义部分离线不可判（即 C04 可判率体检的分子）。
+- **纪律**：只报告、不修改用例；禁止为让自检“全绿”放宽裁判或断言，修题走人工评审与正常切代。
+- **测试**：新增 `tests/test_oracle_selfcheck.py` 23 条（家族样例 / 负向钉桩“闸门失明必报 LEAKY” / 分流词表 / 适用性诚实分母），共 480 条全绿。
 
 ### 2026-11：G7 叠加策略真机探针验证 + 修掉第六/七/八处工具缺陷
 
