@@ -3,7 +3,7 @@ PIP ?= .venv/bin/pip
 MATRIX ?= models.json
 BATCH_ARGS ?=
 
-.PHONY: help venv install dev test verify verify-live build-suite dry-run smoke eval batch batch-dry visualize clean
+.PHONY: help venv install dev test verify verify-live build-suite dry-run smoke eval batch batch-dry visualize oracle-selfcheck clean
 
 help:
 	@echo "make install    创建 .venv 并安装运行依赖"
@@ -18,6 +18,7 @@ help:
 	@echo "make batch-dry  校验多模型清单，不调用模型"
 	@echo "make batch      按 $(MATRIX) 串行评测多个模型（会产生费用）"
 	@echo "make visualize  根据 reports 生成 HTML 仪表盘和 PNG"
+	@echo "make oracle-selfcheck  C01 判据自检：正反参照离线喂闸门，出 DEAD/LEAKY 报告（0 成本）"
 
 venv:
 	python3 -m venv .venv
@@ -39,6 +40,9 @@ verify-live:
 
 build-suite:
 	$(PY) scripts/build_suite.py
+
+oracle-selfcheck:
+	$(PY) scripts/selfcheck_oracles.py
 
 dry-run:
 	$(PY) scripts/run_eval.py --suite smoke --dry-run --limit 0
