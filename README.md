@@ -5,9 +5,9 @@
 [![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
 [![License: MIT (code) / CC-BY-4.0 (data)](https://img.shields.io/badge/License-MIT%20(code)%20%2F%20CC--BY--4.0%20(data)-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)](pyproject.toml)
-[![tests](https://img.shields.io/badge/tests-495%20passed-brightgreen)](tests/)
+[![tests](https://img.shields.io/badge/tests-510%20passed-brightgreen)](tests/)
 
-> CI 跑的是离线层：495 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
+> CI 跑的是离线层：510 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
 
 一个面向工具型 AI Agent 的可复现质量评测与发布门禁。它不只检查最终回答，而是审计完整执行轨迹：真实 function calling、受控工具执行、数据路由、变量抽取、人工确认、成本预算、分层裁判、双轨门禁、风险台账和可视化报告。
 
@@ -36,7 +36,7 @@
 - [发行说明](#发行说明)
 - [贡献与安全](#贡献与安全)
 
-文中 G3/G6/G7/C01/C03/C04/C07/C10/C11/K08 等内部工单代号，见[代号对照表](#内部代号对照)。
+文中 G3/G6/G7/C01/C02/C03/C04/C07/C10/C11/K08 等内部工单代号，见[代号对照表](#内部代号对照)。
 
 ## 为什么做这个项目
 
@@ -84,7 +84,7 @@
 | 软件供应链（C10） | `requirements.lock` 精确锁定 + `scripts/check_supply_chain.py` 离线校验锁定完整性（CI 阻断） + CI `pip-audit`/CycloneDX SBOM + `scripts/drift_check.py` 跨批次 Provider_Change 与比率漂移核验（复用两比例 z 检验） |
 | 裁判校准 | `scripts/calibrate_judge.py` 对齐人工标注，输出混淆矩阵、漏判率、误伤率、Cohen's kappa 与环节一致率，只用标准库、不联网 |
 | 判据自检回路（C01） | `src/engine/oracle.py`：不调模型，给每条用例离线合成一份「完美执行的正面样本」+ 一组「每条确定性断言各破坏一次」的反面变异样本，只喂裁判的**确定性闸门链**（`rule` → `trajectory/jcv/vri`）——正面过不了记 `DEAD_CASE`（完美执行也拿不到分，压所有人 0 分且不携带信息），反面过了闸门记 `LEAKY`（破坏断言照样得分，在给“没做到”发分）；语义裁决离线未执行的部分诚实记 `NOT_DETERMINISTIC`，不假阳性也不掩盖。`scripts/selfcheck_oracles.py`（`make oracle-selfcheck`）产出 `reports/oracle_selfcheck.{json,md}`；只报告、不修改用例，修题是人的决定。首份 207 条基线：`dead=0 leaky=0`，767 个适用变异全被闸门捕获 |
-| 测试 | 495 个 pytest 用例，覆盖 runner（含瞬态退避、聚合墙钟）、judge（含工具参数 Schema 校验、抽象判别）、oracle（判据自检：家族样例 / LEAKY 检出 / 分流词表 / 适用性四组钉桩）、gate、tools（含参数校验）、dataset（含两比例 z 检验、select_smoke 轮转）、report（含台账代际双语义）、state、provenance、stability、calibrate、rejudge、run_eval（含熔断/急停）、supply_chain、drift、suite_audit（C03 spec_leak ／ C04 可判率体检）、verify 与可视化解析 |
+| 测试 | 510 个 pytest 用例，覆盖 runner（含瞬态退避、聚合墙钟）、judge（含工具参数 Schema 校验、抽象判别）、oracle（判据自检：家族样例 / LEAKY 检出 / 分流词表 / 适用性四组钉桩）、gate、tools（含参数校验）、dataset（含两比例 z 检验、select_smoke 轮转）、report（含台账代际双语义）、state、provenance、stability、calibrate、build_label_template（C02 待标清单：平衡抽样/复核表/校验/本机路径脱敏）、rejudge、run_eval（含熔断/急停）、supply_chain、drift、suite_audit（C03 spec_leak ／ C04 可判率体检）、verify 与可视化解析 |
 
 ## 明确没有做的事
 
@@ -128,7 +128,7 @@ pip install -r requirements-dev.txt
 
 python scripts/build_suite.py
 python scripts/run_eval.py --suite smoke --dry-run --limit 0   # 只校验数据，不调模型
-python -m pytest -q                                            # 495 条离线单测
+python -m pytest -q                                            # 510 条离线单测
 python scripts/selfcheck_oracles.py                            # C01 判据自检（make oracle-selfcheck）
 
 # 一条命令把上面几件事按顺序做完，并加一段六项能力的端到端自检（0 成本）
@@ -547,6 +547,7 @@ scripts/
 ├── clean_and_fix_cases.py  # 规范化/审计/去重
 ├── calibrate_judge.py      # 裁判校准（混淆矩阵 / 漏判率 / 误伤率 / kappa）
 ├── selfcheck_oracles.py    # C01 判据自检 runner（离线、零 API，出 DEAD/LEAKY 报告）
+├── build_label_template.py # C02 前置：从真实批次抽平衡样本，出人工待标清单 + 复核表（离线）
 ├── check_supply_chain.py   # C10 供应链：校验 requirements.lock 锁定完整性（离线）
 ├── drift_check.py          # 跨批次漂移：换代可比较性 / Provider_Change / 比率显著性（复用 z 检验）
 ├── verify.py               # 一键自检：离线层 + 可选真机层
@@ -603,6 +604,7 @@ reports/                    # 运行产物、台账、图表
 | G6 | 聚合墙钟熔断（`case_time_budget`） | `runner` / `run_eval` |
 | G7 | 种子变异造数据与叠加策略归因 | `curated_cases.jsonl`（`source=mutation-*`）、`scripts/apply_attack_strategies.py`、报告 `by_attack_strategy` 维度 |
 | C01 | 判据自检回路（题目可信度审计） | `src/engine/oracle.py` |
+| C02 | 裁判校准前置：人工待标清单生成（平衡抽样 + 复核表） | `scripts/build_label_template.py`（配合 `calibrate_judge.py`） |
 | C03 | 题面 `spec_leak` 体检（判分依据是否写给被测，只报告不阻断） | `src/engine/suite_audit.py` |
 | C04 | 数据集体检：可判率（四类机械 target）+ 重复率 | `src/engine/suite_audit.py`（进 `verify.py`） |
 | C07 | 工具参数 JSON Schema 校验 | `tools.validate_tool_arguments` |
