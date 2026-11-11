@@ -1,0 +1,35 @@
+name: 框架缺陷 / 误判漏判报告
+description: 报告裁判、门禁、台账、报告生成等框架侧问题
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先跑 `make verify` 确认不是环境差异；涉及模型能力问题的评测结果请走 discussions。
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现命令
+      description: 完整命令行（含参数），密钥用 $ENV 占位
+      placeholder: python scripts/run_eval.py --suite smoke --limit 18 ...
+    validations:
+      required: true
+  - type: textarea
+    id: epoch
+    attributes:
+      label: 数据集代际
+      description: cases/suite_manifest.json 中 core 的 sha256 前 16 位
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为 vs 实际行为
+      description: 引用具体 fail_reason / 门禁结论 / 台账条目，禁止"看起来不对"
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 证据片段
+      description: reports/runs/<run_id>/ 相关 JSON 片段（先脱敏，不含 Key 与内网地址）

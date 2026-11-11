@@ -1,0 +1,48 @@
+# 许可（双许可）
+
+本仓库是「代码 + 评测数据」混合仓库，两类资产适用不同许可：
+
+## 1. 代码与文档 — MIT
+
+适用范围：除第 2 节所列目录外的全部内容（`src/`、`scripts/`、`tests/`、
+`.github/`、`Makefile`、各 Markdown 文档等）。
+
+MIT License
+
+Copyright (c) 2026 xuanluo111
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+## 2. 评测数据集与运行报告 — CC BY 4.0
+
+适用范围：`cases/`（用例语料与派生集）与 `reports/`（台账、批次汇总、
+判据自检报告等评测事实）。
+
+选择理由：用例与报告是「可复核的测量数据」而非可执行资产——衍生物
+（再变异用例、对比报告）必须保留署名与溯源链，传染性许可（如 ShareAlike）
+会不当限制论文/二次评测的引用方式，专有许可则会阻断复现。故采用
+Creative Commons Attribution 4.0 International：可自由使用与再分发，
+但必须署名，且不得暗示原作者为衍生结论背书。
+
+全文见：<https://creativecommons.org/licenses/by/4.0/legalcode>
+
+## 3. 边界说明
+
+- `models*.json`、`.env` 及任何含密钥/内网地址的文件不受本许可覆盖，也不应入库。
+- 报告中引用的模型输出版权归相应模型厂商所有，本仓库仅主张对评测编排与统计结论的署名。
