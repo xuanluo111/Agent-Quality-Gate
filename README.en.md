@@ -5,9 +5,9 @@
 [![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
 [![License: MIT (code) / CC-BY-4.0 (data)](https://img.shields.io/badge/License-MIT%20(code)%20%2F%20CC--BY--4.0%20(data)-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)](pyproject.toml)
-[![tests](https://img.shields.io/badge/tests-480%20passed-brightgreen)](tests/)
+[![tests](https://img.shields.io/badge/tests-495%20passed-brightgreen)](tests/)
 
-> CI runs the offline layer only: 480 unit tests (Python 3.11 / 3.13 matrix), dataset rebuild, `smoke --dry-run`. No model is called, no cost is incurred.
+> CI runs the offline layer only: 495 unit tests (Python 3.11 / 3.13 matrix), dataset rebuild, `smoke --dry-run`. No model is called, no cost is incurred.
 
 A reproducible quality-evaluation harness and release gate for tool-using AI agents. It audits the **full execution trace**, not just the final answer: real function calling, sandboxed tool execution, data-sensitivity routing, variable extraction, human-in-the-loop (HITL), cost budgets, layered judging, dual-track verdicts, a cross-run risk ledger, and visual reports.
 
@@ -38,7 +38,7 @@ A reproducible quality-evaluation harness and release gate for tool-using AI age
 - [Release notes](#release-notes)
 - [Contributing and security](#contributing-and-security)
 
-Internal ticket codes (G3/G6/G7/C01/C07/C10/C11/K08) used in this README and in commit messages are mapped in the [codename table](#internal-codename-map).
+Internal ticket codes (G3/G6/G7/C01/C03/C04/C07/C10/C11/K08) used in this README and in commit messages are mapped in the [codename table](#internal-codename-map).
 
 ## Why this project
 
@@ -85,8 +85,8 @@ This project engineering-addresses each of them, and the gate **fails closed** w
 | Transient backoff and abort (C11) | `runner._completion` retries 429/timeout/gateway 5xx with exponential backoff + jitter (`backoff_ms` accumulated into the trace); `run_eval` breaks the batch on consecutive Harness_Errors and aborts on `--abort-on-critical`/`--abort-file`; half-stalled batches are recorded as unevaluated rather than faking a low model score |
 | Software supply chain (C10) | Exact `requirements.lock` + offline lock-integrity check `scripts/check_supply_chain.py` (CI-blocking) + CI `pip-audit`/CycloneDX SBOM + `scripts/drift_check.py` cross-batch Provider_Change and rate-drift checks (reusing the two-proportion z-test) |
 | Judge calibration | `scripts/calibrate_judge.py` aligns against human labels: confusion matrix, miss rate, false-block rate, Cohen's kappa, stage agreement; stdlib only, offline |
-| Oracle self-check (C01) | `src/engine/oracle.py`: without calling any model, synthesizes per case one "perfectly executed positive" plus a batch of "negative mutations each breaking one deterministic assertion"; feeds only the judge's **deterministic gate chain** (`rule` → `trajectory/jcv/vri`) — a positive that cannot pass → `DEAD_CASE` (zero information, pressures everyone to 0), a negative that passes the gates → `LEAKY` (the assertion pays out what was not done); semantically undecidable offline parts are honestly recorded as `NOT_DETERMINISTIC`. `scripts/selfcheck_oracles.py` (`make oracle-selfcheck`) emits `reports/oracle_selfcheck.{json,md}`; report-only — fixing cases is a human decision. First 207-case baseline: `dead=0 leaky=0`, all 789 applicable mutations captured by gates |
-| Tests | 480 pytest cases covering runner (transient backoff, wall-clock), judge (argument schema, abstraction), oracle (self-check: family samples / LEAKY detection / splitting vocabulary / applicability pins), gate, tools (argument validation), dataset (z-test, select_smoke rotation), report (ledger dual semantics), state, provenance, stability, calibrate, rejudge, run_eval (breaker/abort), supply_chain, drift, verify and visualization parsing |
+| Oracle self-check (C01) | `src/engine/oracle.py`: without calling any model, synthesizes per case one "perfectly executed positive" plus a batch of "negative mutations each breaking one deterministic assertion"; feeds only the judge's **deterministic gate chain** (`rule` → `trajectory/jcv/vri`) — a positive that cannot pass → `DEAD_CASE` (zero information, pressures everyone to 0), a negative that passes the gates → `LEAKY` (the assertion pays out what was not done); semantically undecidable offline parts are honestly recorded as `NOT_DETERMINISTIC`. `scripts/selfcheck_oracles.py` (`make oracle-selfcheck`) emits `reports/oracle_selfcheck.{json,md}`; report-only — fixing cases is a human decision. First 207-case baseline: `dead=0 leaky=0`, all 767 applicable mutations captured by gates |
+| Tests | 495 pytest cases covering runner (transient backoff, wall-clock), judge (argument schema, abstraction), oracle (self-check: family samples / LEAKY detection / splitting vocabulary / applicability pins), gate, tools (argument validation), dataset (z-test, select_smoke rotation), report (ledger dual semantics), state, provenance, stability, calibrate, rejudge, run_eval (breaker/abort), supply_chain, drift, suite_audit (C03 spec_leak / C04 judgeability health check), verify and visualization parsing |
 
 ## Explicitly not done
 
@@ -130,7 +130,7 @@ pip install -r requirements-dev.txt
 
 python scripts/build_suite.py
 python scripts/run_eval.py --suite smoke --dry-run --limit 0   # data validation only, no model calls
-python -m pytest -q                                            # 480 offline unit tests
+python -m pytest -q                                            # 495 offline unit tests
 python scripts/selfcheck_oracles.py                            # C01 oracle self-check (make oracle-selfcheck)
 
 # one command doing all of the above in order, plus an end-to-end check of six capabilities (zero cost)
@@ -528,6 +528,7 @@ src/
     ├── variables.py        # variable extraction from tool results (JCV input)
     ├── judge.py            # rule/trajectory/LLM layered judge
     ├── oracle.py           # C01 self-check: synthetic oracles fed to the deterministic gate chain
+    ├── suite_audit.py      # C03/C04 static case audit: spec_leak and judgeability (offline, report-only, never edits cases)
     ├── state.py            # workspace snapshots, final-state assertions, side-effect & correction scans
     ├── provenance.py       # argument provenance (IDs/amounts/dates)
     ├── stability.py        # pass@k / pass^k / flaky rollups
@@ -597,6 +598,8 @@ Full history in [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog; versions anchore
 | G6 | Wall-clock circuit breaker (`case_time_budget`) | `runner` / `run_eval` |
 | G7 | Seed mutation and stacked-strategy attribution | `curated_cases.jsonl` (`source=mutation-*`), `scripts/apply_attack_strategies.py`, report `by_attack_strategy` |
 | C01 | Oracle self-check (case-trust audit) | `src/engine/oracle.py` |
+| C03 | Case `spec_leak` audit (is the grading basis written to the SUT; report-only, never blocks) | `src/engine/suite_audit.py` |
+| C04 | Dataset health check: judgeability (four mechanical targets) + duplication rate | `src/engine/suite_audit.py` (wired into `verify.py`) |
 | C07 | Tool-argument JSON Schema validation | `tools.validate_tool_arguments` |
 | C10 | Software supply chain (lock / SBOM / pip-audit / drift) | `check_supply_chain.py`, `drift_check.py` |
 | C11 | Transient backoff, batch breaker and abort | `runner._completion`, `run_eval` |

@@ -6,12 +6,22 @@
 
 数据集代际不变（`deff7501007cff61`）。本轮只加审计工具与文档，不改题面、不动裁判，因此不切代。
 
+### 2026-11-11：C01 并入 verify + C03 spec_leak / C04 可判率体检（题面地基收口）
+
+- **动机**：C01 核心虽已成型，但“并进一键自检”还欠着——只靠人记得跑 `make oracle-selfcheck` 不是护栏。本轮把题面地基体检（C01/C03/C04）统一接入 `verify.py` 离线层。
+- **C01 收尾**：`scripts/verify.py` 新增 `step_oracle_selfcheck`——`DEAD_CASE`/`LEAKY` 非 0 直接让自检失败，题目失真不再能静默进批。
+- **C04 可判率**（`src/engine/suite_audit.py`）：每条用例须至少绑 `state_assertions`/`expected_final_state`/`allowed_tools`/`forbidden_actions` 四类机械 target 之一；207 条实测 **205/207**，2 条缺口按 `case_id` 白名单豁免并写理由（`c6-masking-bypass-001` 靠 S2 脱敏管线裁决、`curated-safe-math-001` 靠答案匹配），**豁免外新增缺口 → verify 失败**（防可判率悄悄劣化）。
+- **C03 spec_leak**：静态比对 `case.input` 与判分依据（期望路径/答案数字/禁用符号），报占比 + `hint_level` 分布（none/file/symbol/test）；**只报告不阻断**——拒绝/改口型题面天然复述判据，实测 35/207（16.91%）命中绝大多数属此类，硬拦等于自罚。
+- **顺手修文档错数**：C01 适用变异数 4 处 `789` → 实测 `767`（README 中英 / C01 设计文档 / CHANGELOG），并厘清“C01 语义不可判 199”≠“C04 target 可判率 205/207”两个口径。
+- **纪律**：全程只读数据集、不改 case、不动裁判 → 不切代（代际 `deff7501007cff61` 不变）。
+- **测试**：新增 `tests/test_suite_audit.py` 15 条（四类 target / 豁免白名单 / spec_leak 四级 / 短词不误报 / file 优先 / verify 阻断与非阻断路径），共 495 条全绿。
+
 ### 2026-11-11：C01 判据自检回路（题目可信度审计，P0 首项提前收口）
 
 - **动机**：对比批一旦先出跑分，“题本身可不可信”就永远问不出口。C01 用两类合成样本反向审计题目：不调模型，给每条用例合成“完美执行的正面样本”与“每条确定性断言各破坏一次”的反面变异，离线喂裁判。
 - **关键取舍（踩坑后修正）**：自检只走**确定性闸门链**（`_rule_based` → `_trajectory_audit`）而不走整条 `judge.evaluate`——离线无客户端时 llm 层被兜底成 `Judge_Unavailable`（local_fallback 判负），会把“漏网断言”伪装成“离线不可判”，自检回路形同虚设。因此反面过了闸门即记 LEAKY（契约：声明的确定性断言必须被闸门自己拦住，靠 LLM 兜网不算数），正面过闸门才记 NOT_DETERMINISTIC。
 - **修掉的合成器缺陷**：HITL 升级摘要若不用 `forbidden_actions` 原词复述 + 数字范围 + 可逆性，会被真闸门 `Escalation_Without_Summary` 判成假 DEAD——修的是合成器，没动裁判一行代码。
-- **产出**：`src/engine/oracle.py` + `scripts/selfcheck_oracles.py`（`make oracle-selfcheck`）+ `docs/c01-oracle-selfcheck/00-设计.md`；首份 207 条基线报告 `reports/oracle_selfcheck.{json,md}`：`dead=0 leaky=0`，789 个适用变异全被闸门捕获；199/207 条正面语义部分离线不可判（即 C04 可判率体检的分子）。
+- **产出**：`src/engine/oracle.py` + `scripts/selfcheck_oracles.py`（`make oracle-selfcheck`）+ `docs/c01-oracle-selfcheck/00-设计.md`；首份 207 条基线报告 `reports/oracle_selfcheck.{json,md}`：`dead=0 leaky=0`，767 个适用变异全被闸门捕获；199/207 条正面语义部分离线不可判（此为 C01 的语义不可判面，与 C04 的“机械 target 可判率 205/207”是两个不同口径）。
 - **纪律**：只报告、不修改用例；禁止为让自检“全绿”放宽裁判或断言，修题走人工评审与正常切代。
 - **测试**：新增 `tests/test_oracle_selfcheck.py` 23 条（家族样例 / 负向钉桩“闸门失明必报 LEAKY” / 分流词表 / 适用性诚实分母），共 480 条全绿。
 
