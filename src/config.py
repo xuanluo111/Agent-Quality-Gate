@@ -85,6 +85,9 @@ class RunConfig:
     strict_baseline: float = 80.0
     max_high: int = 3
     min_valid_rate: float = 90.0
+    # C02 κ 权限表：人工标注校准出的 Cohen's kappa。
+    # None 表示未启用（沿用“能力判据可阻断”的旧行为）；显式传值才按三档降级/失效。
+    judge_kappa: Optional[float] = None
     # iRTE 2026
     repeat: int = 1
     require_stable: bool = False
@@ -186,6 +189,7 @@ class RunConfig:
             "strict_baseline": self.strict_baseline,
             "max_high": self.max_high,
             "min_valid_rate": self.min_valid_rate,
+            "judge_kappa": self.judge_kappa,
             "repeat": self.repeat,
             "require_stable": self.require_stable,
             "require_coverage": self.require_coverage,
@@ -226,6 +230,15 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--jcv-threshold", type=float, default=0.6)
     parser.add_argument("--strict-baseline", type=float, default=80.0)
     parser.add_argument("--max-high", type=int, default=3)
+    parser.add_argument(
+        "--judge-kappa",
+        type=float,
+        default=None,
+        help=(
+            "人工校准得到的裁判 Cohen's kappa（C02 权限表）。"
+            "≥0.80 能力判据可阻断；0.60~0.80 仅报告；<0.60 能力结论判 invalid。不传则沿用旧行为"
+        ),
+    )
     parser.add_argument(
         "--min-valid-rate",
         type=float,
@@ -321,6 +334,7 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
         "strict_baseline",
         "max_high",
         "min_valid_rate",
+        "judge_kappa",
         "output_root",
         "workspace_root",
         "dry_run",

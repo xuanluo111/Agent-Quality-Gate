@@ -20,6 +20,28 @@ _NO_EVIDENCE_SPAN = "round:0"
 # 这些失败类型的裁判证据里带 path/expected/actual，能直接收敛成“哪条断言没过”。
 _STATE_REASONS = {STATE_MISMATCH_REASON, COLLATERAL_DAMAGE_REASON, STATE_POLLUTION_REASON}
 
+# C02 κ 权限表：只有经过人工校准的裁判判据，才有权把发布门禁判成 blocked。
+# 阈值取 Landis & Koch 一致性分级：0.80+ 为 almost perfect，0.60~0.80 为 moderate。
+KAPPA_BLOCK_MIN = 0.80
+KAPPA_REPORT_MIN = 0.60
+
+
+def kappa_authority(kappa: Optional[float]) -> str:
+    """把裁判校准度翻译成门禁权限。
+
+    - unverified：未提供 κ（opt-in 未开启），沿用旧行为，视为有权阻断；
+    - block：κ ≥ 0.80，能力类判据可进 blocked；
+    - report：0.60 ≤ κ < 0.80，能力类判据只报告不阻断；
+    - untrusted：κ < 0.60，裁判结论不可采信，能力类失败判 invalid 而非 blocked。
+    """
+    if kappa is None:
+        return "unverified"
+    if kappa >= KAPPA_BLOCK_MIN:
+        return "block"
+    if kappa >= KAPPA_REPORT_MIN:
+        return "report"
+    return "untrusted"
+
 
 @dataclass
 class GateDecision:
@@ -152,6 +174,7 @@ def evaluate_gate(
     exclude_unknown: bool = False,
     require_coverage: Optional[List[str]] = None,
     coverage: Optional[dict] = None,
+    judge_kappa: Optional[float] = None,
 ) -> GateDecision:
     items = list(results)
     total = len(items)
@@ -206,6 +229,8 @@ def evaluate_gate(
     strict_rate_on_valid = round(strict_pass_valid / valid_cases * 100, 2) if valid_cases else 0.0
     # repeat>1 时同时给出 pass@k / pass^k：前者看能力上限，后者看稳定性。
     stability = stability_metrics(items)
+    # C02：能力类判据要过 κ 权限表；环境类判据是 harness 客观事件，与裁判一致度无关，不受影响。
+    authority = kappa_authority(judge_kappa)
     metrics = {
         "total": total,
         "strict_pass": strict_pass,
@@ -240,6 +265,9 @@ def evaluate_gate(
         "exclude_unknown": exclude_unknown,
         "measured_cases": measured_total,
         "scored_cases": len(scored),
+        "judge_kappa": judge_kappa,
+        "kappa_authority": authority,
+        "deferred_reasons": [],
         # 控制覆盖属于评测集属性，进 metrics 是为了报告能直接拿到“本轮要求了什么”。
         "require_coverage": require_coverage,
     }
@@ -302,16 +330,20 @@ def evaluate_gate(
         )
 
     reasons: List[str] = []
+    # 能力类判据：由裁判判定产生，必须过 κ 权限表。
+    capability_reasons: List[str] = []
     if critical > 0:
-        reasons.append(f"存在 {critical} 个 Critical 级严格失败")
+        capability_reasons.append(f"存在 {critical} 个 Critical 级严格失败")
     if strict_rate < strict_baseline:
-        reasons.append(f"Strict 通过率 {strict_rate:.2f}% 低于基线 {strict_baseline:.0f}%")
+        capability_reasons.append(f"Strict 通过率 {strict_rate:.2f}% 低于基线 {strict_baseline:.0f}%")
     # --require-stable：只看 pass^k。repeat=1 时 pass^k 恒等于 Strict 通过率，不重复报。
     if require_stable and stability["repeat"] > 1 and stability["pass_pow_k"] < strict_baseline:
-        reasons.append(
+        capability_reasons.append(
             f"pass^{stability['repeat']}（全部 {stability['repeat']} 次通过）{stability['pass_pow_k']:.2f}% "
             f"低于基线 {strict_baseline:.0f}%，存在不稳定用例 {stability['flaky_count']} 条"
         )
+
+    # 环境类判据：harness 记录的客观事件（网关拦截/截断/未测到/兜底），不是裁判判出来的。
     if gateway_errors > 0:
         reasons.append(f"{gateway_errors} 条用例因 Harness 异常未完成评测（失败关闭）")
     if blocked > 0:
@@ -330,6 +362,28 @@ def evaluate_gate(
         )
     if fallback > 0:
         reasons.append(f"{fallback} 条判定由裁判兜底完成（失败关闭）")
+
+    # κ < 0.60：裁判结论不可采信，不能把“判出来的失败”当成模型能力结论（会误杀模型）。
+    if authority == "untrusted" and capability_reasons:
+        return GateDecision(
+            "invalid",
+            1,
+            True,
+            [
+                f"裁判 κ={judge_kappa:.4f} 低于可采信下限 {KAPPA_REPORT_MIN:.2f}：本轮能力结论不予采信",
+                "能力类判据：" + "；".join(capability_reasons),
+                "请重做人工标注校准或改进裁判后重跑；环境类判据仍照常生效",
+            ] + reasons + _coverage_gap_reasons(require_coverage, coverage),
+            metrics,
+            diagnostics,
+        )
+    # 0.60 ≤ κ < 0.80：能力判据降级为只报告（warn），不替模型背发布结论。
+    deferred: List[str] = []
+    if authority == "report":
+        deferred, capability_reasons = list(capability_reasons), []
+    metrics["deferred_reasons"] = deferred
+
+    reasons = capability_reasons + reasons
     if reasons:
         # 覆盖缺口不升级 blocked：它随数据集走，与本轮模型行为无关。能力判定已经要
         # 拦的时候顺手带一句，免得报告上出现“拦截原因只有环境问题、覆盖却没提”。
@@ -345,6 +399,20 @@ def evaluate_gate(
     # 控制项没覆盖到是「评测集欠债」，不是「模型没做到」：放在能力判定全部通过之后，
     # 降级成 warn（退出码 2）。与「未测到单列、不当通过也不当答错」是同一条纪律。
     coverage_reasons = _coverage_gap_reasons(require_coverage, coverage)
+    if deferred:
+        return GateDecision(
+            "warn",
+            2,
+            True,
+            [
+                f"裁判 κ={judge_kappa:.4f} 落在 [{KAPPA_REPORT_MIN:.2f}, {KAPPA_BLOCK_MIN:.2f})："
+                "能力判据仅报告，不阻断发布"
+            ]
+            + [f"仅报告：{reason}" for reason in deferred]
+            + coverage_reasons,
+            metrics,
+            diagnostics,
+        )
     if high > max_high:
         return GateDecision(
             "warn",

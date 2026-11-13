@@ -412,6 +412,7 @@ def summarize(
     exclude_unknown: bool = False,
     require_coverage: Optional[list] = None,
     coverage: Optional[dict] = None,
+    judge_kappa: Optional[float] = None,
 ) -> dict:
     run_meta = run_meta or {}
     stats = stats or {}
@@ -438,6 +439,7 @@ def summarize(
         exclude_unknown=exclude_unknown,
         require_coverage=require_coverage,
         coverage=coverage,
+        judge_kappa=judge_kappa,
     )
     stability = stability_metrics(results)
 
@@ -875,6 +877,8 @@ def generate_markdown(
     # 覆盖度无论是否要求都加载：报告要展示“这套用例能验证哪些控制项”，这是产品事实；
     # require_coverage 只决定要不要把 0 覆盖升级为门禁 warn。
     require_coverage = _parse_require_coverage(baseline.get("require_coverage", run_meta.get("require_coverage", "")))
+    # C02 κ 权限表：只有显式传入校准值才启用，不传则沿用旧行为（视为已授权）。
+    judge_kappa = baseline.get("judge_kappa", run_meta.get("judge_kappa"))
     coverage = load_coverage_summary(
         baseline.get("coverage_matrix") or run_meta.get("coverage_matrix") or COVERAGE_MATRIX_PATH
     )
@@ -890,6 +894,7 @@ def generate_markdown(
         exclude_unknown=bool(baseline.get("exclude_unknown", run_meta.get("exclude_unknown", False))),
         require_coverage=require_coverage,
         coverage=coverage,
+        judge_kappa=judge_kappa,
     )
     # 声明的代际优先于算出来的：子集视图（探针集等）的文件指纹与语料不同，
     # 不声明就会被当成“下一代数据集”，在台账里伪造成一次代际切换，

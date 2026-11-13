@@ -130,3 +130,83 @@ def test_main_returns_one_when_nothing_matched(tmp_path):
     labels_path = write_jsonl(tmp_path / "labels.jsonl", [{"case_id": "a", "human_passed": True}])
     results_path = write_jsonl(tmp_path / "results.jsonl", [{"case_id": "b", "strict_passed": True}])
     assert main(["--labels", str(labels_path), "--results", str(results_path)]) == 1
+
+
+def test_load_judgements_reads_data_valid_flag(tmp_path):
+    results_path = write_jsonl(
+        tmp_path / "results.jsonl",
+        [
+            {"result": {"case_id": "truncated", "strict_passed": False, "data_valid": False}},
+            {"case_id": "flat_valid", "passed": True, "data_valid": True},
+            {"case_id": "legacy_no_flag", "strict_passed": True},
+        ],
+    )
+    judgements = load_judgements(results_path)
+    assert judgements["truncated"]["data_valid"] is False
+    assert judgements["flat_valid"]["data_valid"] is True
+    # 平铺旧记录缺字段时视为有效，不能被误剔除
+    assert judgements["legacy_no_flag"]["data_valid"] is True
+
+
+def test_exclude_invalid_drops_truncated_samples_from_metrics(tmp_path):
+    labels = {
+        "ok": {"human_passed": True, "human_stage": None},
+        "truncated-fail": {"human_passed": True, "human_stage": None},
+    }
+    judgements = {
+        "ok": {"judge_passed": True, "judge_stage": None, "data_valid": True},
+        "truncated-fail": {"judge_passed": False, "judge_stage": None, "data_valid": False},
+    }
+    kept = calibrate(labels, judgements)
+    assert kept["matched"] == 2
+    assert kept["false_alarm_rate"] == 50.0
+
+    filtered = calibrate(labels, judgements, exclude_invalid=True)
+    assert filtered["matched"] == 1
+    assert filtered["excluded_invalid"] == ["truncated-fail"]
+    assert filtered["excluded_invalid_count"] == 1
+    assert filtered["false_alarm_rate"] == 0.0
+    assert filtered["confusion"] == {"tp": 1, "tn": 0, "fp": 0, "fn": 0}
+
+
+def test_exclude_invalid_reports_empty_list_by_default():
+    report = calibrate(labels_fixture(), judgements_fixture())
+    assert report["excluded_invalid"] == []
+    assert report["excluded_invalid_count"] == 0
+
+
+def test_render_text_lists_excluded_invalid_samples(tmp_path):
+    labels = {"bad": {"human_passed": False, "human_stage": "generation"}}
+    judgements = {"bad": {"judge_passed": False, "judge_stage": None, "data_valid": False}}
+    text = render_text(calibrate(labels, judgements, exclude_invalid=True))
+    assert "已排除无效样本: 1 条" in text
+    assert "- bad" in text
+
+
+def test_main_exclude_invalid_flag_filters_metrics(tmp_path):
+    labels_path = write_jsonl(
+        tmp_path / "labels.jsonl",
+        [{"case_id": "good", "human_passed": True}, {"case_id": "trunc", "human_passed": True}],
+    )
+    results_path = write_jsonl(
+        tmp_path / "results.jsonl",
+        [
+            {"case_id": "good", "strict_passed": True, "data_valid": True},
+            {"case_id": "trunc", "strict_passed": False, "data_valid": False},
+        ],
+    )
+    output = tmp_path / "calibration.json"
+    code = main(
+        [
+            "--labels", str(labels_path),
+            "--results", str(results_path),
+            "--output", str(output),
+            "--json",
+            "--exclude-invalid",
+        ]
+    )
+    assert code == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["matched"] == 1
+    assert payload["excluded_invalid"] == ["trunc"]
+    assert payload["confusion"] == {"tp": 1, "tn": 0, "fp": 0, "fn": 0}
