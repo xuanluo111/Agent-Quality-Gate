@@ -614,15 +614,27 @@ def main() -> int:
             measurable = metrics.get("measurable_cases") or total_cases
             valid_rate = metrics.get("valid_rate", 0)
             blocked = int(metrics.get("provider_blocked_count") or 0)
-            note = (
-                f"仅 {valid_cases}/{measurable} 条可测样本可信（有效率 {valid_rate}%），"
-                "本轮分数反映环境故障而不是模型能力"
+            # invalid 有两个来源：数据不可信（环境）和裁判不可采信（κ 低于下限）。
+            # 后者有效率可能 100%，再写“反映环境故障”就自相矛盾且指错方向。
+            kappa_authority = str(
+                ((metrics.get("gate") or {}).get("metrics") or {}).get("kappa_authority") or ""
             )
-            if blocked:
-                note += f"；网关内容审核拦截 {blocked} 条（模型未被调用，需换链路）"
-            hint = extract_infra_hint(run_dir)
-            if hint:
-                note += f"；错误线索：{hint}"
+            min_valid_rate = float(metrics.get("min_valid_rate") or 0.0)
+            if kappa_authority == "untrusted" and float(valid_rate or 0) >= min_valid_rate:
+                note = (
+                    "裁判校准度不足以支撑能力结论（κ 低于可采信下限 0.60），"
+                    "本轮不据此判定模型不合格；请重做人工标注校准或改进裁判后重跑"
+                )
+            else:
+                note = (
+                    f"仅 {valid_cases}/{measurable} 条可测样本可信（有效率 {valid_rate}%），"
+                    "本轮分数反映环境故障而不是模型能力"
+                )
+                if blocked:
+                    note += f"；网关内容审核拦截 {blocked} 条（模型未被调用，需换链路）"
+                hint = extract_infra_hint(run_dir)
+                if hint:
+                    note += f"；错误线索：{hint}"
         rows.append(
             {
                 "name": name,

@@ -144,6 +144,10 @@ class RunConfig:
             raise ValueError("judge_samples 至少为 1")
         if not 0 <= self.min_valid_rate <= 100:
             raise ValueError("min_valid_rate 需在 0-100 之间（有效率百分比）")
+        # Cohen's kappa 的值域是 [-1, 1]。这里不校验会把 --judge-kappa nan/2.0 静默
+        # 当成 untrusted，报错文案只能写“κ=nan 低于下限”，看不出是参数非法。
+        if self.judge_kappa is not None and not (-1.0 <= self.judge_kappa <= 1.0):
+            raise ValueError(f"judge_kappa 需在 -1~1 之间（Cohen's kappa），收到: {self.judge_kappa}")
         if self.repeat < 1:
             raise ValueError("repeat 至少为 1")
         if self.collateral_risk not in {"critical", "high", "medium", "low"}:

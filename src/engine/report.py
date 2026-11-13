@@ -358,8 +358,14 @@ def gate_brief(gate: dict) -> str:
     换一轮运行结果可能就变了；带 Critical 或 Strict 低于基线才是能力不达标。
     """
     status = str(gate.get("status") or "")
-    if not status or status in {"passed", "invalid", "shadow"}:
-        return status or "-"
+    # 只报告项先算出来：passed 也可能带着仅报告项（报告档只有 High 阈值时就是），
+    # 提前 return 会把它丢掉，批量表上就看不到“裁判判了但未授权阻断”的痕迹。
+    deferred = list((gate.get("metrics") or {}).get("deferred_reasons") or [])
+    report_only = [f"仅报告 {len(deferred)}"] if deferred else []
+    if not status:
+        return "-"
+    if status in {"passed", "invalid", "shadow"}:
+        return f"{status}（{'，'.join(report_only)}）" if report_only else status
     reasons = "；".join(gate.get("reasons") or [])
     labels = []
     match = re.search(r"存在 (\d+) 个 Critical", reasons)
@@ -383,20 +389,40 @@ def gate_brief(gate: dict) -> str:
     match = re.search(r"High 级严格失败 (\d+) 个", reasons)
     if match:
         labels.append(f"High {match.group(1)}")
+    # 只报告项也要进短标签：批量表里只看到“blocked（网关异常 1）”会误导。
+    labels.extend(report_only)
     return f"{status}（{'，'.join(labels)}）" if labels else status
+
+
+def _deferred_suffix(gate: dict) -> str:
+    """把“裁判判了失败、但未获阻断授权”的条目补在门禁标签后面。
+
+    这些条目刻意不进 reasons（进了就是阻断），所以不补这一句，读者会以为本轮
+    根本没判出 Critical——尤其是 blocked 分支的 reasons 里只剩环境类原因的时候。
+    """
+    reasons = list(gate.get("reasons") or [])
+    deferred = [str(item) for item in ((gate.get("metrics") or {}).get("deferred_reasons") or [])]
+    # 按子串去重，不能按列表元素：blocked 分支会把多条 deferred 拼成一句 reason，
+    # 元素比对永远不相等，报告上就会出现两遍“仅报告”。
+    joined = "；".join(reasons)
+    pending = [item for item in deferred if item not in joined]
+    if not pending:
+        return ""
+    return "；仅报告（裁判未获阻断授权）：" + "；".join(pending)
 
 
 def _gate_label(gate: dict) -> str:
     status = gate.get("status")
+    suffix = _deferred_suffix(gate)
     if status == "shadow":
-        return "影子模式 - 仅记录，不阻断发布"
+        return "影子模式 - 仅记录，不阻断发布" + suffix
     if status == "invalid":
-        return "数据无效 (Invalid) - " + "；".join(gate.get("reasons", []))
+        return "数据无效 (Invalid) - " + "；".join(gate.get("reasons", [])) + suffix
     if status == "blocked":
-        return "拦截 (Blocked) - " + "；".join(gate.get("reasons", []))
+        return "拦截 (Blocked) - " + "；".join(gate.get("reasons", [])) + suffix
     if status == "warn":
-        return "警告 (Warning) - " + "；".join(gate.get("reasons", []))
-    return "放行 (Passed) - " + "；".join(gate.get("reasons", []))
+        return "警告 (Warning) - " + "；".join(gate.get("reasons", [])) + suffix
+    return "放行 (Passed) - " + "；".join(gate.get("reasons", [])) + suffix
 
 
 def summarize(
@@ -878,7 +904,11 @@ def generate_markdown(
     # require_coverage 只决定要不要把 0 覆盖升级为门禁 warn。
     require_coverage = _parse_require_coverage(baseline.get("require_coverage", run_meta.get("require_coverage", "")))
     # C02 κ 权限表：只有显式传入校准值才启用，不传则沿用旧行为（视为已授权）。
-    judge_kappa = baseline.get("judge_kappa", run_meta.get("judge_kappa"))
+    # 回落要看“两侧都没有值”，不能看“baseline 有没有这个键”：重判会写入 judge_kappa=None，
+    # 那时 run_meta 里的值反而应该生效，否则同一批结果会从 warn 翻回 blocked。
+    judge_kappa = baseline.get("judge_kappa")
+    if judge_kappa is None:
+        judge_kappa = run_meta.get("judge_kappa")
     coverage = load_coverage_summary(
         baseline.get("coverage_matrix") or run_meta.get("coverage_matrix") or COVERAGE_MATRIX_PATH
     )

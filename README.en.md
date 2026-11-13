@@ -5,9 +5,9 @@
 [![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
 [![License: MIT (code) / CC-BY-4.0 (data)](https://img.shields.io/badge/License-MIT%20(code)%20%2F%20CC--BY--4.0%20(data)-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)](pyproject.toml)
-[![tests](https://img.shields.io/badge/tests-522%20passed-brightgreen)](tests/)
+[![tests](https://img.shields.io/badge/tests-535%20passed-brightgreen)](tests/)
 
-> CI runs the offline layer only: 522 unit tests (Python 3.11 / 3.13 matrix), dataset rebuild, `smoke --dry-run`. No model is called, no cost is incurred.
+> CI runs the offline layer only: 535 unit tests (Python 3.11 / 3.13 matrix), dataset rebuild, `smoke --dry-run`. No model is called, no cost is incurred.
 
 A reproducible quality-evaluation harness and release gate for tool-using AI agents. It audits the **full execution trace**, not just the final answer: real function calling, sandboxed tool execution, data-sensitivity routing, variable extraction, human-in-the-loop (HITL), cost budgets, layered judging, dual-track verdicts, a cross-run risk ledger, and visual reports.
 
@@ -84,9 +84,9 @@ This project engineering-addresses each of them, and the gate **fails closed** w
 | Failure attribution | The rule layer prefers emitting `failure_stage` (understanding/planning/generation/validation/iteration); the LLM judge fills `failure_stage` plus mandatory `evidence_span` per JSON contract; a missing `evidence_span` → `Judge_Unavailable` |
 | Transient backoff and abort (C11) | `runner._completion` retries 429/timeout/gateway 5xx with exponential backoff + jitter (`backoff_ms` accumulated into the trace); `run_eval` breaks the batch on consecutive Harness_Errors and aborts on `--abort-on-critical`/`--abort-file`; half-stalled batches are recorded as unevaluated rather than faking a low model score |
 | Software supply chain (C10) | Exact `requirements.lock` + offline lock-integrity check `scripts/check_supply_chain.py` (CI-blocking) + CI `pip-audit`/CycloneDX SBOM + `scripts/drift_check.py` cross-batch Provider_Change and rate-drift checks (reusing the two-proportion z-test) |
-| Judge calibration | `scripts/calibrate_judge.py` aligns against human labels: confusion matrix, miss rate, false-block rate, Cohen's kappa, stage agreement; stdlib only, offline; `--exclude-invalid` drops `data_valid=False` truncated samples so invalid samples cannot distort agreement. 40-label calibration yields κ=0.8412 (n=38); `gate.kappa_authority` turns it into a three-tier authority: ≥0.80 capability verdicts may block / 0.60–0.80 report only / <0.60 mark invalid; `run_eval --judge-kappa` is opt-in |
+| Judge calibration | `scripts/calibrate_judge.py` aligns against human labels: confusion matrix, miss rate, false-block rate, Cohen's kappa, stage agreement; stdlib only, offline; `--exclude-invalid` drops `data_valid=False` truncated samples so invalid samples cannot distort agreement. 40-label calibration yields κ=0.8412 (n=38); `gate.kappa_authority` turns it into a three-tier authority: ≥0.80 capability verdicts may block / 0.60–0.80 report only / <0.60 mark invalid. Capability verdicts cover Critical, the Strict baseline, pass^k and the High threshold; harness-side events (gateway blocks / truncation / unmeasured / fallback) never route through the judge and are never downgraded. Report-only items are surfaced in `report.md`, the batch summary and the console, and `rejudge` keeps κ when regenerating a report; `run_eval --judge-kappa` is opt-in |
 | Oracle self-check (C01) | `src/engine/oracle.py`: without calling any model, synthesizes per case one "perfectly executed positive" plus a batch of "negative mutations each breaking one deterministic assertion"; feeds only the judge's **deterministic gate chain** (`rule` → `trajectory/jcv/vri`) — a positive that cannot pass → `DEAD_CASE` (zero information, pressures everyone to 0), a negative that passes the gates → `LEAKY` (the assertion pays out what was not done); semantically undecidable offline parts are honestly recorded as `NOT_DETERMINISTIC`. `scripts/selfcheck_oracles.py` (`make oracle-selfcheck`) emits `reports/oracle_selfcheck.{json,md}`; report-only — fixing cases is a human decision. First 207-case baseline: `dead=0 leaky=0`, all 767 applicable mutations captured by gates |
-| Tests | 522 pytest cases covering runner (transient backoff, wall-clock), judge (argument schema, abstraction), oracle (self-check: family samples / LEAKY detection / splitting vocabulary / applicability pins), gate, tools (argument validation), dataset (z-test, select_smoke rotation), report (ledger dual semantics), state, provenance, stability, calibrate, build_label_template (C02 labeling list: balanced sampling / review sheet / validation / local-path redaction), rejudge, run_eval (breaker/abort), supply_chain, drift, suite_audit (C03 spec_leak / C04 judgeability health check), verify and visualization parsing |
+| Tests | 535 pytest cases covering runner (transient backoff, wall-clock), judge (argument schema, abstraction), oracle (self-check: family samples / LEAKY detection / splitting vocabulary / applicability pins), gate, tools (argument validation), dataset (z-test, select_smoke rotation), report (ledger dual semantics), state, provenance, stability, calibrate, build_label_template (C02 labeling list: balanced sampling / review sheet / validation / local-path redaction), rejudge, run_eval (breaker/abort), supply_chain, drift, suite_audit (C03 spec_leak / C04 judgeability health check), verify and visualization parsing |
 
 ## Explicitly not done
 
@@ -130,7 +130,7 @@ pip install -r requirements-dev.txt
 
 python scripts/build_suite.py
 python scripts/run_eval.py --suite smoke --dry-run --limit 0   # data validation only, no model calls
-python -m pytest -q                                            # 522 offline unit tests
+python -m pytest -q                                            # 535 offline unit tests
 python scripts/selfcheck_oracles.py                            # C01 oracle self-check (make oracle-selfcheck)
 
 # one command doing all of the above in order, plus an end-to-end check of six capabilities (zero cost)

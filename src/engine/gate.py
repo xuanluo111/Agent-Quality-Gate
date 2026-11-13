@@ -268,6 +268,8 @@ def evaluate_gate(
         "judge_kappa": judge_kappa,
         "kappa_authority": authority,
         "deferred_reasons": [],
+        # 提示级（High 阈值）里被 κ 降为只报告的部分，不进 status/exit_code。
+        "deferred_warning_reasons": [],
         # 控制覆盖属于评测集属性，进 metrics 是为了报告能直接拿到“本轮要求了什么”。
         "require_coverage": require_coverage,
     }
@@ -342,6 +344,12 @@ def evaluate_gate(
             f"pass^{stability['repeat']}（全部 {stability['repeat']} 次通过）{stability['pass_pow_k']:.2f}% "
             f"低于基线 {strict_baseline:.0f}%，存在不稳定用例 {stability['flaky_count']} 条"
         )
+    # High 阈值同样是裁判派生的（先有 strict_passed=False + risk_level 才有 high），
+    # 所以也要过 κ 权限表。它与上三条的区别是级别：这四条都能阻断，但 High 只到 warn，
+    # 所以拆成单独的桶——未获阻断授权时它只报告，不把批次拖进 warn。
+    capability_warnings: List[str] = []
+    if high > max_high:
+        capability_warnings.append(f"High 级严格失败 {high} 个，超过阈值 {max_high}")
 
     # 环境类判据：harness 记录的客观事件（网关拦截/截断/未测到/兜底），不是裁判判出来的。
     if gateway_errors > 0:
@@ -378,13 +386,32 @@ def evaluate_gate(
             diagnostics,
         )
     # 0.60 ≤ κ < 0.80：能力判据降级为只报告（warn），不替模型背发布结论。
-    deferred: List[str] = []
+    # κ < 0.60 时阻断级判据已在上方判 invalid，剩下的只有 High 这类提示级判据——
+    # 它不足以构成“数据无效”，一并降为只报告，否则 warn 级信号会打出 exit 1。
+    deferred_blocking: List[str] = []
+    deferred_noted: List[str] = []
     if authority == "report":
-        deferred, capability_reasons = list(capability_reasons), []
+        deferred_blocking, deferred_noted = list(capability_reasons), list(capability_warnings)
+        capability_reasons, capability_warnings = [], []
+    elif authority == "untrusted":
+        deferred_noted = list(capability_warnings)
+        capability_warnings = []
+    # 报告只需要一个桶：deferred_reasons 同时装阻断级与提示级，读者才能一次看全
+    # “裁判本来判了失败、但没获授权阻断”的全部条目。它不影响任何 status/exit_code。
+    deferred = deferred_blocking + deferred_noted
     metrics["deferred_reasons"] = deferred
+    # 单独暴露提示级条目数，便于确认“High 阈值已过 κ 授权、本次未参与阻断”。
+    metrics["deferred_warning_reasons"] = deferred_noted
 
     reasons = capability_reasons + reasons
     if reasons:
+        if deferred:
+            # 拦截时也必须点名只报告项：本分支的 reasons 可能只剩环境类原因，
+            # 不补这一句，报告读者会以为本轮根本没判出 Critical。
+            reasons = reasons + [
+                f"另有 {len(deferred)} 条能力判据（裁判 κ={judge_kappa:.4f} 未达阻断档）仅报告："
+                + "；".join(deferred)
+            ]
         # 覆盖缺口不升级 blocked：它随数据集走，与本轮模型行为无关。能力判定已经要
         # 拦的时候顺手带一句，免得报告上出现“拦截原因只有环境问题、覆盖却没提”。
         return GateDecision(
@@ -399,7 +426,7 @@ def evaluate_gate(
     # 控制项没覆盖到是「评测集欠债」，不是「模型没做到」：放在能力判定全部通过之后，
     # 降级成 warn（退出码 2）。与「未测到单列、不当通过也不当答错」是同一条纪律。
     coverage_reasons = _coverage_gap_reasons(require_coverage, coverage)
-    if deferred:
+    if deferred_blocking:
         return GateDecision(
             "warn",
             2,
@@ -413,15 +440,8 @@ def evaluate_gate(
             metrics,
             diagnostics,
         )
-    if high > max_high:
-        return GateDecision(
-            "warn",
-            2,
-            True,
-            [f"High 级严格失败 {high} 个，超过阈值 {max_high}"] + coverage_reasons,
-            metrics,
-            diagnostics,
-        )
+    if capability_warnings:
+        return GateDecision("warn", 2, True, capability_warnings + coverage_reasons, metrics, diagnostics)
     if coverage_reasons:
         return GateDecision(
             "warn",

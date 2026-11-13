@@ -309,6 +309,10 @@ def build_run_meta(state: dict) -> dict:
         "strict_baseline": config.get("strict_baseline", 80.0),
         "max_high": config.get("max_high", 3),
         "min_valid_rate": config.get("min_valid_rate", 90.0),
+        # 重判后要重建报告，κ 必须带出来：丢了它 kappa_authority 会退回 unverified，
+        # 同一批结果会从 warn 翻回 blocked，等于凭报告重建反转发布结论。
+        # 旧 run 的 config.json 没有这个字段，get 回落 None 即 opt-in 未启用。
+        "judge_kappa": config.get("judge_kappa"),
     }
 
 
@@ -339,6 +343,8 @@ def baseline(state: dict) -> dict:
         "pass_rate": float(config.get("strict_baseline", 80.0)),
         "max_high": int(config.get("max_high", 3)),
         "min_valid_rate": float(config.get("min_valid_rate", 90.0)),
+        # 与 build_run_meta 同源同值；任一侧缺失都会让门禁退回 unverified。
+        "judge_kappa": config.get("judge_kappa"),
     }
 
 

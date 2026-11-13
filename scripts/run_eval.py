@@ -521,6 +521,10 @@ def main() -> int:
     print(f"台账: {ledger_note} | 新增回归用例: {regression_added}")
     gate = summary["gate"]
     print(f"门禁: {gate['status']} ({gate['exit_code']}) - {'; '.join(gate['reasons'])}")
+    # 只报告项不进 reasons（进了就是阻断），必须单独打印，否则控制台会显得“本轮没有能力失败”。
+    deferred = (gate.get("metrics") or {}).get("deferred_reasons") or []
+    if deferred:
+        print(f"仅报告（裁判未获阻断授权）: {'; '.join(deferred)}")
     if args.explain is not None:
         lines = _explain_lines(gate.get("diagnostics") or [], args.explain)
         print("-" * 58)
