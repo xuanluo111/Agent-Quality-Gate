@@ -5,9 +5,9 @@
 [![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
 [![License: MIT (code) / CC-BY-4.0 (data)](https://img.shields.io/badge/License-MIT%20(code)%20%2F%20CC--BY--4.0%20(data)-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)](pyproject.toml)
-[![tests](https://img.shields.io/badge/tests-510%20passed-brightgreen)](tests/)
+[![tests](https://img.shields.io/badge/tests-522%20passed-brightgreen)](tests/)
 
-> CI 跑的是离线层：510 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
+> CI 跑的是离线层：522 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
 
 一个面向工具型 AI Agent 的可复现质量评测与发布门禁。它不只检查最终回答，而是审计完整执行轨迹：真实 function calling、受控工具执行、数据路由、变量抽取、人工确认、成本预算、分层裁判、双轨门禁、风险台账和可视化报告。
 
@@ -82,9 +82,9 @@
 | 失败归因 | 规则层优先给出 `failure_stage`（understanding/planning/generation/validation/iteration），LLM 裁判按 JSON 契约补 `failure_stage` 与必填 `evidence_span`；缺 `evidence_span` 直接判 `Judge_Unavailable` |
 | 瞬态退避与急停（C11） | `runner._completion` 对 429/超时/网关 5xx 指数退避+jitter 重试（累计 `backoff_ms` 入轨迹）；`run_eval` 连续 Harness_Error 熔断、`--abort-on-critical`/`--abort-file` 急停，半批停摆统一记未评、不冒充模型低分 |
 | 软件供应链（C10） | `requirements.lock` 精确锁定 + `scripts/check_supply_chain.py` 离线校验锁定完整性（CI 阻断） + CI `pip-audit`/CycloneDX SBOM + `scripts/drift_check.py` 跨批次 Provider_Change 与比率漂移核验（复用两比例 z 检验） |
-| 裁判校准 | `scripts/calibrate_judge.py` 对齐人工标注，输出混淆矩阵、漏判率、误伤率、Cohen's kappa 与环节一致率，只用标准库、不联网 |
+| 裁判校准 | `scripts/calibrate_judge.py` 对齐人工标注，输出混淆矩阵、漏判率、误伤率、Cohen's kappa 与环节一致率，只用标准库、不联网；`--exclude-invalid` 剔除 `data_valid=False` 的截断样本，避免无效样本扭曲一致率。实测 40 条标定得 κ=0.8412（n=38），由 `gate.kappa_authority` 接成三档权限：≥0.80 能力判据可阻断 / 0.60~0.80 仅报告 / <0.60 判 invalid；`run_eval --judge-kappa` 为 opt-in |
 | 判据自检回路（C01） | `src/engine/oracle.py`：不调模型，给每条用例离线合成一份「完美执行的正面样本」+ 一组「每条确定性断言各破坏一次」的反面变异样本，只喂裁判的**确定性闸门链**（`rule` → `trajectory/jcv/vri`）——正面过不了记 `DEAD_CASE`（完美执行也拿不到分，压所有人 0 分且不携带信息），反面过了闸门记 `LEAKY`（破坏断言照样得分，在给“没做到”发分）；语义裁决离线未执行的部分诚实记 `NOT_DETERMINISTIC`，不假阳性也不掩盖。`scripts/selfcheck_oracles.py`（`make oracle-selfcheck`）产出 `reports/oracle_selfcheck.{json,md}`；只报告、不修改用例，修题是人的决定。首份 207 条基线：`dead=0 leaky=0`，767 个适用变异全被闸门捕获 |
-| 测试 | 510 个 pytest 用例，覆盖 runner（含瞬态退避、聚合墙钟）、judge（含工具参数 Schema 校验、抽象判别）、oracle（判据自检：家族样例 / LEAKY 检出 / 分流词表 / 适用性四组钉桩）、gate、tools（含参数校验）、dataset（含两比例 z 检验、select_smoke 轮转）、report（含台账代际双语义）、state、provenance、stability、calibrate、build_label_template（C02 待标清单：平衡抽样/复核表/校验/本机路径脱敏）、rejudge、run_eval（含熔断/急停）、supply_chain、drift、suite_audit（C03 spec_leak ／ C04 可判率体检）、verify 与可视化解析 |
+| 测试 | 522 个 pytest 用例，覆盖 runner（含瞬态退避、聚合墙钟）、judge（含工具参数 Schema 校验、抽象判别）、oracle（判据自检：家族样例 / LEAKY 检出 / 分流词表 / 适用性四组钉桩）、gate、tools（含参数校验）、dataset（含两比例 z 检验、select_smoke 轮转）、report（含台账代际双语义）、state、provenance、stability、calibrate、build_label_template（C02 待标清单：平衡抽样/复核表/校验/本机路径脱敏）、rejudge、run_eval（含熔断/急停）、supply_chain、drift、suite_audit（C03 spec_leak ／ C04 可判率体检）、verify 与可视化解析 |
 
 ## 明确没有做的事
 
@@ -128,7 +128,7 @@ pip install -r requirements-dev.txt
 
 python scripts/build_suite.py
 python scripts/run_eval.py --suite smoke --dry-run --limit 0   # 只校验数据，不调模型
-python -m pytest -q                                            # 510 条离线单测
+python -m pytest -q                                            # 522 条离线单测
 python scripts/selfcheck_oracles.py                            # C01 判据自检（make oracle-selfcheck）
 
 # 一条命令把上面几件事按顺序做完，并加一段六项能力的端到端自检（0 成本）

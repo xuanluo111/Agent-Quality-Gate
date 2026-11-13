@@ -1,4 +1,4 @@
-from src.engine.gate import evaluate_gate
+from src.engine.gate import KAPPA_BLOCK_MIN, KAPPA_REPORT_MIN, evaluate_gate, kappa_authority
 from tests.conftest import make_result
 
 
@@ -60,6 +60,77 @@ def test_gate_marks_env_failure_as_invalid():
     assert any("Harness" in reason for reason in decision.reasons)
     assert decision.metrics["valid_cases"] == 0
     assert decision.metrics["untrusted_samples"] == 1
+
+
+def test_kappa_authority_thresholds():
+    assert kappa_authority(None) == "unverified"
+    assert kappa_authority(KAPPA_BLOCK_MIN) == "block"
+    assert kappa_authority(KAPPA_BLOCK_MIN - 1e-6) == "report"
+    assert kappa_authority(KAPPA_REPORT_MIN) == "report"
+    assert kappa_authority(KAPPA_REPORT_MIN - 1e-6) == "untrusted"
+
+
+def test_without_kappa_keeps_legacy_blocking():
+    """未传 κ 时是 opt-in 的未启用态，C02 之前的行为必须原样保留。"""
+    decision = evaluate_gate([result() for _ in range(9)] + [result(strict=False, risk="critical")], strict_baseline=80)
+    assert decision.status == "blocked"
+    assert decision.metrics["kappa_authority"] == "unverified"
+    assert decision.metrics["judge_kappa"] is None
+
+
+def test_kappa_at_block_threshold_keeps_critical_blocking():
+    decision = evaluate_gate(
+        [result() for _ in range(9)] + [result(strict=False, risk="critical")],
+        strict_baseline=80,
+        judge_kappa=0.8412,
+    )
+    assert decision.status == "blocked"
+    assert decision.metrics["kappa_authority"] == "block"
+    assert decision.metrics["deferred_reasons"] == []
+
+
+def test_kappa_in_report_band_downgrades_capability_to_warn():
+    """0.60~0.80：裁判还不够可信，能力判据只能报告，不能替模型背发布结论。"""
+    decision = evaluate_gate(
+        [result() for _ in range(9)] + [result(strict=False, risk="critical")],
+        strict_baseline=80,
+        judge_kappa=0.70,
+    )
+    assert decision.status == "warn"
+    assert decision.exit_code == 2
+    assert any("仅报告" in reason and "Critical" in reason for reason in decision.reasons)
+    assert decision.metrics["kappa_authority"] == "report"
+    assert decision.metrics["deferred_reasons"]
+
+
+def test_kappa_in_report_band_still_blocks_on_harness_failure():
+    """环境类判据是 harness 客观事件，不经裁判，不受 κ 权限表降级。"""
+    decision = evaluate_gate(
+        [result() for _ in range(9)] + [result(strict=False, risk="low", layer="harness")],
+        strict_baseline=80,
+        judge_kappa=0.70,
+    )
+    assert decision.status == "blocked"
+    assert any("Harness" in reason for reason in decision.reasons)
+
+
+def test_kappa_below_floor_marks_capability_verdict_invalid():
+    decision = evaluate_gate(
+        [result() for _ in range(9)] + [result(strict=False, risk="critical")],
+        strict_baseline=80,
+        judge_kappa=0.50,
+    )
+    assert decision.status == "invalid"
+    assert decision.exit_code == 1
+    assert any("不予采信" in reason for reason in decision.reasons)
+    assert decision.metrics["kappa_authority"] == "untrusted"
+
+
+def test_kappa_below_floor_does_not_punish_a_clean_run():
+    """裁判不可信只影响“判出来的失败”，不该把全通过的运行也拖下去。"""
+    decision = evaluate_gate([result() for _ in range(10)], strict_baseline=80, judge_kappa=0.50)
+    assert decision.status == "passed"
+    assert decision.metrics["kappa_authority"] == "untrusted"
 
 
 def test_gate_marks_judge_fallback_as_invalid():

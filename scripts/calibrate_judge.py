@@ -4,7 +4,7 @@
     python scripts/calibrate_judge.py \
         --labels labels.jsonl \
         --results reports/runs/<run_id>/results.jsonl \
-        [--output reports/calibration.json] [--json]
+        [--output reports/calibration.json] [--json] [--exclude-invalid]
 
 人工标注 JSONL 每行：
     {"case_id": "...", "human_passed": true, "human_stage": "generation"}
@@ -13,6 +13,9 @@
 - 漏判率 miss_rate   = 机器判通过但人工判失败 / 人工判失败总数
 - 误伤率 false_alarm = 机器判失败但人工判通过 / 人工判通过总数
 - Cohen's kappa：扣除随机一致后的真实一致度，只用标准库实现，不联网。
+
+--exclude-invalid：剔除 results 中 data_valid=False 的截断/无效样本后再算一致性。
+这类样本本身不构成有效判定（输出被截断、无最终答复），计入会虚高一致率。
 """
 
 import argparse
@@ -66,6 +69,8 @@ def load_judgements(path: str | Path) -> Dict[str, dict]:
             "judge_stage": (payload.get("failure_stage") or None),
             "judge_layer": payload.get("judge_layer") or "",
             "fail_reason": payload.get("fail_reason") or "",
+            # 缺省视为有效：只有显式 data_valid=False 才剔除，避免平铺旧记录被误伤。
+            "data_valid": payload.get("data_valid", True) is not False,
         }
     return judgements
 
@@ -93,8 +98,13 @@ def cohens_kappa(pairs: List[Tuple[bool, bool]]) -> Optional[float]:
     return round((observed - expected) / (1 - expected), 4)
 
 
-def calibrate(labels: Dict[str, dict], judgements: Dict[str, dict]) -> dict:
+def calibrate(labels: Dict[str, dict], judgements: Dict[str, dict], exclude_invalid: bool = False) -> dict:
     matched = sorted(set(labels) & set(judgements))
+    excluded_invalid: List[str] = []
+    if exclude_invalid:
+        excluded_invalid = [case_id for case_id in matched if not judgements[case_id].get("data_valid", True)]
+        excluded = set(excluded_invalid)
+        matched = [case_id for case_id in matched if case_id not in excluded]
     pairs = [(judgements[case_id]["judge_passed"], labels[case_id]["human_passed"]) for case_id in matched]
     matrix = confusion(pairs)
     # 分母按人工标签分组：人工判失败 = fp + tn，人工判通过 = fn + tp。
@@ -125,6 +135,8 @@ def calibrate(labels: Dict[str, dict], judgements: Dict[str, dict]) -> dict:
         "matched": len(matched),
         "labels": len(labels),
         "judgements": len(judgements),
+        "excluded_invalid": excluded_invalid,
+        "excluded_invalid_count": len(excluded_invalid),
         "unmatched_labels": sorted(set(labels) - set(judgements)),
         "unmatched_results": sorted(set(judgements) - set(labels)),
         "confusion": matrix,
@@ -151,6 +163,10 @@ def render_text(report: dict) -> str:
         f"误伤率（机器判失败但人工通过）: {report['false_alarm_rate']}%",
         f"Cohen's kappa: {report['kappa']}",
     ]
+    if report.get("excluded_invalid"):
+        lines.append(f"已排除无效样本: {report['excluded_invalid_count']} 条（data_valid=False）")
+        for case_id in report["excluded_invalid"]:
+            lines.append(f"  - {case_id}")
     if report["unmatched_labels"]:
         lines.append(f"缺少机器结果的标注: {len(report['unmatched_labels'])} 条")
     if report["unmatched_results"]:
@@ -171,11 +187,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--results", required=True, help="runs/<run_id>/results.jsonl")
     parser.add_argument("--output", help="把结果写成 JSON")
     parser.add_argument("--json", action="store_true", help="只输出 JSON")
+    parser.add_argument(
+        "--exclude-invalid",
+        action="store_true",
+        help="剔除 results 中 data_valid=False 的截断/无效样本后再算一致性",
+    )
     args = parser.parse_args(argv)
 
     labels = load_labels(args.labels)
     judgements = load_judgements(args.results)
-    report = calibrate(labels, judgements)
+    report = calibrate(labels, judgements, exclude_invalid=args.exclude_invalid)
     if args.output:
         target = Path(args.output)
         target.parent.mkdir(parents=True, exist_ok=True)

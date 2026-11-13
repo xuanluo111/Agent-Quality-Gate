@@ -483,6 +483,7 @@ def main() -> int:
             "require_stable": config.require_stable,
             "exclude_unknown": config.exclude_unknown,
             "require_coverage": config.require_coverage,
+            "judge_kappa": config.judge_kappa,
         },
         run_meta=run_meta,
         stats=stats,
