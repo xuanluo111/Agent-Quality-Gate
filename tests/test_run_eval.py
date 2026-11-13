@@ -5,9 +5,11 @@
 """
 import argparse
 
+import pytest
+
 from run_eval import _attempts_payload, _skipped_result, _trip_reason
 
-from src.config import add_run_args, config_from_args
+from src.config import RunConfig, add_run_args, config_from_args
 from src.engine.stability import merge_attempts
 from tests.conftest import make_result, make_trace
 
@@ -159,3 +161,15 @@ def test_skipped_result_is_unrated_environment_failure():
     assert result.passed is False and result.strict_passed is False
     assert result.risk_level == "low"  # 不能把环境停摆标成高危，否则污染高危统计
     assert result.judge_layer == "harness"
+
+
+def test_judge_kappa_out_of_range_is_rejected(tmp_path):
+    """κ 值域是 [-1,1]：非法值要在参数校验期报错，而不是静默当成 untrusted。"""
+    dataset = tmp_path / "cases.jsonl"
+    dataset.write_text('{"id": "c1"}\n', encoding="utf-8")
+    for bad in (2.0, -1.5, float("nan")):
+        with pytest.raises(ValueError, match="judge_kappa"):
+            RunConfig(dataset=str(dataset), judge_kappa=bad, dry_run=True).validate()
+    # 合法值（含边界）不受影响；默认 None = opt-in 未启用。
+    for good in (0.8412, 1.0, -1.0, None):
+        RunConfig(dataset=str(dataset), judge_kappa=good, dry_run=True).validate()

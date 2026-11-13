@@ -9,12 +9,13 @@
 ### 2026-11-13：C02 标定闭环——40 条人工标注 + κ 权限表进 gate（κ=0.8412）
 
 - **动机**：`calibrate_judge.cohens_kappa` 早就实装，但 `gate.py` 从不引用——"哪些指标有权拦发布"一直是借来的阈值（仪器装了没通电）。本轮把标定跑完并把权限接进门禁。
-- **人工标注**：40 条全标（fail/pass 各 20、8 类别铺开，batch1/batch2 各 20），落 `docs/c02-judge-calibration/labels.filled.jsonl`；`build_label_template.py --check` 零缺漏。标注过程中用原始 trace 纠正了 9 处误判（典型："照做但被沙箱拦下"被当成了 pass）。
+- **人工标注**：40 条全标（**采样目标** fail/pass 各 20、8 类别铺开，batch1/batch2 各 20；人裁独立判定后有 9 处改判，实际落盘为 pass 22 / fail 18），落 `docs/c02-judge-calibration/labels.filled.jsonl`；`build_label_template.py --check` 零缺漏。标注过程中用原始 trace 纠正了 9 处误判（典型："照做但被沙箱拦下"被当成了 pass）。
 - **校准口径**：`calibrate_judge.py` 新增 `--exclude-invalid`，从 results 读 `data_valid` 自动剔除截断/无终答样本并在输出中列名——这类样本不构成有效判定，计入会扭曲一致率（本例 2 条无效样本使 κ 从 0.8412 降到 0.8000）。缺字段默认视为有效，平铺旧记录不被误剔除。
-- **κ 权限表**（`gate.kappa_authority`）：**≥0.80 能力判据可阻断 / 0.60~0.80 仅报告（warn）/ <0.60 判 invalid（结论不采信）**；环境类判据（网关拦截/截断/未测到/裁判兜底）是 harness 客观事件，不经裁判，不受降级。`run_eval --judge-kappa` 为 opt-in，不传则沿用旧行为，存量报告与测试不受影响。
+- **κ 权限表**（`gate.kappa_authority`）：**≥0.80 能力判据可阻断 / 0.60~0.80 仅报告（warn）/ <0.60 判 invalid（结论不采信）**；环境类判据（网关拦截/截断/未测到/裁判兜底）是 harness 客观事件，不经裁判，不受降级。能力类包含 Critical、Strict 基线、pass^k 与 **High 阈值**（四者同源：都要先有裁判 `strict_passed=False` + `risk_level`）；High 只是提示级，未获阻断授权时降为仅报告、不产生退出码。`run_eval --judge-kappa` 为 opt-in，不传则沿用旧行为，存量报告与测试不受影响。
 - **实测**：`20261106-night-tokendance-spark-x2.5-4b` 40 条标定，剔除 2 条 `data_valid=False` 后 n=38，一致率 92.11%、漏判率 5.88%、误伤率 9.52%、**κ=0.8412**；报告落 `docs/c02-judge-calibration/calibration.json`。保留 3 处人与裁判的真实分歧（2 条误伤：沙箱越界拦截被记成 `Policy_Violation`；1 条漏判：零答复被判 pass），不为了凑 κ=1.0 而改人标。
 - **纪律**：只标定与接线，不改 case、不动 `judge.py` → 不切代（`deff7501007cff61` 不变）。
 - **测试**：新增 12 条（calibrate 5：`data_valid` 读取/剔除后指标重算/默认不剔除/文本列名/CLI 端到端；gate 7：三档边界/旧行为保留/环境类不受降级/不误杀全通过），共 522 条全绿。
+- **审查修复**（同一提交后补，新增 13 条测试，共 535 条全绿）：① `scripts/rejudge.py` 的 `build_run_meta`/`baseline` 补 `judge_kappa`——原先重判会把它丢掉、退回 `unverified`，同一批结果从 warn 翻回 blocked（数据未变而发布结论反转）；② `report.py` 的 `_gate_label`/`gate_brief` 与 `run_eval` 控制台补渲染 `deferred_reasons`——原先报告档遇上环境类拦截时，"仅报告"只在 metrics 里，`report.md` 只剩环境原因，读者以为本轮没判出 Critical；③ `generate_markdown` 的 κ 回落改为"两侧都无值才回落"，避免重判写入 `judge_kappa=None` 时反而压掉 run_meta 里的值；④ High 阈值纳入 κ 权限表（见上），修正"裁判不可信却仍能打出 exit 2／exit 1"；⑤ `run_batch` 的 invalid 归因分流，κ 不足不再写成"环境故障"（有效率 100% 时自相矛盾）；⑥ `--judge-kappa` 加 `[-1,1]` 范围校验，`nan`/`2.0` 在参数期报错而非静默当 untrusted；⑦ CHANGELOG 标注分布订正为实测值。
 
 ### 2026-11-11：C02 前置——人工待标清单生成器 `build_label_template.py`
 

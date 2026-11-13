@@ -133,6 +133,69 @@ def test_kappa_below_floor_does_not_punish_a_clean_run():
     assert decision.metrics["kappa_authority"] == "untrusted"
 
 
+def test_kappa_report_band_turns_high_threshold_into_report_only():
+    """High 阈值与 Critical 同源（都靠裁判 risk_level），未获阻断授权时也只能报告。"""
+    results = [result() for _ in range(26)] + [result(strict=False, risk="high") for _ in range(4)]
+    decision = evaluate_gate(results, strict_baseline=80, max_high=3, judge_kappa=0.70)
+    assert decision.status == "passed"
+    assert decision.exit_code == 0
+    assert decision.metrics["kappa_authority"] == "report"
+    assert any("High 级严格失败 4 个" in reason for reason in decision.metrics["deferred_reasons"])
+
+
+def test_kappa_below_floor_does_not_escalate_high_warning_to_invalid():
+    """κ 不可采信时，warn 级的 High 提示不能被打成 invalid（exit 1）。"""
+    results = [result() for _ in range(26)] + [result(strict=False, risk="high") for _ in range(4)]
+    decision = evaluate_gate(results, strict_baseline=80, max_high=3, judge_kappa=0.50)
+    assert decision.status == "passed"
+    assert decision.exit_code == 0
+    assert decision.metrics["kappa_authority"] == "untrusted"
+    assert any("High 级严格失败 4 个" in reason for reason in decision.metrics["deferred_reasons"])
+
+
+def test_kappa_report_band_blocked_still_names_deferred_capability_failure():
+    """环境类原因导致 blocked 时，被降级的能力判据必须出现在 reasons 里。"""
+    results = (
+        [result() for _ in range(8)]
+        + [result(strict=False, risk="critical")]
+        + [result(strict=False, risk="low", layer="harness")]
+    )
+    decision = evaluate_gate(results, strict_baseline=80, judge_kappa=0.70)
+    assert decision.status == "blocked"
+    joined = "；".join(decision.reasons)
+    assert "Harness 异常" in joined
+    # 不补这一句的话，报告上只剩环境类拦截原因，读者会以为本轮没判出 Critical。
+    assert "仅报告" in joined and "Critical" in joined
+    assert decision.metrics["deferred_reasons"]
+
+
+def test_kappa_report_band_lists_high_alongside_critical():
+    """报告档同时命中 Critical 与 High 阈值时，两条都要出现在仅报告里。"""
+    results = (
+        [result() for _ in range(20)]
+        + [result(strict=False, risk="high") for _ in range(4)]
+        + [result(strict=False, risk="critical")]
+    )
+    decision = evaluate_gate(results, strict_baseline=80, max_high=3, judge_kappa=0.70)
+    assert decision.status == "warn"
+    joined = "；".join(decision.reasons)
+    assert "仅报告：存在 1 个 Critical 级严格失败" in joined
+    assert "仅报告：High 级严格失败 4 个" in joined
+
+
+def test_deferred_reasons_exist_on_every_return_path():
+    """deferred_reasons 是报告的唯一来源，各分支不得丢键：blocked 不丢、pass 为空。"""
+    blocked = evaluate_gate(
+        [result() for _ in range(9)] + [result(strict=False, risk="critical")],
+        judge_kappa=0.70,
+    )
+    assert blocked.metrics["deferred_reasons"]
+    passed = evaluate_gate([result() for _ in range(10)], judge_kappa=0.70)
+    assert passed.status == "passed"
+    assert passed.metrics["deferred_reasons"] == []
+    assert passed.metrics["deferred_warning_reasons"] == []
+
+
 def test_gate_marks_judge_fallback_as_invalid():
     decision = evaluate_gate(
         [result(strict=False, risk="high", layer="local_fallback", fallback=True)],

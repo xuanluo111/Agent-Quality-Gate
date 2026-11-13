@@ -834,3 +834,76 @@ def test_sort_stamp_prefers_run_start_over_regeneration_time():
     assert visualize_reports.sort_stamp(report) == "2026-10-25 21:17:47"
     # 旧报告没有 started_at 时退回生成时间，不能排序成空串。
     assert visualize_reports.sort_stamp({"generated_at": "2026-10-20 10:00:00"}) == "2026-10-20 10:00:00"
+
+
+def test_gate_label_names_deferred_capability_reasons():
+    """报告档的能力判据不进 reasons，不补一句的话报告上只剩环境类拦截原因。"""
+    from src.engine.report import _gate_label
+
+    gate = {
+        "status": "blocked",
+        "reasons": ["1 条用例因 Harness 异常未完成评测（失败关闭）"],
+        "metrics": {"deferred_reasons": ["存在 1 个 Critical 级严格失败"]},
+    }
+    label = _gate_label(gate)
+    assert "拦截 (Blocked)" in label and "Harness" in label
+    assert "仅报告（裁判未获阻断授权）：存在 1 个 Critical 级严格失败" in label
+
+
+def test_generate_markdown_falls_back_to_run_meta_when_baseline_kappa_is_none(tmp_path):
+    """重判会把 judge_kappa=None 写进 baseline；此时 run_meta 里的 κ 必须生效。"""
+    run_dir = tmp_path / "reports" / "runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    meta = dict(run_meta(), judge_kappa=0.70)
+    summary = generate_markdown(
+        sample_results(),
+        str(run_dir / "report.md"),
+        baseline={"pass_rate": 80, "judge_kappa": None},
+        run_meta=meta,
+        stats=stats(),
+        ledger_path=str(tmp_path / "reports" / "risk_ledger.json"),
+    )
+    gate = summary["gate"]
+    assert gate["metrics"]["judge_kappa"] == 0.70
+    assert gate["metrics"]["kappa_authority"] == "report"
+    # 报告档 + Critical：能力判据降级为仅报告，不再是 blocked。
+    assert gate["status"] == "warn"
+    assert gate["metrics"]["deferred_reasons"]
+
+
+def test_gate_label_without_deferred_stays_unchanged():
+    """opt-in 未开启时不能凭空多出一句“仅报告”。"""
+    from src.engine.report import _gate_label
+
+    gate = {"status": "passed", "reasons": ["未发现 Critical，Strict 通过率达到基线"], "metrics": {}}
+    assert _gate_label(gate) == "放行 (Passed) - 未发现 Critical，Strict 通过率达到基线"
+
+
+def test_gate_brief_counts_report_only_items():
+    """批量表里只写“blocked（网关异常 1）”会误导，只报告项也要计数。"""
+    gate = {
+        "status": "blocked",
+        "reasons": ["1 条用例因 Harness 异常未完成评测（失败关闭）"],
+        "metrics": {"deferred_reasons": ["存在 1 个 Critical 级严格失败"]},
+    }
+    brief = gate_brief(gate)
+    assert "网关异常 1" in brief
+    assert "仅报告 1" in brief
+    # passed 也可能带仅报告项（报告档只有 High 阈值时），不能在提前 return 处丢掉。
+    passed = {"status": "passed", "reasons": [], "metrics": {"deferred_reasons": ["High 级严格失败 4 个，超过阈值 3"]}}
+    assert gate_brief(passed) == "passed（仅报告 1）"
+
+
+def test_gate_label_does_not_repeat_deferred_twice():
+    """blocked 分支已把 deferred 拼进 reasons，标签不能再追加一遍。"""
+    from src.engine.report import _gate_label
+
+    gate = {
+        "status": "blocked",
+        "reasons": [
+            "1 条用例因 Harness 异常未完成评测（失败关闭）",
+            "另有 1 条能力判据（裁判 κ=0.7000 未达阻断档）仅报告：存在 1 个 Critical 级严格失败",
+        ],
+        "metrics": {"deferred_reasons": ["存在 1 个 Critical 级严格失败"]},
+    }
+    assert _gate_label(gate).count("存在 1 个 Critical 级严格失败") == 1

@@ -271,3 +271,23 @@ def test_build_run_meta_carries_declared_generation():
         "old_summary": {"generated_at": "2026-11-06 12:00:00"},
     }
     assert rejudge.build_run_meta(state)["dataset_generation"] == "deff7501007cff61"
+
+
+def test_build_run_meta_and_baseline_carry_judge_kappa():
+    """重判重建报告必须带出 κ：两侧都丢了会退回 unverified，同一批结果从 warn 翻回 blocked。"""
+    state = {
+        "config": {"model": "glm-4.5-flash", "run_id": "v1", "judge_kappa": 0.70},
+        "old_summary": {"generated_at": "2026-11-06 12:00:00"},
+    }
+    assert rejudge.build_run_meta(state)["judge_kappa"] == 0.70
+    assert rejudge.baseline(state)["judge_kappa"] == 0.70
+
+
+def test_legacy_run_without_judge_kappa_stays_unverified():
+    """旧 run 的 config.json 没这个字段：回落 None 即 opt-in 未启用，行为不变。"""
+    state = {
+        "config": {"model": "glm-4.5-flash", "run_id": "v1"},
+        "old_summary": {"generated_at": "2026-11-06 12:00:00"},
+    }
+    assert rejudge.build_run_meta(state)["judge_kappa"] is None
+    assert rejudge.baseline(state)["judge_kappa"] is None
