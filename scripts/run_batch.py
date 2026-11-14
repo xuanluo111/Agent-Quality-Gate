@@ -53,6 +53,9 @@ PASSTHROUGH = {
     "judge_samples": "--judge-samples",
     "judge_model": "--judge-model",
     "judge_base_url": "--judge-base-url",
+    # κ 权限表（C02）：清单里配了就必须传下去。缺这一项时批跑会静默退回“不传 κ”的旧行为，
+    # 门禁看着通过，实际拿不到能力类拦截授权——与 C02 已落地的实现自相矛盾。
+    "judge_kappa": "--judge-kappa",
     "strict_baseline": "--strict-baseline",
     "max_high": "--max-high",
     "min_valid_rate": "--min-valid-rate",
