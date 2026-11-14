@@ -6,10 +6,20 @@
 
 数据集代际不变（`deff7501007cff61`）。本轮只加审计工具与文档，不改题面、不动裁判，因此不切代。
 
+### 2026-11-14：`limit` 150 → 0 跑全量——「抽样会冻住 49 条未清风险」的实算
+
+- **改了什么**：`models.json` 7 个模型的 `limit: 150` 全部改为 `0`（`defaults.limit` 仍保留 120 作为 ad-hoc 单跑保护，靠 per-model 的 `0` 覆盖）。三层验证：① `grep '"limit"'` 确认 7 个全为 0；② `stratified_sample(cases, 0, 42)` → `method=full population=207 sample=207`；③ `normalize_spec` + `build_command` 对拍确认子进程拿到 `--limit 0`（排除 `spec.get("limit", 50)` 把 0 吞成 50 的隐患——`0` 在 dict 里存在，不会触发默认值）。
+- **为何不是“排期写了 207 所以跑 207”**：实算 `stratified_sample(cases, 150, seed=42)`，被丢的 57 条里 **`high` 占 34 条**（79 → 45，覆盖只剩 57%），`critical` 全保 89 条。真正的代价在台账侧：这 57 条用例上挂着 **105 条台账条目**（跨 7 个模型），其中 **49 条未清**（47 `open` + 2 `regressed`）、**15 条 `critical` 横跨 9 条用例**。
+- **根因值得记下来**：`report.py:804` 的台账更新是 `for result in items`——**只遍历本次进批的结果**。没进批的用例，条目 `occurrences` 不涨、`last_seen_at` 不动，连 `resolved → regressed` 的翻转都不会发生（被丢用例上还有 56 条已 `resolved` 条目，等于本批对它们**零回归检测**）。台账是 M1 签字、K06「重复失败 ≥2 次先改判据」、K14 升级规则的共同输入，所以抽样的代价不是“少跑 57 条”，是**让这三条纪律在 57 条用例上集体失效**。
+- **`severity` ≠ `risk_level`**：被丢用例里最重的 `运行环境与隔离-eaccf9f51a7b5f676714969fb1` 自身只是 `high`，却压着 5 条未清 `critical`——因为台账 `risk_level` 按类目升档（「运行环境与隔离」「数据与上下文安全」判 `critical`）。“抽 high 用例不伤 critical 风险”这个直觉是错的。
+- **成本账**：按历史批反推 token/attempt ≈ 5.3k，207×2×7 ≈ 15.4M 对 150×2×7 ≈ 11.1M（+38%）；墙钟 9~10h 对 6.6~7.6h。用 +38% 换回 34 条 `high` 覆盖与 49 条未清风险的重算。
+- **一处必须写进文档的事实**：`models.json` 被 `.gitignore:2` 忽略、**不入库**，所以“`limit` 必须为 0”只能靠 `02-11-19对比批口径声明.md` §二 约束，开跑前必须 `grep` 复核——写进代码注释或 CI 都无效。
+- **不改动**：无代码改动、无 case 改动、`judge.py` 未动 → 代际 `deff7501007cff61` 不变。
+
 ### 2026-11-14：11/19 对比批口径声明成稿——写的过程拓出两处口径缺口
 
 - **新文件 `docs/priority-2026q4/02-11-19对比批口径声明.md`**（九节）：把“引用本批数字必须同时给什么”固定成条款——§二 复现锚点缺任何一行，数字即视为不可引用；§四 四种不得引用（`invalid` 场次／`precondition_failed`／`cases_with_single_seed>0`／`require_stable=true` 下的单次通过率）。声明的价值不在措辞，在于**把“什么情况下这个数字不成立”提前写死**，否则批后总会有人拿不该比的两个数相减。
-- **缺口一：`models.json` 的 `limit: 150`**。排期与 §十 图写的是“7 模型 × 207 条”，但每个模型显式写了 `limit: 150`，`--limit` 会直接传给 `run_eval` 的 `stratified_sample`——跑出来是 **150 条分层抽样**（`sampling.method` 变 `stratified_category_severity`），不是 207 全量。两个数字不能互减。列为批前必改（`limit` 改 `0`），已记入 `00-待做优先级.md` §九.11。
+- **缺口一：`models.json` 的 `limit: 150`**。排期与 §十 图写的是“7 模型 × 207 条”，但每个模型显式写了 `limit: 150`，`--limit` 会直接传给 `run_eval` 的 `stratified_sample`——跑出来是 **150 条分层抽样**（`sampling.method` 变 `stratified_category_severity`），不是 207 全量。两个数字不能互减。列为批前必改（`limit` 改 `0`），已记入 `00-待做优先级.md` §九.11。**11-14 当日已修复**（7 个模型全改 0），实算依据与根因见上一条。
 - **缺口二：`20261106-night` 与本批在 pass^k 上不可比**。此前口径只写了两条（分母相同、jaccard 不可比），核对 `summary.json` 才发现前者是 `repeat=1`／`require_stable=false` 的 207 全量批，本批是 `repeat=2`／`require_stable=true`——**它根本没有稳定性结论**。已记入 §九.12，并在声明 §三 原文写出。
 - **带病上线清单进声明**：C01 只对 8 条题做了变异验证（UNDET 199）、K13 豁免 9 条、C04 不可判 2 条、C03 开卷嫌疑 35/207、待签 Critical 102、门禁无延迟与 token 红线。这些不是待办提醒，是**引用时必须同时说的限制**。
 - **不改动**：纯文档，不碰代码与用例 → 代际 `deff7501007cff61` 不变。
