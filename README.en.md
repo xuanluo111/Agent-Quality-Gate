@@ -576,7 +576,7 @@ scripts/
 cases/                      # curated/regression/core/smoke/manifest
 tests/                      # pytest
 reports/                    # run artifacts, ledger, charts
-docs/quality/               # K13 exemptions, self-acceptance (K03), ledger consumption rules (K06)
+docs/                       # see docs/README.md: machine inputs (K13 exemptions / κ labels / controls), design notes, source backlogs, planning
 ```
 
 ## Known limitations
