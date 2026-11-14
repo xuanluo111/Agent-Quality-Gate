@@ -21,7 +21,7 @@ from src.engine.journal import JOURNAL_FILENAME, recover as recover_journal
 from src.engine.judge import LayeredJudge
 from src.engine.report import generate_markdown
 from src.engine.runner import AgentRunner
-from src.engine.stability import merge_attempts
+from src.engine.stability import attempt_divergence, divergence_summary, merge_attempts
 from src.models.schema import AgentTrace, EvalResult, TestCase
 
 load_dotenv()
@@ -473,6 +473,15 @@ def main() -> int:
     run_meta["require_stable"] = config.require_stable
     run_meta["repeat"] = config.repeat
 
+    # K08 变序的自证：同用例多次尝试究竟分化了多少。
+    # 放在门禁**之外**是故意的——`cases_with_single_seed > 0` 说明变序根本没接上，
+    # 该修的是配置而不是判模型不合格；但它同时意味着本轮稳定性数字不可引用，
+    # 所以必须进 summary 与控制台，不能只待在日志里。
+    grouped: dict = {}
+    for trace in traces:
+        grouped.setdefault(trace.case_id, []).append(trace)
+    divergence = divergence_summary([attempt_divergence(items) for items in grouped.values()])
+
     summary = generate_markdown(
         results,
         str(run_dir / "report.md"),
@@ -491,6 +500,7 @@ def main() -> int:
         write_ledger=config.publish,
         epoch_override=config.dataset_generation,
     )
+    summary["attempt_divergence"] = divergence
     # --no-publish（自检/调试）：跑出来的结论只留在本轮 run 目录，不覆盖对外副本。
     if config.publish:
         Path("reports").mkdir(parents=True, exist_ok=True)
@@ -515,6 +525,17 @@ def main() -> int:
         f"稳定性: repeat={summary['repeat']} | pass@k={summary['pass_at_k']:.2f}% | "
         f"pass^k={summary['pass_pow_k']:.2f}% | flaky={summary['flaky_count']}"
     )
+    if config.repeat > 1:
+        print(
+            f"变序分化（K08）: 覆盖 {divergence['cases']} 条 | "
+            f"单种子用例 {divergence['cases_with_single_seed']} 条 | "
+            f"工具 Jaccard {divergence['tool_jaccard']} | 回复 Jaccard {divergence['reply_jaccard']}"
+        )
+        if divergence["cases_with_single_seed"]:
+            print(
+                "  ⚠ 单种子用例非 0：这些用例的 N 次尝试用的是同一个 seed，"
+                "本轮稳定性数字不可引用（检查 --repeat 与网关 seed 支持）。"
+            )
     print(f"Token: {summary['total_token_cost']:,} | 平均延迟: {summary['avg_latency_ms']:.0f} ms")
     print(f"关键产物: {run_dir / 'report.md'}")
     ledger_note = "reports/risk_ledger.json" if config.publish else "未写入（--no-publish）"

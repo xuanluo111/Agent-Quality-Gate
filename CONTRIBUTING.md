@@ -7,7 +7,7 @@ Python 3.11+（CI 双矩阵 3.11 / 3.13）。依赖以 `requirements.lock` 为�
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-make verify        # 提交前基线：单测 + 六项能力 + 数据集 + dry-run，全程 0 成本
+make verify        # 提交前基线：离线层全 13 项（单测/能力/数据集/题面地基/台账/dry-run），全程 0 成本
 ```
 
 ## 分支纪律

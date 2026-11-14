@@ -5,9 +5,9 @@
 [![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
 [![License: MIT (code) / CC-BY-4.0 (data)](https://img.shields.io/badge/License-MIT%20(code)%20%2F%20CC--BY--4.0%20(data)-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)](pyproject.toml)
-[![tests](https://img.shields.io/badge/tests-535%20passed-brightgreen)](tests/)
+[![tests](https://img.shields.io/badge/tests-636%20passed-brightgreen)](tests/)
 
-> CI runs the offline layer only: 535 unit tests (Python 3.11 / 3.13 matrix), dataset rebuild, `smoke --dry-run`. No model is called, no cost is incurred.
+> CI runs the offline layer only: 636 unit tests (Python 3.11 / 3.13 matrix), dataset rebuild, `smoke --dry-run`. No model is called, no cost is incurred.
 
 A reproducible quality-evaluation harness and release gate for tool-using AI agents. It audits the **full execution trace**, not just the final answer: real function calling, sandboxed tool execution, data-sensitivity routing, variable extraction, human-in-the-loop (HITL), cost budgets, layered judging, dual-track verdicts, a cross-run risk ledger, and visual reports.
 
@@ -42,6 +42,8 @@ Internal ticket codes (G3/G6/G7/C01/C02/C03/C04/C07/C10/C11/K08) used in this RE
 
 ## Why this project
 
+> **The stance is quoted from organisational practice, not self-authored**: "Quality backstop: R&D must verify the accuracy and security of AI output" — the quality-side position at Kuaishou Tech Salon #6 (2026-10-31), which also raised "test AI with AI" and "agent evaluation". This project adopts only the stance that R&D must prove accuracy; it **quotes none of the numbers from that talk** (the speakers' original material is unverified, and public coverage carries only conclusions).
+
 Common agent evaluations fall into the same traps:
 
 - string matching pretending to be tool-call verification, with no real execution or argument audit;
@@ -72,12 +74,12 @@ This project engineering-addresses each of them, and the gate **fails closed** w
 | Dual-track verdicts | Standard (no actual harm) and Strict (full-process compliance); the release gate uses Strict |
 | Release gate | `passed` / `warn` / `blocked` / `invalid` / `shadow`, unified exit codes 0/2/1 |
 | Reproducible runs | `reports/runs/<run_id>/` keeps config, dataset audit, sampled cases, per-case results, report and summary |
-| Risk ledger | `reports/risk_ledger.json` maintains `open/resolved/regressed` across runs |
+| Risk ledger | `reports/risk_ledger.json` maintains `open/resolved/regressed` across runs; `occurrences` is currently **a counter for display only** (the "times" column in the report), consumed by no rule — disposition of repeated failures is a human step, see [`docs/quality/02-台账消费与SDD迭代纪律.md`](docs/quality/02-台账消费与SDD迭代纪律.md) |
 | Dataset epoch fingerprint | The first 16 hex digits of the dataset SHA256 are the `dataset_epoch`; the ledger declares regression (`resolved→open`) **only within one epoch**; crossing epochs re-baselines to `open` with `rebaselined_from_epoch` recorded — a dataset change is never disguised as model degradation; epoch switches are surfaced in the report and at the ledger top level |
 | Statistics | Category/severity stratified sampling + Wilson 95% confidence intervals |
 | Reports | Markdown report (conclusion + data validity + HITL panel + risk ledger + failure-stage attribution), `summary.json`, ECharts interactive dashboard, matplotlib PNGs |
 | Final-state assertions | Cases may declare `initial_state` / `expected_final_state` / `state_assertions` / `allowed_changes`; the runner snapshots the workspace as `path -> sha256` before and after; assertion mismatch → `State_Mismatch`, undeclared change → `Collateral_Damage` |
-| pass^k stability | `--repeat N` reruns each case N times in isolated workspaces; rollups report pass@k / pass^k / stability_rate / flaky; `--require-stable` switches the gate to pass^k |
+| pass^k stability | `--repeat N` reruns each case N times in isolated workspaces; rollups report pass@k / pass^k / stability_rate / flaky; `--require-stable` switches the gate to pass^k. **Each repeat derives its own sampling seed** (attempt 1 keeps the original `--seed`, later ones offset by a prime stride): with one seed across all attempts the outputs collapse to near-identical text and stability is overstated. `attempt_divergence` quantifies it (unique seeds / tool Jaccard / reply Jaccard); `cases_with_single_seed > 0` means stability figures are not citable |
 | Argument provenance | IDs / amounts / dates in tool arguments must trace back to user input, tool results, case context or registered constants, otherwise `Fabricated_Parameter` (Strict fails, Standard passes); regex transforms can be registered against false positives |
 | Argument schema validation (C7) | `tools.validate_tool_arguments` checks model-produced arguments against each tool's declared JSON Schema (`required` / types / `enum` / `additionalProperties`); `judge.schema_violations` records `Schema_Violation` at the rule layer (Strict fails; Standard still holds when the guardrail intercepted it); stdlib only, no `jsonschema` dependency |
 | Correction dirty state | After an in-flight correction (`change X to Y` / `not X, Y` / `X is wrong, use Y`) or a declared `deprecated_values`, the old value reappearing in arguments or the reply → `State_Pollution` (Critical); three referential mentions are exempt (voiding notice, change narration "adjusted from 500 to 800", "original 500" annotations) but submitting the old value as a result still fails; `correction_round` pins when the correction takes effect along the tool-call sequence (aligned with `tool_call_params.step`); explicit `deprecated_values` outrank auto-detection |
@@ -86,7 +88,26 @@ This project engineering-addresses each of them, and the gate **fails closed** w
 | Software supply chain (C10) | Exact `requirements.lock` + offline lock-integrity check `scripts/check_supply_chain.py` (CI-blocking) + CI `pip-audit`/CycloneDX SBOM + `scripts/drift_check.py` cross-batch Provider_Change and rate-drift checks (reusing the two-proportion z-test) |
 | Judge calibration | `scripts/calibrate_judge.py` aligns against human labels: confusion matrix, miss rate, false-block rate, Cohen's kappa, stage agreement; stdlib only, offline; `--exclude-invalid` drops `data_valid=False` truncated samples so invalid samples cannot distort agreement. 40-label calibration yields κ=0.8412 (n=38); `gate.kappa_authority` turns it into a three-tier authority: ≥0.80 capability verdicts may block / 0.60–0.80 report only / <0.60 mark invalid. Capability verdicts cover Critical, the Strict baseline, pass^k and the High threshold; harness-side events (gateway blocks / truncation / unmeasured / fallback) never route through the judge and are never downgraded. Report-only items are surfaced in `report.md`, the batch summary and the console, and `rejudge` keeps κ when regenerating a report; `run_eval --judge-kappa` is opt-in |
 | Oracle self-check (C01) | `src/engine/oracle.py`: without calling any model, synthesizes per case one "perfectly executed positive" plus a batch of "negative mutations each breaking one deterministic assertion"; feeds only the judge's **deterministic gate chain** (`rule` → `trajectory/jcv/vri`) — a positive that cannot pass → `DEAD_CASE` (zero information, pressures everyone to 0), a negative that passes the gates → `LEAKY` (the assertion pays out what was not done); semantically undecidable offline parts are honestly recorded as `NOT_DETERMINISTIC`. `scripts/selfcheck_oracles.py` (`make oracle-selfcheck`) emits `reports/oracle_selfcheck.{json,md}`; report-only — fixing cases is a human decision. First 207-case baseline: `dead=0 leaky=0`, all 767 applicable mutations captured by gates |
-| Tests | 535 pytest cases covering runner (transient backoff, wall-clock), judge (argument schema, abstraction), oracle (self-check: family samples / LEAKY detection / splitting vocabulary / applicability pins), gate, tools (argument validation), dataset (z-test, select_smoke rotation), report (ledger dual semantics), state, provenance, stability, calibrate, build_label_template (C02 labeling list: balanced sampling / review sheet / validation / local-path redaction), rejudge, run_eval (breaker/abort), supply_chain, drift, suite_audit (C03 spec_leak / C04 judgeability health check), verify and visualization parsing |
+| Tests | 636 pytest cases covering runner (transient backoff, wall-clock), judge (argument schema, abstraction), oracle (self-check: family samples / LEAKY detection / splitting vocabulary / applicability pins), gate, tools (argument validation), dataset (z-test, select_smoke rotation), report (ledger dual semantics), state, provenance, stability, calibrate, build_label_template (C02 labeling list: balanced sampling / review sheet / validation / local-path redaction), rejudge, run_eval (breaker/abort), supply_chain, drift, suite_audit (C03 spec_leak / C04 judgeability and semantic-duplication checks), case_lint (K13 four-question completeness / read-vs-write context and observable anchors), ownership (M1 owner dispatch / acceptance traceability / idempotent backfill), fixture_ready (C14' fixture landing precheck / sandbox cross-check), k08_variation (seed derivation / attempt divergence), textsim (shared character-shingle Jaccard), verify and visualization parsing |
+
+## Data classification (ISACA Appendix A alignment)
+
+Data classification here is a **harness-internal send-routing policy**; it maps only to the "Send" dimension of Appendix A in ISACA *Securing AI Agents*. The gaps below are the point of this section, not a footnote:
+
+| ISACA tier | This project | Actual behaviour | Gap vs ISACA |
+| --- | --- | --- | --- |
+| PUBLIC | S1 | Sent to the cloud as-is | None |
+| INTERNAL | S1 | Sent to the cloud as-is | ISACA also requires access control and minimisation; not implemented |
+| CONFIDENTIAL | S2 | Sent after **irreversible masking** (`[ID_REDACTED]` placeholders) | Masking removes direct identifiers only; it does **not** provide reversible tokenisation or access auditing |
+| RESTRICTED / HIGHLY SENSITIVE | S3 | Blocked inside the harness when no local endpoint is configured; never sent to the cloud | **No claim** of meeting encryption-at-rest, need-to-know + MFA, retention or destruction requirements; health and payment data are not modelled |
+
+**The boundary that must be stated**: ISACA lists government ID numbers as RESTRICTED, while this project routes `id_card` hits through S2. **S2 does not mean "RESTRICTED is compliant"**; it means "direct identifiers were removed from the copy that is sent":
+
+- Masking is **irreversible substitution** ([`src/engine/privacy.py`](src/engine/privacy.py)), not tokenisation: there is no mapping table and no redemption path;
+- The masked payload **is still sent to the cloud model**. That masking actually happened is enforced by a judge rule ([`src/engine/judge.py`](src/engine/judge.py): an S2 input containing sensitive data with no recorded transform is judged Critical);
+- Store / Access / Keep / Dispose are **not covered** and belong to the system under test (SUT); the only exception is S3's "never sent to the cloud", which the harness enforces.
+
+> Moving ID cards to S3 requires editing case data, which changes the dataset epoch. It is therefore queued for the next epoch window together with other judge changes (`docs/priority-2026q4/00-待做优先级.md`, P2) rather than opening a window of its own.
 
 ## Explicitly not done
 
@@ -130,7 +151,7 @@ pip install -r requirements-dev.txt
 
 python scripts/build_suite.py
 python scripts/run_eval.py --suite smoke --dry-run --limit 0   # data validation only, no model calls
-python -m pytest -q                                            # 535 offline unit tests
+python -m pytest -q                                            # 636 offline unit tests
 python scripts/selfcheck_oracles.py                            # C01 oracle self-check (make oracle-selfcheck)
 
 # one command doing all of the above in order, plus an end-to-end check of six capabilities (zero cost)
@@ -151,14 +172,14 @@ python scripts/run_eval.py --suite smoke --limit 18
 python scripts/run_eval.py --suite core --limit 0
 ```
 
-`scripts/verify.py` runs the offline layer by default: environment, unit tests, six capabilities (synthetic traces, no model), dataset rebuild determinism and new-capability coverage, smoke/core dry-runs. Only `--live` calls real models (6 capability cases picked from smoke, forcing `--no-regression` so verification cannot pollute the dataset), and it also health-checks summary fields and report sections; add `--repeat 2` to verify pass^k with isolated workspaces.
+`scripts/verify.py` runs the offline layer by default: environment, unit tests, six capabilities (synthetic traces, no model), dataset rebuild determinism and new-capability coverage, the control-coverage matrix, four case-groundwork audits (C01 oracle self-check / C04 judgeability and semantic duplication / C03 `spec_leak` / K13 four-question completeness), the C14′ fixture landing precheck, the M1 ledger ownership check, and finally smoke/core dry-runs. Only `--live` calls real models (6 capability cases picked from smoke, forcing `--no-regression` so verification cannot pollute the dataset), and it also health-checks summary fields and report sections; add `--repeat 2` to verify pass^k with isolated workspaces.
 
 Makefile targets:
 
 ```bash
 make dev          # install runtime + test dependencies
 make test         # offline unit tests
-make verify       # one-shot self-check: tests + six capabilities + dataset + dry-run (zero cost)
+make verify       # one-shot self-check, all 13 offline steps: tests + capabilities + dataset + case-groundwork + ledger + dry-runs (zero cost)
 make verify-live  # self-check + 6 live capability cases + pass^k (costs money)
 make build-suite  # rebuild core/smoke and the audit manifest
 make oracle-selfcheck  # C01 oracle self-check: case-trust audit (zero cost)
@@ -371,6 +392,8 @@ The batch summary does more than sort — it states whether gaps are credible:
 - The leader among valid samples serves as baseline for two-sided two-proportion z-tests, reporting `p` and "significant / statistically indistinguishable"; the decision uses the same three-decimal rounding as the display, preventing "p=0.050 yet called significant" self-contradiction.
 - Threshold 0.05 with **no multiple-comparison correction**; `p≥0.05` means "this batch cannot demonstrate a difference", not "the models are equally good".
 - Runs with insufficient validity get `*`: scores listed, ranking conclusions excluded.
+- **Intervals only order and sample; they never gate.** `wilson_interval` appears only in `report.py` (display) and `drift_check.py` (batch drift); `gate.py` never references it, deliberately. No "confidence / interval lower bound" number may become a release condition: loosening it buys a pass with statistical noise, tightening it turns small batches red for no reason. Blocking must rest on deterministic criteria only (Critical, Strict baseline, pass^k, valid rate, κ authority) — see "Release gate".
+- This repository has **no** `confidence` / `session_confidence` field (zero hits repo-wide). Any claim that confidence orders sampling comes from outside boilerplate — do not change code for it; if sampling order is genuinely needed, sort by reproducible deterministic keys (`occurrences`, `risk_level`, `judge_layer`).
 
 At this project's 120-sample scale (batch `20261025-100521`), leader ling-3.1-flash (93.33%) vs runner-up mimo-v2.6-flash (87.50%) gives `p=0.125` — statistically indistinguishable; only from third place spark-x2.5-1.7b (80.00%) onward do gaps reach `p=0.002`. Hence reports advise against reading rank as absolute capability ordering.
 
@@ -494,7 +517,7 @@ Common CLI flags:
 | `--strict-baseline` / `--max-high` | capability gate thresholds |
 | `--min-valid-rate` | valid-sample ratio floor; below it → `invalid` (default 90) |
 | `--no-regression` | don't append regression cases this run |
-| `--repeat N` | repeat each case N times in isolated workspaces (default 1 = legacy behavior) |
+| `--repeat N` | repeat each case N times in isolated workspaces (default 1 = legacy behavior; each attempt derives its own sampling seed so a shared seed cannot fake stability) |
 | `--require-stable` | gate compares pass^k (all N passes) against baseline; requires `--repeat > 1` |
 | `--collateral-risk {critical,high,medium,low}` | risk level of `Collateral_Damage`, default high |
 | `--no-provenance` | disable argument provenance (fallback switch for rejudging history; per-case tag `no-provenance` also opts out) |
@@ -518,6 +541,7 @@ GitHub Actions runs offline checks only: install, pytest, supply-chain lock inte
 ## Project layout
 
 ```text
+AGENTS.md                 # agent onboarding: repo routing + seven rules (quotes, never invents)
 src/
 ├── config.py               # environment variables, CLI, run metadata
 ├── models/schema.py        # TestCase / AgentTrace / EvalResult
@@ -552,6 +576,7 @@ scripts/
 cases/                      # curated/regression/core/smoke/manifest
 tests/                      # pytest
 reports/                    # run artifacts, ledger, charts
+docs/quality/               # K13 exemptions, self-acceptance (K03), ledger consumption rules (K06)
 ```
 
 ## Known limitations
@@ -565,6 +590,7 @@ reports/                    # run artifacts, ledger, charts
 - The LLM judge carries subjectivity and self-preference bias; it defaults to the SUT. Configure an independent judge and accept multi-sampling costs.
 - Wilson intervals address binomial proportions only, ignoring within-category correlations; intervals are wide at small samples.
 - The regression set collects only Strict-failed Critical/High cases, not medium/low-risk failures.
+- **The gate can only live on each machine**: `verify.py` / `run_eval.py` are local CLIs, and `run_batch.py` merely consumes gate results model by model (`--on-gate continue|stop`) with **no global hook** — there is no pre-commit hook (`.git/hooks` holds samples only), and CI never calls a model (`aqg-ci.yml` runs the offline layer only), so there is nowhere to mount a shared release gate. Whether a batch ships thus depends on the operator actually running it and reading the exit code, and per-machine parameters (`.env`, `models.json`) may differ. Centralisation must happen outside the repo (a CI job or a release platform); this project does not provide it.
 - Exponential-backoff retries for vendor throttling/timeouts/5xx exist, plus batch breaker and abort (half-batch environment failures are recorded unevaluated, not faked as low scores); but there is no cross-process resume — large-scale orchestration belongs outside (use `--skip-existing` per model).
 - Vendor throttling caps concurrency: Zhipu's free tier triggers cascading 429s beyond `--workers 5` (consecutive Harness_Errors trip the batch breaker); use `--workers 1`~`2` for real batches.
 - The wall-clock breaker (`case_time_budget`, default 480 s) checks only at round boundaries and never interrupts in-flight calls: per-request hangs belong to `request_timeout`, whole-case runaways to this. Trips record `Time_Budget_Exceeded` and fail Strict — a **stability signal, not a capability verdict**; slow models (e.g. `diandian-dots3-note-pre`, 155 s mean latency) hit it far more than fast ones.
@@ -602,6 +628,7 @@ Full history in [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog; versions anchore
 | C02 | Judge-calibration prerequisite: human labeling list (balanced sampling + review sheet) | `scripts/build_label_template.py` (with `calibrate_judge.py`) |
 | C03 | Case `spec_leak` audit (is the grading basis written to the SUT; report-only, never blocks) | `src/engine/suite_audit.py` |
 | C04 | Dataset health check: judgeability (four mechanical targets) + duplication rate | `src/engine/suite_audit.py` (wired into `verify.py`) |
+| C14′ | Sandbox fixture landing precheck (drops doomed cases before the run, and fixes the attribution that counted an unwritable fixture as a model failure) | `src/engine/fixture_ready.py` (wired into `verify.py`) |
 | C07 | Tool-argument JSON Schema validation | `tools.validate_tool_arguments` |
 | C10 | Software supply chain (lock / SBOM / pip-audit / drift) | `check_supply_chain.py`, `drift_check.py` |
 | C11 | Transient backoff, batch breaker and abort | `runner._completion`, `run_eval` |
@@ -612,4 +639,5 @@ Full history in [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog; versions anchore
 ## Contributing and security
 
 - **Development** (branch discipline, pre-commit checks, testing and epoch conventions): [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Agent onboarding** (repo routing, seven non-negotiable rules, glossary): [AGENTS.md](AGENTS.md)
 - **Security and boundaries** (the sandbox is not a security boundary, sensitive-data handling, compliance before running): [SECURITY.md](SECURITY.md)

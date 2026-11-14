@@ -29,6 +29,12 @@ jobs:
         run: python scripts/check_supply_chain.py
       - name: Rebuild deterministic suites
         run: python scripts/build_suite.py
+      - name: Lint test cases (K13, four-question completeness)
+        # warning 起步：红叉可见但不卡流水线。存量缺陷登记在
+        # docs/quality/case-lint-exemptions.json（改 case 会动 dataset_sha256 → 切代），
+        # 豁免外的任何新增退化都会在这里亮红。
+        continue-on-error: true
+        run: python scripts/lint_cases.py --json
       - name: Validate smoke suite without calling a model
         run: python scripts/run_eval.py --suite smoke --dry-run --limit 0
 

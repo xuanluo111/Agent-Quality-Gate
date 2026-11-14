@@ -9,6 +9,7 @@ from typing import Any, List, Optional
 from openai import OpenAI
 
 from src.engine.failure_class import is_precondition_error
+from src.engine.fixture_ready import check_fixtures, render_issues
 from src.engine.journal import (
     JOURNAL_FILENAME,
     STATUS_DONE,
@@ -27,6 +28,13 @@ from src.engine.tools import (
 )
 from src.engine.variables import extract_variables_from_results
 from src.models.schema import NO_FINAL_RESPONSE_TEXT, AgentTrace, TestCase
+
+# K08 变序派生：步长取质数、模数对齐 OpenAI 兼容网关的合法 seed 上界（0..2^31-1）。
+# 相邻整数种子在小模型上常给出同一结果，跨度太小等于没变序。
+_SEED_STRIDE = 7919
+_SEED_MODULUS = 2**31 - 1
+# 哨兵：区分“没传 seed”（用实例默认）与“显式传 None”（本次不要 seed）。
+_UNSET = object()
 
 
 def _get(value: Any, key: str, default: Any = None) -> Any:
@@ -217,7 +225,26 @@ class AgentRunner:
             self._cancel_requested_at = time.strftime("%Y-%m-%d %H:%M:%S")
         return self._cancel_requested_at
 
-    def _completion(self, client: Any, model: str, messages: list, tools: list):
+    def attempt_seed(self, attempt: int) -> Optional[int]:
+        """K08 变序：第 k 次尝试用派生种子，破“同种子 → N 次输出几乎一致”。
+
+        第 0 次刻意保留 base seed：单跑（`repeat=1`）与历史批次的行为一字不改，
+        否则这条改动会连带把单次跑的样本也换掉，历史分数彻底不可比。
+
+        步长取质数并对齐 OpenAI 兼容网关的合法范围（0..2^31-1）——相邻整数种子在
+        小模型上常给出同一结果，等距法在采样空间里反而更难真正分化。
+
+        注意：这里变的是**采样种子**，不是题面条目顺序。实测 207 条题面中只有 5 条
+        多行，且全部是注入类上下文（“忽略上面的总结任务”直接指向段落位置）——
+        洗那些段落等于改了题目语义，所以 K08 的可落地杠杆只在采样侧。
+        """
+        if self.seed is None:
+            return None
+        if attempt <= 0:
+            return self.seed
+        return (int(self.seed) + attempt * _SEED_STRIDE) % _SEED_MODULUS
+
+    def _completion(self, client: Any, model: str, messages: list, tools: list, seed: Any = _UNSET):
         kwargs = {
             "model": model,
             "messages": messages,
@@ -228,8 +255,9 @@ class AgentRunner:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-        if self.seed is not None:
-            kwargs["seed"] = self.seed
+        effective_seed = self.seed if seed is _UNSET else seed
+        if effective_seed is not None:
+            kwargs["seed"] = effective_seed
         # 重试只逆补瞬态环境故障；seed 兼容回退保持原语义（只重试一次、去 seed），
         # 否则非瞬态错误会被当成可重试，把确定性失败拖成 2^N 白等。
         for index in range(self.max_retries + 1):
@@ -306,6 +334,9 @@ class AgentRunner:
         # 首个真正执行过的工具调用就撞上“目标不存在/无权限”：用例前置条件不成立。
         executed_calls = 0
         precondition_failed = False
+        # K08：本次尝试实际使用的采样种子。写进 trace 才能事后证明变序真的生效了，
+        # 不然“jaccard 不再是 1.0”只能靠嘴说。
+        run_seed = self.attempt_seed(attempt)
         # 取消的两个时间点：请求了与真的停了是两件事，分开记。
         cancel_requested_at: Optional[str] = None
         stopped_at: Optional[str] = None
@@ -350,6 +381,28 @@ class AgentRunner:
             {"role": "user", "content": user_input},
         ]
 
+        # C14′：fixture 落盘是**评测环境自己的准备动作**，失败与模型行为无关。
+        # 预检先跑，好处有两个：① 不在工作区建任何目录就摘出注定失败的用例；
+        # ② 报错带得动“哪条 fixture、哪类失败”，而不是等 Sandbox 抽出一句
+        # `沙箱初始化失败: {exc}`。下面 Sandbox 的 try 保留作兜底（磁盘满、符号
+        # 链接等静态判据看不到的情况），而不是重复判一遍。
+        fixture_issues = check_fixtures(case.fixtures)
+        if fixture_issues:
+            return AgentTrace(
+                case_id=case.id,
+                agent_response="",
+                is_success=False,
+                error_message=f"fixture 预检未通过: {render_issues(fixture_issues)}",
+                # 模型一句话都没说：这条必须剔出分母，不能记成答错。
+                precondition_failed=True,
+                execution_workspace=str(workspace),
+                unsupported_tools=unsupported_tools,
+                model=model,
+                run_id=self.run_id,
+                attempt=attempt,
+                latency_ms=(time.time() - started) * 1000,
+            )
+
         try:
             sandbox = Sandbox(workspace, case.fixtures, egress_allowlist=case.egress_allowlist)
         except Exception as exc:
@@ -358,6 +411,9 @@ class AgentRunner:
                 agent_response="",
                 is_success=False,
                 error_message=f"沙箱初始化失败: {exc}",
+                # 与上面同理：写不进 fixture 不是模型干的，漏了这一条会让 gate 把
+                # 环境故障算进分母，模型平白背一次失败。
+                precondition_failed=True,
                 execution_workspace=str(workspace),
                 unsupported_tools=unsupported_tools,
                 model=model,
@@ -394,7 +450,7 @@ class AgentRunner:
                     is_time_exceeded = True
                     break
 
-                response = self._completion(client, model, messages, tools)
+                response = self._completion(client, model, messages, tools, seed=run_seed)
                 total, prompt_tokens, completion_tokens = _usage_tokens(response)
                 token_cost += total
                 input_tokens += prompt_tokens
@@ -607,6 +663,7 @@ class AgentRunner:
                 cancel_requested_at=cancel_requested_at,
                 stopped_at=stopped_at,
                 attempt=attempt,
+                seed=run_seed,
                 model=model,
                 run_id=self.run_id,
                 input_tokens=input_tokens,
@@ -643,6 +700,7 @@ class AgentRunner:
                 cancel_requested_at=cancel_requested_at or self._cancel_requested_at,
                 stopped_at=stopped_at,
                 attempt=attempt,
+                seed=run_seed,
                 model=model,
                 run_id=self.run_id,
                 input_tokens=input_tokens,

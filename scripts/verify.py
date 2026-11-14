@@ -3,8 +3,8 @@
 
 分两层：
 - 默认（离线）：pytest、六项能力端到端自检、数据集重建与确定性、题面地基体检
-  （C01 判据自检 / C04 可判率 / C03 spec_leak）、dry-run 采样。
-  全程 0 成本，不读 API Key，可以反复跑。
+  （C01 判据自检 / C04 可判率与重复率 / C03 spec_leak / K13 case lint /
+  C14′ fixture 预检）与台账责任入账体检（M1）。全程 0 成本，不读 API Key，可以反复跑。
 - --live：真机跑 smoke 前几条，体检产物与报告章节；再加 --repeat 验证 pass^k。
 
 真机层强制带 --no-regression：默认 update_regression=True，验证过程一旦有失败用例
@@ -433,6 +433,122 @@ def step_spec_leak() -> Step:
     return Step("C03 spec_leak", True, detail)
 
 
+def step_repeat_rate() -> Step:
+    """C04 重复率：题面高度相似**且**约束/判据全同的用例对视为重复，非 0 即失败。
+
+    「相似」本身不是缺陷：同族变体（同一攻击单元的两种轮次结构、同一攻击面的两种
+    工具链实现）是设计意图，实测最高相似度 0.459 全落在这类变体上。所以判据必须
+    是相似度与约束/判据签名**同时**命中——只查相似度会把设计意图当缺陷删。
+    """
+    from src.engine import suite_audit
+
+    cases = _load_core_cases()
+    summary = suite_audit.repeat_rate_summary(cases)
+    detail = (
+        f"重复 {len(summary['duplicates'])} 对（{summary['involved']}/{summary['total']} 条，"
+        f"阈值 {summary['threshold']}）| 最高相似度 {summary['max_similarity']:.3f}"
+    )
+    if summary["duplicates"]:
+        pairs = "; ".join(
+            f"{item['left']} ↔ {item['right']}({item['similarity']})"
+            for item in summary["duplicates"][:5]
+        )
+        return Step("C04 重复率", False, f"{detail} | 疑似重复: {pairs}")
+    if summary["variants"]:
+        detail += f" | 高相似变体 {summary['reviewed_pairs']} 对（判据不同，仅分诊）"
+    return Step("C04 重复率", True, detail)
+
+
+def step_case_lint() -> Step:
+    """K13 四问齐备性：豁免外的**任何** finding 都判失败（防用例质量悄悄退化）。
+
+    存量问题走 `docs/quality/case-lint-exemptions.json` 登记而不改写数据集——
+    改 case 会动 `dataset_sha256` 触发切代，11/19 基线与历史批就不可比了。
+    所以这一项查的是「有没有新增退化」，不是「存量干净不干净」。
+    """
+    from src.engine.case_lint import lint_summary, load_exemptions
+
+    cases = _load_core_cases()
+    exemptions = load_exemptions(ROOT / "docs" / "quality" / "case-lint-exemptions.json")
+    summary = lint_summary(cases, exemptions)
+    detail = (
+        f"新增 {summary['errors']} error / {summary['warnings']} warning | "
+        f"已豁免 {len(summary['exempted'])} 条 | "
+        "四问 " + " / ".join(f"{rule} {count}" for rule, count in summary["by_rule"].items())
+    )
+    if summary["findings"]:
+        preview = "; ".join(finding.render() for finding in summary["findings"][:5])
+        return Step("K13 case lint", False, f"{detail} | 豁免外新增: {preview}")
+    return Step("K13 case lint", True, detail)
+
+
+def step_fixture_ready() -> Step:
+    """C14′：core 全量用例声明的 fixture 必须能真的落盘（纯静态判定，不写盘、0 成本）。
+
+    为什么算阻断：落不了盘的用例在跑批时**必然**失败，而这条失败会被记到模型头上——
+    `Sandbox` 构造异常那个分支原来不带 `precondition_failed`，gate 于是把环境故障
+    算进分母。拦在跑批前，既不浪费真机调用，也不污染分母。
+
+    另外两类（同一路径重复声明、仅差大小写）不报错、只静默丢文件，比报错更难查：
+    题面让模型读的文件少了一个，失败最后仍然归到模型头上。
+    """
+    from src.engine.fixture_ready import fixture_summary
+
+    cases = _load_core_cases()
+    summary = fixture_summary(cases)
+    detail = (
+        f"{summary['total']} 条用例 | {summary['with_fixtures']} 条声明 fixture"
+        f"（{summary['files']} 个文件）| 全部可落盘"
+    )
+    if summary["issues"]:
+        preview = "; ".join(
+            f"{item['case_id']}:{item['path']}({item['reason']})"
+            for item in summary["issues"][:5]
+        )
+        return Step("C14′ fixture 预检", False, f"落不了盘 {len(summary['issues'])} 处 | {preview}")
+    return Step("C14′ fixture 预检", True, detail)
+
+
+def step_risk_ownership() -> Step:
+    """M1 责任入账：每条台账条目必须有责任角色，已签字的必须可追溯。
+
+    阻断（任一）：
+    - 派发表漏项导致 `owner=unassigned`（不允许"没人负责"静默过关）；
+    - 签字无效：缺 `accept_reason` ／ 签字人不在名单 ／ 签字人就是 owner ／ 跨代未重签。
+
+    只报告：未签字的 Critical 条数。这是待办清单而不是门禁失败——把"还没签"当失败，
+    会逼出批量签字，签字随即失去意义（302 条全签等于免责模板）。
+    """
+    from src.engine.ownership import assign_owner, ownership_summary
+
+    path = ROOT / "reports" / "risk_ledger.json"
+    if not path.is_file():
+        return Step("M1 责任入账", True, "台账尚未生成，跳过（首次跑批时自动派发责任方）")
+    ledger = json.loads(path.read_text(encoding="utf-8"))
+    entries = list((ledger.get("entries") or {}).values())
+    # 先在内存里派发再判定：`owner` 是**推导值**，字段引入前的存量台账必然缺它。
+    # 若直接读文件，旧台账会集体落成 unassigned，把"派发表漏项"和"还没回填"混为一谈。
+    for entry in entries:
+        assign_owner(entry)
+    summary = ownership_summary(entries, str(ledger.get("dataset_epoch") or ""))
+    spread = " / ".join(f"{role} {n}" for role, n in summary["by_owner"].items() if n) or "（空）"
+    detail = (
+        f"{summary['total']} 条 · 已派发 {summary['total'] - len(summary['unassigned'])} 条 | {spread}"
+        f" | 已签字 {summary['signed']} · 待签 Critical {len(summary['unsigned_critical'])}"
+    )
+    problems = []
+    if summary["unassigned"]:
+        problems.append(
+            f"未派发责任方 {len(summary['unassigned'])} 条: {', '.join(summary['unassigned'][:5])}"
+        )
+    if summary["invalid_acceptances"]:
+        shown = ", ".join(f"{item['key']}({item['state']})" for item in summary["invalid_acceptances"][:5])
+        problems.append(f"无效签字 {len(summary['invalid_acceptances'])} 条: {shown}")
+    if problems:
+        return Step("M1 责任入账", False, f"{detail} | " + "；".join(problems))
+    return Step("M1 责任入账", True, detail)
+
+
 # --------------------------------------------------------------------------
 # 第 2 层：真机
 # --------------------------------------------------------------------------
@@ -589,7 +705,11 @@ def main() -> int:
         step_coverage(),
         step_oracle_selfcheck(),
         step_judgeability(),
+        step_repeat_rate(),
         step_spec_leak(),
+        step_case_lint(),
+        step_fixture_ready(),
+        step_risk_ownership(),
         step_dry_run(),
     ]
     if args.live:

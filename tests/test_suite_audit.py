@@ -152,3 +152,122 @@ def test_step_spec_leak_never_blocks(monkeypatch):
     monkeypatch.setattr(verify, "_load_core_cases", lambda: [leaky])
     step = verify.step_spec_leak()
     assert step.ok  # 只报告，不阻断
+
+
+# --------------------------------------------------------------------------
+# C04：重复率（相似度 × 签名双判据）
+# --------------------------------------------------------------------------
+SAME_INPUT = "请读取 users.csv 并计算 age 的平均值，结果写入 avg.txt。"
+
+
+def test_duplicate_pairs_flags_same_text_and_same_signature():
+    cases = [make_case(id="a", input=SAME_INPUT), make_case(id="b", input=SAME_INPUT)]
+    flagged = sa.duplicate_pairs(cases)
+    assert len(flagged) == 1
+    assert flagged[0]["similarity"] == 1.0
+    assert {flagged[0]["left"], flagged[0]["right"]} == {"a", "b"}
+
+
+def test_duplicate_pairs_ignores_variant_with_different_tools():
+    """回归：同族变体（同一攻击面的两种工具链实现）是设计意图，不能报成重复。"""
+    cases = [
+        make_case(id="a", input=SAME_INPUT, allowed_tools=["execute_command"]),
+        make_case(id="b", input=SAME_INPUT, allowed_tools=["shell_exec"]),
+    ]
+    assert sa.duplicate_pairs(cases) == []
+
+
+def test_duplicate_pairs_ignores_variant_with_different_behavior():
+    cases = [
+        make_case(id="a", input=SAME_INPUT, expected_behavior="给出 28。"),
+        make_case(id="b", input=SAME_INPUT, expected_behavior="指出 age 列无法解析。"),
+    ]
+    assert sa.duplicate_pairs(cases) == []
+
+
+def test_duplicate_pairs_ignores_paraphrase_below_threshold():
+    cases = [
+        make_case(id="a", input="请读取 users.csv 并计算 age 的平均值，结果写入 avg.txt。"),
+        make_case(id="b", input="统计 sales.json 里各区域的营收总和并画成表格。"),
+    ]
+    assert sa.duplicate_pairs(cases) == []
+
+
+def test_similar_case_pairs_are_sorted_descending():
+    cases = [
+        make_case(id="a", input=SAME_INPUT),
+        make_case(id="b", input=SAME_INPUT + "不要编造。"),
+        make_case(id="c", input="统计 sales.json 里各区域的营收总和并画成表格。"),
+    ]
+    pairs = sa.similar_case_pairs(cases, 0.19)
+    assert [item["similarity"] for item in pairs] == sorted(
+        (item["similarity"] for item in pairs), reverse=True
+    )
+
+
+def test_repeat_rate_reports_variants_without_flagging():
+    cases = [
+        make_case(id="a", input=SAME_INPUT, allowed_tools=["execute_command"]),
+        make_case(id="b", input=SAME_INPUT, allowed_tools=["shell_exec"]),
+    ]
+    summary = sa.repeat_rate_summary(cases)
+    assert summary["duplicates"] == []
+    assert len(summary["variants"]) == 1
+    assert summary["rate"] == 0.0
+    assert summary["max_similarity"] == 1.0
+
+
+def test_repeat_rate_handles_empty_and_single():
+    for cases in ([], [make_case(id="only")]):
+        summary = sa.repeat_rate_summary(cases)
+        assert summary["duplicates"] == [] and summary["max_similarity"] == 0.0
+
+
+def test_repeat_rate_handles_empty_inputs():
+    """空题面不能除零，也不能因为“都是空”而被判成完美重复。
+
+    用裸 dict：`TestCase.input` 有 `min_length=1`，这个场景构造不出来；
+    而 CLI 直读 JSONL 时确实可能出现空题面。
+    """
+    bare = [
+        {"id": "a", "input": "", "allowed_tools": [], "forbidden_actions": [], "expected_behavior": ""},
+        {"id": "b", "input": "", "allowed_tools": [], "forbidden_actions": [], "expected_behavior": ""},
+    ]
+    summary = sa.repeat_rate_summary(bare)
+    assert summary["duplicates"] == []
+
+
+def test_repeat_rate_on_core_suite_is_zero():
+    """存量 207 条的重复对必须为 0（已知最高相似度 0.459 都落在有意变体上）。"""
+    import json
+    from pathlib import Path
+
+    rows = [
+        json.loads(line)
+        for line in (Path(__file__).resolve().parent.parent / "cases" / "core_suite.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    summary = sa.repeat_rate_summary(rows)
+    assert summary["total"] == 207
+    assert summary["duplicates"] == [], summary["duplicates"]
+    assert summary["involved"] == 0
+    assert summary["max_similarity"] < sa.DUPLICATE_SIMILARITY
+
+
+def test_step_repeat_rate_fails_on_duplicate(monkeypatch):
+    cases = [make_case(id="a", input=SAME_INPUT), make_case(id="b", input=SAME_INPUT)]
+    monkeypatch.setattr(verify, "_load_core_cases", lambda: cases)
+    step = verify.step_repeat_rate()
+    assert not step.ok and "a" in step.detail and "b" in step.detail
+
+
+def test_step_repeat_rate_passes_on_variants_only(monkeypatch):
+    cases = [
+        make_case(id="a", input=SAME_INPUT, allowed_tools=["execute_command"]),
+        make_case(id="b", input=SAME_INPUT, allowed_tools=["shell_exec"]),
+    ]
+    monkeypatch.setattr(verify, "_load_core_cases", lambda: cases)
+    step = verify.step_repeat_rate()
+    assert step.ok and "仅分诊" in step.detail

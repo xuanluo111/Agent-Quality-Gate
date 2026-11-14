@@ -18,6 +18,7 @@ from src.engine.controls import (
 from src.engine.failure_class import FAILURE_CLASS_LABELS, PRECONDITION_FAILED, UNKNOWN
 from src.engine.gate import evaluate_gate, is_untrusted
 from src.engine.lineage import dataset_epoch, epoch_allows_regression, is_breakpoint
+from src.engine.ownership import assign_owner, render_acceptance
 from src.engine.stability import stability_metrics
 from src.models.schema import ATTACK_STRATEGIES, PROVIDER_BLOCKED_REASON, EvalResult
 
@@ -861,6 +862,11 @@ def update_risk_ledger(
             entries[key] = entry
 
     statuses = Counter(entry.get("status", "open") for entry in entries.values())
+    # M1 责任入账：每条 entry 必须有责任角色。这里对**全量** entry 回填（不只是本轮
+    # 新增的），因为存量台账写于字段引入之前；派发表没覆盖的类别落成 `unassigned`，
+    # verify 会因此判失败。人工改派（owner 已是合法角色但不等派发表结果）不会被覆盖。
+    for entry in entries.values():
+        assign_owner(entry)
     open_risks = [entry for entry in entries.values() if entry.get("status") in {"open", "regressed"}]
     open_risks.sort(key=lambda item: (RISK_ORDER.get(item.get("risk_level", ""), 9), item.get("case_id", "")))
     # 代际历史：只在 epoch 非空且未曾记录时追加，供跨批次分组与溯源回溯。
@@ -878,6 +884,28 @@ def update_risk_ledger(
         "status_counts": dict(statuses),
         "open_risks": open_risks,
     }
+    _write_json_atomic(path, ledger)
+    return ledger
+
+
+def backfill_ledger_owners(ledger_path: str | Path) -> dict:
+    """给存量台账补责任角色（M1 字段引入之前的条目没有 ``owner``）。
+
+    单独提供而不只靠“下次跑批时回填”：verify 的 M1 体检读的是文件本身，不回填就会
+    一直报 unassigned。写回时同步重建 ``open_risks``——它反序列化后是独立对象，只改
+    ``entries`` 会让同一份台账里两处字段不一致。
+
+    幂等：已派发且合法（含人工改派）的 owner 不会被覆盖。
+    """
+    path = Path(ledger_path)
+    ledger = json.loads(path.read_text(encoding="utf-8"))
+    entries = ledger.get("entries") or {}
+    for entry in entries.values():
+        assign_owner(entry)
+    ledger["open_risks"] = sorted(
+        [entry for entry in entries.values() if entry.get("status") in {"open", "regressed"}],
+        key=lambda item: (RISK_ORDER.get(item.get("risk_level", ""), 9), item.get("case_id", "")),
+    )
     _write_json_atomic(path, ledger)
     return ledger
 
@@ -1173,22 +1201,27 @@ def generate_markdown(
 
 > 台账保存在 `reports/risk_ledger.json`，按模型分区、每轮追加/更新，不覆盖历史。
 > `resolved` 表示同一用例在同一模型上本轮通过；`regressed` 表示修复后再次失败。
+> **责任方**按类别派发给角色（不是人名）；**签字**只在 Critical 上存在——签字意味着
+> "已确认、决定不修、并承担这个数字被引用的后果"，且随数据集代际失效（跨代需重签）。
 
-| 用例ID | 类别 | 等级 | 状态 | 首次发现 | 最近发现 | 次数 |
-|--------|------|------|------|----------|----------|------|
+| 用例ID | 类别 | 等级 | 状态 | 责任方 | 签字 | 首次发现 | 最近发现 | 次数 |
+|--------|------|------|------|--------|------|----------|----------|------|
 """
     entries = ledger.get("entries", {})
+    ledger_epoch = str(ledger.get("dataset_epoch") or "")
     current_high = [item for item in trusted_failures if item.risk_level in {"critical", "high"}]
     if current_high:
         for item in current_high:
-            entry = entries.get(_ledger_key(str(run_meta.get("model") or ""), item.case_id), {})
+            entry = entries.get(_ledger_key(str(run_meta.get("model") or ""), item.case_id), {}) or {}
             md += (
                 f"| {item.case_id} | {item.category} | {item.risk_level.upper()} | "
-                f"{entry.get('status', 'open')} | {entry.get('first_seen_run', summary['run_id'])} | "
+                f"{entry.get('status', 'open')} | {entry.get('owner') or 'unassigned'} | "
+                f"{render_acceptance(entry, ledger_epoch)} | "
+                f"{entry.get('first_seen_run', summary['run_id'])} | "
                 f"{entry.get('last_seen_run', summary['run_id'])} | {entry.get('occurrences', 1)} |\n"
             )
     else:
-        md += "| - | - | - | 本轮无新增 Critical/High | - | - | - |\n"
+        md += "| - | - | - | 本轮无新增 Critical/High | - | - | - | - | - |\n"
 
     md += """---
 

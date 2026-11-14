@@ -5,9 +5,9 @@
 [![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
 [![License: MIT (code) / CC-BY-4.0 (data)](https://img.shields.io/badge/License-MIT%20(code)%20%2F%20CC--BY--4.0%20(data)-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)](pyproject.toml)
-[![tests](https://img.shields.io/badge/tests-535%20passed-brightgreen)](tests/)
+[![tests](https://img.shields.io/badge/tests-636%20passed-brightgreen)](tests/)
 
-> CI 跑的是离线层：535 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
+> CI 跑的是离线层：636 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
 
 一个面向工具型 AI Agent 的可复现质量评测与发布门禁。它不只检查最终回答，而是审计完整执行轨迹：真实 function calling、受控工具执行、数据路由、变量抽取、人工确认、成本预算、分层裁判、双轨门禁、风险台账和可视化报告。
 
@@ -40,6 +40,8 @@
 
 ## 为什么做这个项目
 
+> **立场引自组织实践，不是本项目自述**：「质量兜底：研发对 AI 产出做准确性校验与安全审查」——快手技术沙龙第六期（2026-10-31）质量侧主张；同场另提「用 AI 测 AI」与「Agent 评测」。本项目只承接“研发必须自证准确性”这一立场，**不引其现场数字**（讲者原始材料未独立核验，公开报道亦只有结论句）。
+
 常见的 Agent 评测容易落入几个陷阱：
 
 - 用字符串匹配假装工具调用成功，没有真实执行与参数审计；
@@ -70,12 +72,12 @@
 | 双轨判定 | Standard（无实际危害）与 Strict（全过程合规）；发布门禁使用 Strict |
 | 发布门禁 | `passed` / `warn` / `blocked` / `invalid` / `shadow`，统一退出码 0/2/1 |
 | 可复现运行 | `reports/runs/<run_id>/` 保存配置、数据集审计、采样用例、逐条结果、报告与 summary |
-| 风险台账 | `reports/risk_ledger.json` 跨运行维护 `open/resolved/regressed` |
+| 风险台账 | `reports/risk_ledger.json` 跨运行维护 `open/resolved/regressed`；`occurrences` 目前只是**计数与展示**（报告台账第「次数」列），没有任何判据消费它——重复失败的处置纪律是人工环节，见 [`docs/quality/02-台账消费与SDD迭代纪律.md`](docs/quality/02-台账消费与SDD迭代纪律.md) |
 | 数据集代际指纹 | 数据集文件 SHA256 前 16 位即 `dataset_epoch`；台账只在**同一 epoch 内**判定 `resolved→open` 为劣化（regressed），跨代重新基线为 open 并记 `rebaselined_from_epoch`——不拿数据集变更冒充模型退化；代际切换在报告与台账顶层显式标注 |
 | 统计 | 类别/严重度分层采样 + Wilson 95% 置信区间 |
 | 报告 | Markdown 报告（结论摘要 + 数据有效性 + HITL 专项 + 风险台账 + 失败环节归因）、`summary.json`、ECharts 交互仪表盘、matplotlib PNG |
 | 终态断言 | 用例可声明 `initial_state` / `expected_final_state` / `state_assertions` / `allowed_changes`；Runner 在用例开始与结束把工作区拍成 `路径 -> sha256`，断言不符记 `State_Mismatch`，声明外变更记 `Collateral_Damage` |
-| pass^k 稳定性 | `--repeat N` 让同一用例在独立工作区重复执行 N 次，汇总给出 pass@k / pass^k / stability_rate / flaky；`--require-stable` 时门禁改用 pass^k |
+| pass^k 稳定性 | `--repeat N` 让同一用例在独立工作区重复执行 N 次，汇总给出 pass@k / pass^k / stability_rate / flaky；`--require-stable` 时门禁改用 pass^k。**重复轮之间逐次派生采样种子**（第 1 次保持 `--seed` 原值，之后按质数步长偏移）：否则 N 次尝试同一个 seed，输出几乎逐字重合，稳定性数字虚高。分化度由 `attempt_divergence` 量化（种子唯一数 / 工具 Jaccard / 回复 Jaccard）；`cases_with_single_seed > 0` 即意味着本轮稳定性不可引用 |
 | 参数血缘 | 工具参数里的 ID / 金额 / 日期必须能溯源到用户输入、工具结果、用例上下文或配置常量，否则记 `Fabricated_Parameter`（Strict 失败、Standard 通过），可注册正则 transform 防误杀 |
 | 工具参数 Schema 校验（C7） | `tools.validate_tool_arguments` 按各工具声明的 JSON Schema（`required` / 类型 / `enum` / `additionalProperties`）逐条校验模型产出的工具调用参数，`judge.schema_violations` 在规则层记 `Schema_Violation`（Strict 失败；被护栏拦下时 Standard 仍守住）；只用标准库、不引 `jsonschema` |
 | 改口脏状态 | 用户中途改口（`把 X 改成 Y` / `不是 X 是 Y` / `X 不对，应该是 Y`）或用例声明 `deprecated_values` 后，旧值再出现在工具参数或回复里即记 `State_Pollution`（Critical）；宣告失效（“已作废”）、变更叙述（“由原 500 调整为 800”）、原值指称（“（原 500 元/晚）”、表格里“原标准 / 500”分列对照）三类提及不算，但旧值被当成结果提交时照样判污染；`correction_round` 按工具调用步序指定改口从第几次调用起生效（与 `tool_call_params.step` 对齐），显式 `deprecated_values` 优先于自动识别 |
@@ -84,7 +86,26 @@
 | 软件供应链（C10） | `requirements.lock` 精确锁定 + `scripts/check_supply_chain.py` 离线校验锁定完整性（CI 阻断） + CI `pip-audit`/CycloneDX SBOM + `scripts/drift_check.py` 跨批次 Provider_Change 与比率漂移核验（复用两比例 z 检验） |
 | 裁判校准 | `scripts/calibrate_judge.py` 对齐人工标注，输出混淆矩阵、漏判率、误伤率、Cohen's kappa 与环节一致率，只用标准库、不联网；`--exclude-invalid` 剔除 `data_valid=False` 的截断样本，避免无效样本扭曲一致率。实测 40 条标定得 κ=0.8412（n=38），由 `gate.kappa_authority` 接成三档权限：≥0.80 能力判据可阻断 / 0.60~0.80 仅报告 / <0.60 判 invalid；能力类含 Critical、Strict 基线、pass^k 与 High 阈值，环境类（网关拦截/截断/未测到/兜底）不经裁判、不受降级；仅报告项在 `report.md`、批量汇总与控制台均单独列出，`rejudge` 重生成报告时保留 κ；`run_eval --judge-kappa` 为 opt-in |
 | 判据自检回路（C01） | `src/engine/oracle.py`：不调模型，给每条用例离线合成一份「完美执行的正面样本」+ 一组「每条确定性断言各破坏一次」的反面变异样本，只喂裁判的**确定性闸门链**（`rule` → `trajectory/jcv/vri`）——正面过不了记 `DEAD_CASE`（完美执行也拿不到分，压所有人 0 分且不携带信息），反面过了闸门记 `LEAKY`（破坏断言照样得分，在给“没做到”发分）；语义裁决离线未执行的部分诚实记 `NOT_DETERMINISTIC`，不假阳性也不掩盖。`scripts/selfcheck_oracles.py`（`make oracle-selfcheck`）产出 `reports/oracle_selfcheck.{json,md}`；只报告、不修改用例，修题是人的决定。首份 207 条基线：`dead=0 leaky=0`，767 个适用变异全被闸门捕获 |
-| 测试 | 535 个 pytest 用例，覆盖 runner（含瞬态退避、聚合墙钟）、judge（含工具参数 Schema 校验、抽象判别）、oracle（判据自检：家族样例 / LEAKY 检出 / 分流词表 / 适用性四组钉桩）、gate、tools（含参数校验）、dataset（含两比例 z 检验、select_smoke 轮转）、report（含台账代际双语义）、state、provenance、stability、calibrate、build_label_template（C02 待标清单：平衡抽样/复核表/校验/本机路径脱敏）、rejudge、run_eval（含熔断/急停）、supply_chain、drift、suite_audit（C03 spec_leak ／ C04 可判率体检）、verify 与可视化解析 |
+| 测试 | 636 个 pytest 用例，覆盖 runner（含瞬态退避、聚合墙钟）、judge（含工具参数 Schema 校验、抽象判别）、oracle（判据自检：家族样例 / LEAKY 检出 / 分流词表 / 适用性四组钉桩）、gate、tools（含参数校验）、dataset（含两比例 z 检验、select_smoke 轮转）、report（含台账代际双语义）、state、provenance、stability、calibrate、build_label_template（C02 待标清单：平衡抽样/复核表/校验/本机路径脱敏）、rejudge、run_eval（含熔断/急停）、supply_chain、drift、suite_audit（C03 spec_leak ／ C04 可判率与语义重复率体检）、case_lint（K13 四问齐备性 ／ 读写语境与可观测锚点）、ownership（M1 责任角色派发 ／ 签字可追溯性 ／ 存量回填幂等）、fixture_ready（C14′ fixture 落盘预检 ／ 与沙箱对拍）、k08_variation（变序种子派生 ／ 尝试分化度）、textsim（字符 shingle ／ Jaccard 共用口径）、verify 与可视化解析 |
+
+## 数据分级口径（ISACA 附录 A 对齐）
+
+本项目的数据分级是 **Harness 内的发送路由策略**，只对应 ISACA *Securing AI Agents* 附录 A 的“传（Send）”维度。映射如下——**差异是正文，不是脚注**：
+
+| ISACA 分级 | 本项目 | 实际动作 | 与 ISACA 要求的差异 |
+| --- | --- | --- | --- |
+| PUBLIC | S1 | 直接上云 | 无 |
+| INTERNAL | S1 | 直接上云 | ISACA 要求访问控制与最小化，本项目不实现 |
+| CONFIDENTIAL | S2 | **不可逆掩码**后上云（`[ID_REDACTED]` 等占位替换） | 掩码只移除直接标识符；**不满足**令牌化的可逆换取与访问审计 |
+| RESTRICTED / HIGHLY SENSITIVE | S3 | 无本地端点则在 Harness 层阻断，不上云 | **不主张**满足其存储加密、need-to-know + MFA、保留期与销毁要求；健康数据、支付数据未建模 |
+
+**必须说清的边界**：ISACA 把政府证件号列为 RESTRICTED，而本项目 `id_card` 命中后走 S2。**S2 不等于“RESTRICTED 已合规”**，只等于“直接标识符已从发送副本中移除”：
+
+- 掩码是**不可逆替换**（[`src/engine/privacy.py`](src/engine/privacy.py)），不是令牌化：没有映射表，也没有换取通道；
+- 掩码后的载荷**仍会发送给云端模型**。掩码是否生效由判据强制校验（[`src/engine/judge.py`](src/engine/judge.py)：S2 输入含敏感信息但轨迹未记录脱敏变换即判 Critical）；
+- Store / Access / Keep / Dispose 四个维度**未覆盖**，属被测系统（SUT）责任；唯一例外是 S3 的“不上云”由 Harness 强制。
+
+> 把身份证改归 S3 需要修改用例数据 → 触发数据集切代，因此排在下一个切代窗口，与其它改判据的项一起打包（`docs/priority-2026q4/00-待做优先级.md` 的 P2），不单独开窗。
 
 ## 明确没有做的事
 
@@ -128,7 +149,7 @@ pip install -r requirements-dev.txt
 
 python scripts/build_suite.py
 python scripts/run_eval.py --suite smoke --dry-run --limit 0   # 只校验数据，不调模型
-python -m pytest -q                                            # 535 条离线单测
+python -m pytest -q                                            # 636 条离线单测
 python scripts/selfcheck_oracles.py                            # C01 判据自检（make oracle-selfcheck）
 
 # 一条命令把上面几件事按顺序做完，并加一段六项能力的端到端自检（0 成本）
@@ -149,14 +170,14 @@ python scripts/run_eval.py --suite smoke --limit 18
 python scripts/run_eval.py --suite core --limit 0
 ```
 
-`scripts/verify.py` 默认只跑离线层：环境、单测、六项能力（人造 trace，不调模型）、数据集重建确定性与新能力覆盖、smoke/core dry-run。加 `--live` 才调用真实模型（从 smoke 筛出 6 条能力用例，强制 `--no-regression` 防止验证过程污染数据集），同时体检 summary 字段与报告章节；再加 `--repeat 2` 验证 pass^k 与独立工作区。
+`scripts/verify.py` 默认只跑离线层：环境、单测、六项能力（人造 trace，不调模型）、数据集重建确定性与新能力覆盖、控制覆盖矩阵，再加四项题面地基体检（C01 判据自检 ／ C04 可判率与语义重复率 ／ C03 `spec_leak` ／ K13 四问齐备性）、C14′ fixture 落盘预检、M1 台账责任入账，最后是 smoke/core dry-run。加 `--live` 才调用真实模型（从 smoke 筛出 6 条能力用例，强制 `--no-regression` 防止验证过程污染数据集），同时体检 summary 字段与报告章节；再加 `--repeat 2` 验证 pass^k 与独立工作区。
 
 也可以使用 Makefile：
 
 ```bash
 make dev          # 安装运行 + 测试依赖
 make test         # 离线单测
-make verify       # 一键自检：单测+六项能力+数据集+dry-run（0 成本）
+make verify       # 一键自检离线层全 13 项：单测+能力+数据集+题面地基+台账+dry-run（0 成本）
 make verify-live  # 自检 + 真机 6 条能力用例 + pass^k（会产生费用）
 make build-suite  # 重建 core/smoke 与审计清单
 make oracle-selfcheck  # C01 判据自检：题目可信度审计（0 成本）
@@ -374,6 +395,8 @@ python scripts/run_eval.py --suite core --min-valid-rate 70
 - 以可信样本中的第一名作为基准，做双比例 z 检验（双侧），给出 `p` 值与“差异显著 / 统计上不可区分”的结论；判定使用与展示相同的三位小数，避免出现 `p=0.050` 却写“显著”的自相矛盾。
 - 阈值取 0.05，且**未做多重比较校正**；`p≥0.05` 的准确含义是“这批样本不足以证明有差异”，不是“两个模型一样好”。
 - 数据有效率不足的场次标 `*`，仍列出分数，但不参与排名结论。
+- **区间只用于排序与抽检，不参与准出**：`wilson_interval` 只出现在 `report.py`（展示）与 `drift_check.py`（批量漂移），`gate.py` 全文不引用——这是刻意的。任何“置信度／区间下界”类数值都不得作为放行条件：放宽等于用统计噪声买通过，收紧会让小样本批次无故变红。要拦发布只能用确定性判据（Critical、Strict 基线、pass^k、有效率、κ 授权），见「发布门禁」。
+- 本仓库**没有** `confidence` / `session_confidence` 字段（全仓零命中）。若在别处看到“用 confidence 排序抽检”的说法，那是外部口径混入，不要据此改代码；真要做抽检排序，排序键应当是可复核的确定性量（`occurrences`、`risk_level`、`judge_layer`）。
 
 本项目 120 条样本下（`20261025-100521` 批次），第一名 ling-3.1-flash（93.33%）与第二名 mimo-v2.6-flash（87.50%）的 `p=0.125`，只能算统计上不可区分；与第三名 spark-x2.5-1.7b（80.00%）起才是 `p=0.002` 的显著差距。所以报告不建议把名次当作绝对能力排序。
 
@@ -497,7 +520,7 @@ python scripts/rejudge.py --runs 'reports/runs/*' --collateral-risk critical
 | `--strict-baseline` / `--max-high` | 能力门禁阈值 |
 | `--min-valid-rate` | 可信样本占比下限，低于它判 `invalid`（默认 90） |
 | `--no-regression` | 本轮不追加回归用例 |
-| `--repeat N` | 同一用例独立重复执行 N 次（默认 1，保持旧行为；每次使用独立工作区） |
+| `--repeat N` | 同一用例独立重复执行 N 次（默认 1，保持旧行为；每次使用独立工作区，且逐次派生采样种子以防同种子导致虚假稳定） |
 | `--require-stable` | 门禁改用 pass^k（N 次全部通过）对比基线，需配合 `--repeat > 1` |
 | `--collateral-risk {critical,high,medium,low}` | `Collateral_Damage` 的风险等级，默认 high |
 | `--no-provenance` | 关闭参数血缘检查（历史数据重判时的兜底开关，也可用用例 tag `no-provenance` 单条退出） |
@@ -514,13 +537,14 @@ python -m pytest -q
 python scripts/selfcheck_oracles.py   # C01 判据自检：题目可信度审计（同样 0 成本）
 ```
 
-测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、判据自检回路（正反参照/漏网检出/诚实分母）、门禁分支、数据加载/去重/采样、报告与台账、Markdown/summary 可视化解析。
+测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、判据自检回路（正反参照/漏网检出/诚实分母）、门禁分支、数据加载/去重/采样、报告与台账（含 M1 责任派发与签字校验）、Markdown/summary 可视化解析。
 
 GitHub Actions 主要做离线检查：安装依赖、运行 pytest、校验供应链锁定完整性、重建数据集、执行 smoke dry-run，不会调用真实模型；另有一个 `supply-chain` 作业从 `requirements.lock` 生成 CycloneDX SBOM 并跑 `pip-audit`（咨询级漏洞扫描）。真实评测请在本地配置 `.env` 后手动运行。
 
 ## 项目结构
 
 ```text
+AGENTS.md                  # Agent 入职手册：仓库路由 + 七条纪律（只复述，不自造规则）
 src/
 ├── config.py               # 环境变量、CLI、运行元信息
 ├── models/schema.py        # TestCase / AgentTrace / EvalResult
@@ -555,6 +579,7 @@ scripts/
 cases/                      # curated/regression/core/smoke/manifest
 tests/                      # pytest
 reports/                    # 运行产物、台账、图表
+docs/quality/               # K13 豁免清单、自验收（K03）、台账消费纪律（K06）
 ```
 
 ## 已知限制
@@ -568,6 +593,7 @@ reports/                    # 运行产物、台账、图表
 - LLM 裁判存在主观性和同源偏差；默认与被测模型相同。建议配置独立裁判，并接受多次采样带来的成本。
 - Wilson 区间只处理二项比例，不考虑同一类别用例之间的相关性；小样本下区间会很宽。
 - 回归集只沉淀 Strict 失败的 Critical/High 用例，不包含中低风险失败。
+- **门禁只能贴在每台机器上**：`verify.py` / `run_eval.py` 都是本地 CLI，`run_batch.py` 也只是按模型逐个消费门禁结果（`--on-gate continue|stop`），**没有全局钩子**——仓库里既没有 pre-commit 钩子（`.git/hooks` 只有样例），CI 也不调模型（`aqg-ci.yml` 只跑离线层），因此没有地方挂“公用发布门禁”。后果是“这批能不能发”取决于执行者是否真的跑了并看了退出码；各人的门禁参数（`.env`、`models.json`）还可能不一致。中心化需要在仓库外做（CI 作业或发布平台），本项目不提供。
 - 已有面向供应商限流/超时/网关 5xx 的指数退避重试，以及批次级熔断与急停（半批环境故障统一记 `Harness_Error` 未评、不冒充模型低分）；但没有跨进程的断点续跑，单轮评测仍居同一进程，大规模调度需在外层编排（可用 `--skip-existing` 逐模型增量）。
 - 供应商限流决定并发上限：智谱免费账户 RPM 严格，`--workers` 给到 5 会连环触发 429（连续 `Harness_Error` 触发批次熔断，半批记未评）；跑真实批次建议 `--workers 1`~`2`，不要用默认并发。
 - 聚合墙钟熔断（`case_time_budget`，默认 480s）只在**轮次边界**检查、不打断进行中的调用：单次请求挂死由 `request_timeout` 封、整条用例跑飞由它兜，两者职责不重叠。触发后记 `Time_Budget_Exceeded` 并计入 Strict 失败——它是**稳定性信号、不等于能力不合格**；慢模型（如 `diandian-dots3-note-pre`，平均延迟 155s）比快模型多得多。
@@ -607,6 +633,7 @@ reports/                    # 运行产物、台账、图表
 | C02 | 裁判校准前置：人工待标清单生成（平衡抽样 + 复核表） | `scripts/build_label_template.py`（配合 `calibrate_judge.py`） |
 | C03 | 题面 `spec_leak` 体检（判分依据是否写给被测，只报告不阻断） | `src/engine/suite_audit.py` |
 | C04 | 数据集体检：可判率（四类机械 target）+ 重复率 | `src/engine/suite_audit.py`（进 `verify.py`） |
+| C14′ | 沙箱 fixture 落盘预检（跑前摘出注定失败的用例，并修正“写不进 fixture 被算成模型答错”的归因） | `src/engine/fixture_ready.py`（进 `verify.py`） |
 | C07 | 工具参数 JSON Schema 校验 | `tools.validate_tool_arguments` |
 | C10 | 软件供应链（lock / SBOM / pip-audit / drift） | `check_supply_chain.py`、`drift_check.py` |
 | C11 | 瞬态退避、批次熔断与急停 | `runner._completion`、`run_eval` |
@@ -617,4 +644,5 @@ reports/                    # 运行产物、台账、图表
 ## 贡献与安全
 
 - **参与开发**（分支纪律、提交前检查、测试与切代约定）：见 [CONTRIBUTING.md](CONTRIBUTING.md)
+- **Agent 入职**（仓库路由、七条不可协商的纪律、术语速查）：见 [AGENTS.md](AGENTS.md)
 - **安全与边界**（沙箱不是安全边界、敏感数据处理、运行前合规确认）：见 [SECURITY.md](SECURITY.md)
