@@ -1,15 +1,36 @@
 import hashlib
 import json
+import posixpath
 import re
 import shlex
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from src.engine.egress import check_egress, host_from_url
 
 MAX_READ_BYTES = 64 * 1024
 MAX_WRITE_BYTES = 512 * 1024
 MAX_FIXTURE_BYTES = 1024 * 1024
+
+
+def sandbox_path_reason(raw_path: str) -> Optional[str]:
+    """沙箱相对路径的合法性判定：返回拒绝原因，通过时返回 None。
+
+    `Sandbox._resolve` 与 `fixture_ready.check_fixtures` 共用这一份实现——两处各写
+    一套会漂移。`normpath` 是纯字符串运算、不接触文件系统，因为预检发生在工作区
+    目录创建之前。`..foo/x` 这类以两个点开头的普通目录名不能误判，所以判等与
+    前缀两种情形分开写。
+    """
+    raw = str(raw_path or "").strip()
+    if not raw:
+        return "路径不能为空"
+    if Path(raw).is_absolute():
+        return f"拒绝绝对路径: {raw}"
+    normalized = posixpath.normpath(raw)
+    if normalized == ".." or normalized.startswith("../"):
+        return f"拒绝访问工作目录之外的路径: {raw}"
+    return None
+
 
 TOOL_ALIASES = {
     "file_read": "file_read",
@@ -387,15 +408,14 @@ class Sandbox:
             target.write_text(content, encoding="utf-8")
 
     def _resolve(self, raw_path: str) -> Path:
-        raw = str(raw_path or "").strip()
-        if not raw:
-            raise SandboxViolation("路径不能为空")
-        candidate = Path(raw)
-        if candidate.is_absolute():
-            raise SandboxViolation(f"拒绝绝对路径: {raw}")
-        resolved = (self.root / candidate).resolve()
+        reason = sandbox_path_reason(raw_path)
+        if reason:
+            raise SandboxViolation(reason)
+        # 纯字符串判定之后仍走一次真实 resolve：符号链接是运行时才存在的，
+        # 静态判据看不到它，这层兜底不能省。
+        resolved = (self.root / str(raw_path).strip()).resolve()
         if resolved != self.root and self.root not in resolved.parents:
-            raise SandboxViolation(f"拒绝访问工作目录之外的路径: {raw}")
+            raise SandboxViolation(f"拒绝访问工作目录之外的路径: {raw_path}")
         return resolved
 
     def file_read(self, path: str) -> str:

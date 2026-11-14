@@ -406,6 +406,13 @@ class AgentTrace(BaseModel):
     cancel_requested_at: Optional[str] = Field(default=None, description="收到取消请求的时间；有值不代表已经停下")
     stopped_at: Optional[str] = Field(default=None, description="真的在轮次边界停下的时间；空表示没停住")
     attempt: int = Field(default=0, description="repeat 场景下的第几次独立尝试（0 起）")
+    seed: Optional[int] = Field(
+        default=None,
+        description=(
+            "本次尝试实际送给模型的采样种子（K08）：repeat>1 时逐次派生，"
+            "否则同一用例的 N 次尝试同种子、输出高度重合，稳定性指标会虚高"
+        ),
+    )
 
     model: str = ""
     run_id: str = ""

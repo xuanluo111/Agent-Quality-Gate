@@ -10,6 +10,7 @@
 
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from src.engine.textsim import jaccard, shingles
 from src.models.schema import AttemptResult, AgentTrace, EvalResult
 
 RISK_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -101,4 +102,88 @@ def stability_metrics(results: Sequence[EvalResult]) -> Dict[str, object]:
         "stability_rate": percent(stable),
         "flaky_count": len(flaky_cases),
         "flaky_cases": flaky_cases,
+    }
+
+
+def behavior_signature(trace: AgentTrace) -> set:
+    """一次尝试的「行为面」：实际调用过的工具名集合。
+
+    用工具名而不是完整参数：参数里带时间戳、随机 id、绝对路径，那些差异说明不了
+    行为有没有分化，只会把 Jaccard 永远拉到 1 以下——指标就失去分辨力。
+    """
+    names = getattr(trace, "tool_call_sequence", None) or getattr(trace, "tools_called", None) or []
+    return {str(name) for name in names if str(name)}
+
+
+def attempt_divergence(traces: Sequence[AgentTrace]) -> dict:
+    """K08 验证口径：同一用例 N 次尝试之间到底分化了多少。
+
+    三个数字各自回答一个不同的问题，故意**不合并成一个分数**：
+
+    - `seed_unique` — 机制有没有生效。等于 1 说明变序没接上（或被网关吞掉），
+      此时下面两个数字再怎么变都是噪声，不是“稳定性好”；
+    - `tool_jaccard` — 行为路径是否分化（两两平均）；
+    - `reply_jaccard` — 回复文本是否分化（两两平均，字符 shingle）。
+
+    合成一个分数会把“网关不认 seed”和“模型本来就稳”混成一谈，而这两件事
+    该修的地方完全不同。
+
+    `reply_jaccard` 对空回复记 1.0（都没答），但不能让它稀释分化度——空回复样本
+    要么被判 `unknow`要么进 `NO_FINAL_RESPONSE`，本就不该当作“稳定”。
+    """
+    items = list(traces)
+    if len(items) < 2:
+        return {
+            "attempts": len(items),
+            "seed_unique": len({getattr(item, "seed", None) for item in items}),
+            "tool_jaccard": None,
+            "reply_jaccard": None,
+            "empty_reply_pairs": 0,
+        }
+
+    seeds = {getattr(item, "seed", None) for item in items}
+    signatures = [behavior_signature(item) for item in items]
+    replies = [shingles(getattr(item, "agent_response", "") or "") for item in items]
+    tool_scores: List[float] = []
+    reply_scores: List[float] = []
+    empty_pairs = 0
+    for left in range(len(items)):
+        for right in range(left + 1, len(items)):
+            tool_scores.append(jaccard(signatures[left], signatures[right]))
+            if not replies[left] and not replies[right]:
+                empty_pairs += 1
+                continue
+            reply_scores.append(jaccard(replies[left], replies[right]))
+    return {
+        "attempts": len(items),
+        "seed_unique": len(seeds),
+        "tool_jaccard": round(sum(tool_scores) / len(tool_scores), 4) if tool_scores else None,
+        "reply_jaccard": round(sum(reply_scores) / len(reply_scores), 4) if reply_scores else None,
+        "empty_reply_pairs": empty_pairs,
+    }
+
+
+def divergence_summary(per_case: Sequence[dict]) -> dict:
+    """把逐用例的分化度汇总成一批的口径。
+
+    `cases_with_single_seed` 是最关键的一列：它数的是**机制没生效**的用例。
+    只要它非 0，“稳定性数字”就没有资格被引用，不管 jaccard 多好看。
+    """
+    items = [item for item in per_case if item.get("attempts", 0) > 1]
+    if not items:
+        return {
+            "cases": 0,
+            "cases_with_single_seed": 0,
+            "tool_jaccard": None,
+            "reply_jaccard": None,
+            "empty_reply_pairs": 0,
+        }
+    tool_values = [item["tool_jaccard"] for item in items if item.get("tool_jaccard") is not None]
+    reply_values = [item["reply_jaccard"] for item in items if item.get("reply_jaccard") is not None]
+    return {
+        "cases": len(items),
+        "cases_with_single_seed": sum(1 for item in items if item.get("seed_unique", 0) <= 1),
+        "tool_jaccard": round(sum(tool_values) / len(tool_values), 4) if tool_values else None,
+        "reply_jaccard": round(sum(reply_values) / len(reply_values), 4) if reply_values else None,
+        "empty_reply_pairs": sum(int(item.get("empty_reply_pairs", 0)) for item in items),
     }

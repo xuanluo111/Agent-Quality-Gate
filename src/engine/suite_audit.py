@@ -20,7 +20,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from itertools import combinations
 from typing import Dict, List, Sequence
+
+from src.engine.textsim import SHINGLE_SIZE, normalize, shingles
 
 # ---- C04：可判定 target 的四类确定性锚点 ----
 JUDGE_TARGET_FIELDS = (
@@ -165,4 +168,123 @@ def spec_leak_summary(cases: Sequence, example_limit: int = 15) -> dict:
         "rate": round(leaked_count / total, 4) if total else None,
         "by_level": by_level,
         "examples": examples,
+    }
+
+
+# --------------------------------------------------------------------------
+# C04 重复率：题面语义重复检测
+# --------------------------------------------------------------------------
+# 判据不能是「相似就算重复」：题库里同族变体是**设计意图**——
+# `mut-v2-sudo-stack-001` 与 `mut-v2-sudo-urgent-001` 是同一攻击单元的两种轮次结构，
+# `mut-nohup-bind-001` 与 `运行环境与隔离-*` 是同一攻击面在不同工具链（`execute_command`
+# → `shell_exec`）上的实现。实测这些对的 trigram Jaccard 高到 0.459，按相似度报警会
+# 全部误报。所以「真重复」必须**同时**满足两条：
+#
+#   1. 题面高度相似（Jaccard ≥ `DUPLICATE_SIMILARITY`）；
+#   2. 约束与判据完全相同（`allowed_tools` / `forbidden_actions` / `expected_behavior`）。
+#
+# 二者同时成立意味着「换了个 id 又抄了一遍」，而不是「有意的变体」。
+# `REVIEW_SIMILARITY` 那条只列清单、不判定：高相似但判据不同的对交给人分诊，
+# 避免把设计意图当缺陷删掉。
+DUPLICATE_SIMILARITY = 0.75
+REVIEW_SIMILARITY = 0.30
+# 中文没有词边界，字符 shingle 的集合重叠度比分词更稳定，也不依赖任何词典。
+# 实现已提到 `textsim`（`SHINGLE_SIZE` 随之导入）：同一口径 `stability` 也要用
+# （K08 比同一用例多次尝试的回复），两处各写一份会在调阈值时只改一边。
+
+
+def _field(case, name: str, default=None):
+    """同时吃 pydantic 用例对象与裸 dict（CLI 直读 JSONL 时会传 dict）。"""
+    if isinstance(case, dict):
+        return case.get(name, default)
+    return getattr(case, name, default)
+
+
+def _normalize_for_similarity(text: str) -> str:
+    """去标点与空白再比：题面的差异常常只是标点/换行，留着会让 Jaccard 虚低。"""
+    return normalize(text)
+
+
+def _trigrams(text: str) -> set:
+    return shingles(text)
+
+
+def _case_signature(case) -> tuple:
+    """约束 + 判据的三元组：三者全同才算「抄了一遍」，只是像不算。"""
+    tools = tuple(sorted(str(item) for item in (_field(case, "allowed_tools") or [])))
+    forbidden = tuple(sorted(str(item) for item in (_field(case, "forbidden_actions") or [])))
+    behavior = str(_field(case, "expected_behavior") or "").strip()
+    return tools, forbidden, behavior
+
+
+def similar_case_pairs(cases: Sequence, threshold: float) -> List[dict]:
+    """题面 trigram Jaccard ≥ threshold 的用例对，按相似度降序。"""
+    shapes = [
+        _trigrams(_normalize_for_similarity(str(_field(case, "input") or ""))) for case in cases
+    ]
+    found: List[dict] = []
+    for left, right in combinations(range(len(cases)), 2):
+        first, second = shapes[left], shapes[right]
+        if not first or not second:
+            continue
+        # 上界剪枝：Jaccard ≤ min(|A|,|B|) / max(|A|,|B|)。比值不够时交集再多也到不了
+        # 阈值，于是可以跳过集合运算——题量上千时这一行省掉绝大部分两两比较。
+        low, high = sorted((len(first), len(second)))
+        if low / high < threshold:
+            continue
+        intersection = len(first & second)
+        similarity = intersection / (len(first) + len(second) - intersection)
+        if similarity >= threshold:
+            found.append(
+                {
+                    "left": str(_field(cases[left], "id")),
+                    "right": str(_field(cases[right], "id")),
+                    "similarity": round(similarity, 4),
+                }
+            )
+    found.sort(key=lambda item: item["similarity"], reverse=True)
+    return found
+
+
+def duplicate_pairs(cases: Sequence) -> List[dict]:
+    """C04 重复率：题面高度相似 **且** 约束与判据完全相同。"""
+    index = {str(_field(case, "id")): case for case in cases}
+    flagged: List[dict] = []
+    for pair in similar_case_pairs(cases, DUPLICATE_SIMILARITY):
+        left, right = index[pair["left"]], index[pair["right"]]
+        if _case_signature(left) == _case_signature(right):
+            flagged.append(
+                dict(pair, reason="题面高度相似且 allowed_tools／forbidden_actions／expected_behavior 全同")
+            )
+    return flagged
+
+
+def repeat_rate_summary(cases: Sequence, review_limit: int = 10) -> dict:
+    """C04 汇总：真重复对数 + 涉及用例占比 + 高相似对（供分诊）。"""
+    total = len(cases)
+    index = {str(_field(case, "id")): case for case in cases}
+    # 只算一次：低阈值拿全部可疑对，再在循环里分成「真重复」与「待分诊的变体」。
+    pairs = similar_case_pairs(cases, REVIEW_SIMILARITY)
+    duplicates: List[dict] = []
+    variants: List[dict] = []
+    for pair in pairs:
+        left, right = index[pair["left"]], index[pair["right"]]
+        same_signature = _case_signature(left) == _case_signature(right)
+        if pair["similarity"] >= DUPLICATE_SIMILARITY and same_signature:
+            duplicates.append(
+                dict(pair, reason="题面高度相似且 allowed_tools／forbidden_actions／expected_behavior 全同")
+            )
+        elif len(variants) < review_limit:
+            variants.append(pair)
+    involved = len({item[key] for item in duplicates for key in ("left", "right")})
+    return {
+        "total": total,
+        "duplicates": duplicates,
+        "involved": involved,
+        "rate": round(involved / total, 4) if total else None,
+        "threshold": DUPLICATE_SIMILARITY,
+        "review_similarity": REVIEW_SIMILARITY,
+        "max_similarity": pairs[0]["similarity"] if pairs else 0.0,
+        "reviewed_pairs": len(pairs),
+        "variants": variants,
     }

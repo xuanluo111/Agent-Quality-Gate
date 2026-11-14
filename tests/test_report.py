@@ -111,6 +111,9 @@ def test_generate_markdown_summary_and_ledger(tmp_path):
     assert "judge-model" in text
     assert "实现边界" in text
     assert "失败关闭" in text
+    # M1：风险台账表必须带责任方与签字两列——删列会让“谁负责”重新变成口头承诺。
+    assert "| 用例ID | 类别 | 等级 | 状态 | 责任方 | 签字 |" in text
+    assert "Harness 编排层" in text or "Harness 自检层" in text
 
     parsed = visualize_reports.parse_report(report_path)
     assert parsed["total"] == 4

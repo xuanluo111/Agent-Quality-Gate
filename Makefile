@@ -9,7 +9,7 @@ help:
 	@echo "make install    创建 .venv 并安装运行依赖"
 	@echo "make dev        额外安装 pytest"
 	@echo "make test       运行离线单元测试"
-	@echo "make verify     一键自检：单测+六项能力+数据集+dry-run（0 成本）"
+	@echo "make verify     一键自检离线层全 13 项（单测/能力/数据集/题面地基/台账/dry-run，0 成本）"
 	@echo "make verify-live 自检 + 真机冒烟 6 条，验证 pass^k（会产生费用）"
 	@echo "make build-suite 重建 core/smoke 数据集与审计清单"
 	@echo "make dry-run    只校验数据，不调用模型"
