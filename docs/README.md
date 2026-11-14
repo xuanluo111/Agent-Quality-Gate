@@ -65,7 +65,7 @@
 
 ## 体量与失衡（自查）
 
-本目录 27 个文件（19 份 md 合计 4144 行，另 8 份 json／py／html／png），是根级文档（`README.md` ＋ `README.en.md` ＋ `CHANGELOG.md` ＋ `AGENTS.md` ＋ `SECURITY.md` ＋ `CONTRIBUTING.md`，合计 1720 行）的两倍多；其中「外部材料转化 ＋ 项目治理」约 2000 行，是体量主项。这份索引存在的意义，就是让后来者不必读完 4144 行才知道该读哪一份。
+本目录 27 个文件（19 份 md 合计 4170 行，另 8 份 json／py／html／png），是根级文档（`README.md` ＋ `README.en.md` ＋ `CHANGELOG.md` ＋ `AGENTS.md` ＋ `SECURITY.md` ＋ `CONTRIBUTING.md`，合计 1720 行）的两倍多；其中「外部材料转化 ＋ 项目治理」约 2000 行，是体量主项。这份索引存在的意义，就是让后来者不必读完 4170 行才知道该读哪一份。
 
 ## 维护约定
 
