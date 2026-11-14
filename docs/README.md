@@ -42,6 +42,7 @@
 | [`isaca-securing-ai-agents/00-差距与优化路线.md`](isaca-securing-ai-agents/00-差距与优化路线.md) ＋ [`prompts.md`](isaca-securing-ai-agents/prompts.md) | ISACA《Securing AI Agents》(2026) | ISACA-C1–C11 ＋ 附录 A；`prompts.md` 把控制项翻译成**可喂 `generate_cases.py` 的用例生成提示词**，是资产不是笔记 |
 | [`x-agi-2026/01-可落地缺口清单.md`](x-agi-2026/01-可落地缺口清单.md) | X-AGI 2026 讲者分享 8 篇 | G1–G9（按已实现／真缺口／越界三档） |
 | [`qwen-eval-2610/00-待做清单.md`](qwen-eval-2610/00-待做清单.md) | 千问 Qwen4-Max-Preview 专业评测活动规则（截止 2026-11-18 23:59） | Q01–Q16；**唯一带硬截止的一份**，过期整份失效 |
+| [`qwen-eval-2610/01-正文问答底稿.md`](qwen-eval-2610/01-正文问答底稿.md) | 报告正文的问答底稿：本人口述、逐条留档，兼作「非 AI 代写」的原创性证据 | 5 段 × 3 问；无示例答案（防抄） |
 
 **这几份不维护状态**。它们的价值是「每条待办的出处与依据可回溯」，状态在 §四。历史教训：快手清单正文写 K01–K18、脚注写 K01–K20，两周无人发现。千问这份是例外中的例外：截止日早于 11/19 批日、**每人仅一次有效提交**，所以它的时间点也写进了 `priority-2026q4/01-每日排期.md`（进度仍只认那一处，本文不另记）。
 
@@ -63,7 +64,7 @@
 
 ## 体量与失衡（自查）
 
-本目录 25 个文件（17 份 md 合计 3883 行，另 8 份 json／py／html／png），是根级文档（`README.md` ＋ `README.en.md` ＋ `CHANGELOG.md` ＋ `AGENTS.md` ＋ `SECURITY.md` ＋ `CONTRIBUTING.md`，合计 1720 行）的两倍多；其中「外部材料转化 ＋ 项目治理」约 2000 行，是体量主项。这份索引存在的意义，就是让后来者不必读完 3883 行才知道该读哪一份。
+本目录 26 个文件（18 份 md 合计 3985 行，另 8 份 json／py／html／png），是根级文档（`README.md` ＋ `README.en.md` ＋ `CHANGELOG.md` ＋ `AGENTS.md` ＋ `SECURITY.md` ＋ `CONTRIBUTING.md`，合计 1720 行）的两倍多；其中「外部材料转化 ＋ 项目治理」约 2000 行，是体量主项。这份索引存在的意义，就是让后来者不必读完 3985 行才知道该读哪一份。
 
 ## 维护约定
 

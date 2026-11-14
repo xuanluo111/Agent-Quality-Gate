@@ -16,6 +16,7 @@
 - **顺带修的一处缺口**：`run_batch.py` 的 `PASSTHROUGH` 里没有 `judge_kappa`——κ 权限表（C02）虽然已落地，但批跑永远传不进去，等于**门禁静默退回「不传 κ」的旧行为**；清单里配了 κ 也用不上，报告却会写「已按 C02 授权」，属于自相矛盾。已补该键 ＋ 单测（`test_build_command_passes_judge_kappa`，637 全绿）。同时把 `deepseek-flash` 从 `disabled_models` 解禁作千问批的基线。
 - **文档自纠（11-14 当日）**：初版只对规则页 §4 的 10 个审核项打勾，**漏了 §3「报告涉及内容」里的「操作系统」与「评测对象输入/输出描述」**——这两项在 §4 里没有对应行，只对 §4 打勾就永远问不出来。现已把 §二 拆成 2.1／2.2 两张表、新增 Q17，并修正一处字段路径笔误（`judge_same_as_sut` 是 `summary.json` **顶层**字段，`run_meta` 这个键不存在）。
 - **运行环境已采集（Q17 素材）**：macOS 27.0 ／ Apple M4 ／ arm64 ／ Python 3.13.5 ／ openai 3.29.0 ／ python-dotenv 1.2.4 ／ pytest 9.1.1；沙箱是**进程内**路径隔离 ＋ 命令白名单（`pwd`／`ls`／`cat`／`echo`，不启真实 shell），**不是 OS 级容器**——这句必须在报告里写明，否则等于夸大隔离强度。取值与取法见 `docs/qwen-eval-2610/00-待做清单.md` §7.1。
+- **不代写怎么落地（新增底稿）**：新增 `docs/qwen-eval-2610/01-正文问答底稿.md`——五段×三问，我出问题、你口头答、我留档摘句；报告正文的每个判断句都要能回溯到你的原句，回溯不到就删。**故意不给示例答案**：给了就会被抄，抄了就不是本人判断，而且模板腔正好撞在审核方最敏感的「AI 代写」上。这份底稿同时是「非 AI 代写」的原创性证据（它在你动笔之前就存在）。顺带：`grep run_meta` 复查又抓出两处同源笔误（`02-11-19对比批口径声明.md` 的「模型版本」行写成 `run_meta.model_version`／`run_meta.json`，排期 Q03 出口标准同病）——实测 run 目录只有 `config.json`／`summary.json`／`report.md`／`results.jsonl`／`sampled_cases.jsonl`／`dataset_audit.json`，**无 `run_meta.json`**，已一并改为 `summary.json.model_version` 与顶层 `judge_same_as_sut`。
 - **不改动**：无判定逻辑改动（只加一条 CLI 透传）、无 case 改动、`judge.py` 未动 → 代际 `deff7501007cff61` 不变。
 
 ### 2026-11-14：docs 分层与入口——3600 行文档没有索引，是漂移的温床
