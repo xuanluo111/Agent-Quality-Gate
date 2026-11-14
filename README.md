@@ -579,7 +579,7 @@ scripts/
 cases/                      # curated/regression/core/smoke/manifest
 tests/                      # pytest
 reports/                    # 运行产物、台账、图表
-docs/quality/               # K13 豁免清单、自验收（K03）、台账消费纪律（K06）
+docs/                       # 索引见 docs/README.md：机器输入（K13 豁免/κ 标注/控制项）、实现设计、四源待办、项目治理
 ```
 
 ## 已知限制

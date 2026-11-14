@@ -42,6 +42,7 @@ make oracle-selfcheck  # C01 判据自检：题目本身可不可信（0 成本�
 | 看重复失败该怎么处置 | `docs/quality/02-台账消费与SDD迭代纪律.md` |
 | 给 AQG 自己立验收 | `docs/quality/01-自验收与规约五层.md` |
 | 查外部意向的落地状态 | `docs/priority-2026q4/00-待做优先级.md`（排序与成本）、`docs/priority-2026q4/01-每日排期.md`（实时进度，唯一进度源） |
+| 不知道 docs 里该读哪份 / 两份文件说法冲突 | `docs/README.md`（分层、单一事实源、每份文件“谁读它”） |
 | 改报告 / 看板 | `README.md`「运行产物」「可视化」；`src/engine/report.py` |
 | 换模型 / 配并发 | `README.md`「配置」「多模型批量评测」；免费账户一律 `--workers 1`~`2` |
 
