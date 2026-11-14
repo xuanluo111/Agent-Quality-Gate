@@ -102,6 +102,19 @@ def test_build_command_supports_no_publish(tmp_path):
     assert "--no-publish" not in default
 
 
+def test_build_command_passes_judge_kappa(tmp_path):
+    """κ 权限表必须能从清单透传到子进程，否则批跑会静默退回“不传 κ”的旧行为。"""
+    spec = {"name": "m", "model": "m", "base_url": "u", "limit": 0, "judge_kappa": 0.8412}
+    command = run_batch.build_command(spec, "run-1", tmp_path, False, False)
+    assert "--judge-kappa" in command
+    assert command[command.index("--judge-kappa") + 1] == "0.8412"
+    # 未配置时不传，保持旧行为。
+    default = run_batch.build_command(
+        {"name": "m", "model": "m", "base_url": "u", "limit": 0}, "run-1", tmp_path, False, False
+    )
+    assert "--judge-kappa" not in default
+
+
 def test_summary_marks_invalid_rows_as_uncomparable(tmp_path):
     rows = [
         {
