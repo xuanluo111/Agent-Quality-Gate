@@ -29,9 +29,11 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from dotenv import load_dotenv
 
+from openai import OpenAI
+
 from src.engine.failure_class import classify_case
 from src.engine.journal import JOURNAL_FILENAME
-from src.engine.judge import LayeredJudge
+from src.engine.judge import LayeredJudge, is_environment_error
 from src.engine.lineage import dataset_epoch, normalize_epoch
 from src.engine.report import generate_markdown, update_risk_ledger
 from src.engine.tools import Sandbox
@@ -66,11 +68,36 @@ def resolve_api_key(required: bool = True) -> str:
     return ""
 
 
+def with_thinking_disabled(extra_body: dict | None) -> dict:
+    """在 extra_body 里关掉思维链；已显式配置 thinking 的以调用方为准。"""
+    extra = dict(extra_body or {})
+    extra.setdefault("thinking", {"type": "disabled"})
+    return extra
+
+
+def build_thinking_off_client(base_url: str, api_key: str):
+    """glm-4.5 系列是推理模型：带 thinking 单次 13~22 秒，关掉后 6.7 秒。
+
+    裁判是结构化打分，长链推理收益有限，但这是**口径变更**：
+    κ 必须在关掉 thinking 的配置下重测，才能进 kappa_authority 三档。
+    """
+    client = OpenAI(api_key=api_key, base_url=base_url)
+    original = client.chat.completions.create
+
+    def create_without_thinking(**kwargs):
+        kwargs["extra_body"] = with_thinking_disabled(kwargs.get("extra_body"))
+        return original(**kwargs)
+
+    client.chat.completions.create = create_without_thinking
+    return client
+
+
 def build_judge(
     config: dict,
     api_key: str,
     provenance_override: bool | None = None,
     collateral_risk_override: str | None = None,
+    thinking: str = "default",
 ) -> LayeredJudge:
     # 旧批次的 trace 没有血缘语义：当时根本没做参数溯源，重判时默认关闭，
     # 否则历史结果会凭空多出一堆 Fabricated_Parameter。
@@ -89,6 +116,13 @@ def build_judge(
         # 侧效风险等级默认 high：旧配置没声明时保持与 run_eval 一致的默认值。
         collateral_risk=str(collateral_risk_override or config.get("collateral_risk") or "high"),
         provenance_enabled=provenance_enabled,
+        client=(
+            build_thinking_off_client(
+                str(config.get("judge_base_url") or config.get("base_url") or ""), api_key
+            )
+            if thinking == "disabled"
+            else None
+        ),
     )
 
 
@@ -194,6 +228,30 @@ def prepare_run(run_dir: Path) -> dict:
     }
 
 
+# 免费档按时间窗口发配额：撞 429 后要等窗口滑过去才有额度。
+# 原先 1/2/3 秒的退避对分钟级限流无效，会把本来可判的样本永久钉成 fallback。
+RATE_LIMIT_BACKOFF_BASE = 10
+RATE_LIMIT_BACKOFF_CAP = 300
+# 长跑中途被打断（限流、断电、手动停）时，已判完的样本要留在盘上。
+CHECKPOINT_EVERY = 20
+
+
+def retry_delay(attempt: int, evidence: str) -> int:
+    """裁判不可用后要等多少秒：环境故障等配额窗口，其余问题等也白等。"""
+    if is_environment_error(evidence):
+        return min(RATE_LIMIT_BACKOFF_CAP, RATE_LIMIT_BACKOFF_BASE * (2**attempt))
+    return 1 + attempt
+
+
+def is_json_parse_error(evidence: str) -> bool:
+    """关思考的典型失败：模型直接吐 JSON，偶发漏逗号/引号。
+
+    这类错误是确定性的，同一配置重试基本复现，换带思考的裁判才有救。
+    """
+    text = (evidence or "").lower()
+    return any(marker in text for marker in ("expecting", "delimiter", "jsondecode", "invalid json"))
+
+
 def rejudge_run(
     state: dict,
     api_key: str,
@@ -205,8 +263,16 @@ def rejudge_run(
     recheck_hitl: bool = False,
     provenance_override: bool | None = None,
     collateral_risk_override: str | None = None,
+    thinking: str = "default",
 ) -> dict:
-    judge = build_judge(state["config"], api_key, provenance_override, collateral_risk_override)
+    judge = build_judge(state["config"], api_key, provenance_override, collateral_risk_override, thinking)
+    # 关思考快 4~5 倍，但约 1/5 的样本会吐出不合法 JSON。这类失败重试同配置无效：
+    # 用带思考的裁判兜底，同模型、同判据，只是让它先把推理写出来再产 JSON。
+    fallback_judge = (
+        build_judge(state["config"], api_key, provenance_override, collateral_risk_override, "default")
+        if thinking == "disabled"
+        else None
+    )
     results: list[EvalResult] = state["results"]
     targets = select_targets(state, force, recheck_rule, recheck_hitl)
     if limit:
@@ -219,11 +285,25 @@ def rejudge_run(
             return index, results[index], "missing_case"
         trace = AgentTrace(**row["trace"])
         last: EvalResult | None = None
+        active = judge
         for attempt in range(retries + 1):
-            last = judge.evaluate(case, trace)
+            last = active.evaluate(case, trace)
             if last.fail_reason != "Judge_Unavailable":
                 break
-            time.sleep(1 + attempt)
+            evidence = str(last.evidence or "")
+            # JSON 格式错不消耗退避：直接换带思考的裁判重判，它基本不会犯这个错。
+            if active is judge and fallback_judge is not None and is_json_parse_error(evidence):
+                active = fallback_judge
+                continue
+            # 带思考也吐坏 JSON 说明是这个样本的轨迹内容（如未转义引号）触发的，
+            # 同输入同模型重试只会原样复现，再等 5 轮就是白烧 8 分钟。
+            if is_json_parse_error(evidence):
+                break
+            if attempt >= retries:
+                break
+            # 限流/超时/网关报错属于环境故障，不是模型过错：按指数退避等配额窗口，
+            # 其余异常（配置错、响应解析失败）等也没用，保持短退避尽快暴露。
+            time.sleep(retry_delay(attempt, evidence))
         return index, last, ""
 
     flips = fallbacks = missing = 0
@@ -240,9 +320,16 @@ def rejudge_run(
                 missing += 1
                 continue
             results[index] = new_result
-            if done % 20 == 0 or done == len(targets):
+            if done % CHECKPOINT_EVERY == 0 or done == len(targets):
                 elapsed = time.time() - started
-                print(f"    {done}/{len(targets)} 已重判 | 翻转为通过 {flips} | 裁判不可用 {fallbacks} | {elapsed:.0f}s")
+                print(
+                    f"    {done}/{len(targets)} 已重判 | 翻转为通过 {flips} "
+                    f"| 裁判不可用 {fallbacks} | {elapsed:.0f}s",
+                    flush=True,
+                )
+                # 每 CHECKPOINT_EVERY 条落盘：判完才写一次的长跑一旦被打断就全丢，
+                # 且重跑要从头再来。这里用 quiet 避免逐次刷归因补回的行。
+                dump_results(state, quiet=True)
 
     if not targets:
         print("    没有需要重判的样本")
@@ -278,9 +365,9 @@ def reclassify_results(state: dict) -> int:
     return repaired
 
 
-def dump_results(state: dict) -> None:
+def dump_results(state: dict, quiet: bool = False) -> None:
     repaired = reclassify_results(state)
-    if repaired:
+    if repaired and not quiet:
         print(f"    归因补回 {repaired} 条")
     rows = []
     for row, result in zip(state["rows"], state["results"]):
@@ -298,6 +385,8 @@ def build_run_meta(state: dict) -> dict:
         # config.json 里的 model_version 是 .env 泄漏的旧值，这里按真实模型名写。
         "model_version": model,
         "judge_model": str(config.get("judge_model") or ""),
+        # 思考开关会改变裁判行为与 κ，必须在报告里留痕；没传就是 default。
+        "judge_thinking": str(config.get("judge_thinking") or "default"),
         "judge_same_as_sut": str(config.get("judge_model") or "") == model,
         "dataset": str(config.get("dataset") or ""),
         # 视图声明的代际（子集视图/探针集用它表明自己属于哪一代语料）。
@@ -560,6 +649,12 @@ def main() -> int:
         default=None,
         help="重判时覆盖 Collateral_Damage 的风险等级（默认沿用 config.json，没有则 high）",
     )
+    parser.add_argument(
+        "--thinking",
+        choices=["default", "disabled"],
+        default="default",
+        help="裁判思考开关：glm-4.5 系列关掉快 2~3 倍，但属口径变更，必须重测 κ",
+    )
     args = parser.parse_args()
 
     run_dirs = sorted(path for path in ROOT.glob(args.runs) if path.is_dir())
@@ -572,6 +667,9 @@ def main() -> int:
         pending = len(select_targets(state, args.force, args.recheck_rule, args.recheck_hitl))
         print(f"[{run_dir.name}] 样本 {len(state['results'])} 条，待重判 {pending} 条")
         state["pending"] = pending
+        # 思考开关是口径的一部分（影响 κ），必须落到 config 里，
+        # 否则 build_run_meta 写出的报告看不出本轮用的是哪一套裁判配置。
+        state["config"]["judge_thinking"] = args.thinking
         states.append(state)
     if args.dry_run:
         print("dry-run：不调用裁判、不写盘")
@@ -606,6 +704,7 @@ def main() -> int:
                 args.recheck_hitl,
                 args.provenance,
                 args.collateral_risk,
+                args.thinking,
             )
             state["rejudge"] = stat
             dump_results(state)

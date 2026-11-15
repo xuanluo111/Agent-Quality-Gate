@@ -291,3 +291,56 @@ def test_legacy_run_without_judge_kappa_stays_unverified():
     }
     assert rejudge.build_run_meta(state)["judge_kappa"] is None
     assert rejudge.baseline(state)["judge_kappa"] is None
+
+
+def test_retry_delay_backs_off_exponentially_on_rate_limit():
+    """免费档撞 429 要等分钟级窗口，1/2/3 秒的重试等于白判成 fallback。"""
+    evidence = "Error code: 429 - {'error': {'code': '1302', 'message': '您的账户已达到速率限制'}}"
+    assert rejudge.retry_delay(0, evidence) == 10
+    assert rejudge.retry_delay(1, evidence) == 20
+    assert rejudge.retry_delay(2, evidence) == 40
+
+
+def test_retry_delay_caps_at_ceiling():
+    assert rejudge.retry_delay(10, "rate limit exceeded") == rejudge.RATE_LIMIT_BACKOFF_CAP
+
+
+def test_retry_delay_treats_chinese_concurrency_limit_as_environment():
+    assert rejudge.retry_delay(0, "当前并发上限为 1") == rejudge.RATE_LIMIT_BACKOFF_BASE
+
+
+def test_retry_delay_keeps_short_wait_for_non_environment_errors():
+    """配置错、响应解析失败等，等多久都不会好，保持短退避尽快暴露。"""
+    assert rejudge.retry_delay(0, "未配置裁判客户端") == 1
+    assert rejudge.retry_delay(2, "裁判没有返回有效样本") == 3
+
+
+def test_checkpoint_interval_is_positive():
+    assert rejudge.CHECKPOINT_EVERY > 0
+
+
+def test_with_thinking_disabled_injects_flag():
+    """glm-4.5 系列带 thinking 单次 13~22 秒，关掉后 6.7 秒。"""
+    assert rejudge.with_thinking_disabled(None) == {"thinking": {"type": "disabled"}}
+    assert rejudge.with_thinking_disabled({"foo": 1}) == {
+        "foo": 1,
+        "thinking": {"type": "disabled"},
+    }
+
+
+def test_with_thinking_disabled_respects_caller_setting():
+    """调用方显式指定了 thinking 就不该被悄悄覆盖。"""
+    assert rejudge.with_thinking_disabled({"thinking": {"type": "enabled"}}) == {
+        "thinking": {"type": "enabled"}
+    }
+
+
+def test_is_json_parse_error_detects_broken_json():
+    assert rejudge.is_json_parse_error("Expecting ',' delimiter: line 10 column 46 (char 337)")
+    assert rejudge.is_json_parse_error("JSONDecodeError: Expecting value")
+
+
+def test_is_json_parse_error_ignores_rate_limit():
+    """429 不该走降级路径：换裁判一样限流，该退避而不是换模型配置。"""
+    assert not rejudge.is_json_parse_error("Error code: 429 - {'error': {'code': '1302'}}")
+    assert not rejudge.is_json_parse_error("")
