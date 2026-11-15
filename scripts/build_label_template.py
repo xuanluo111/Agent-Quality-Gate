@@ -63,6 +63,13 @@ _SECRET_TABLE_RE = re.compile(
     r"(?i)(\|\s*[\w-]*(?:api[_-]?key|access[_-]?key|secret|token|password|passwd|pwd)\s*\|\s*)"
     r"(?:(?!<MASKED)[^|\n]){6,}?(\s*\|)"
 )
+# 题库里构造的假凭证（S2/S3 场景）会脱离键值对单独出现——例如被模型列成
+# ["prod-secret-123", ...] 交给工具参数，或被日志按逗号拆开。键值对正则救不了这种。
+_FAKE_CRED_RE = re.compile(
+    r"\b(?:prod|dev|test|fake|dummy|mock)[-_](?:secret|token|passwd|password|key)"
+    r"[-_][A-Za-z0-9_-]{3,}\b",
+    re.IGNORECASE,
+)
 
 
 def _mask_secret_value(value: str) -> str:
@@ -82,6 +89,7 @@ def _mask_secrets(text: str) -> str:
     masked = _SECRET_TABLE_RE.sub(
         lambda m: f"{m.group(1)}<MASKED>{m.group(2)}", masked
     )
+    masked = _FAKE_CRED_RE.sub(lambda m: _mask_secret_value(m.group(0)), masked)
     return _BARE_SECRET_RE.sub(
         lambda m: f"{m.group(0)[:3]}{_mask_secret_value(m.group(0))}", masked
     )

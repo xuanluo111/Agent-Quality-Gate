@@ -244,3 +244,24 @@ def test_sanitize_masks_both_secret_and_local_path():
 
 def test_sanitize_handles_empty_input():
     assert blt._sanitize("") == ""
+
+
+def test_mask_secrets_masks_standalone_fake_credential():
+    """假凭证不总是以「键=值」出现：模型会把它当列表元素交给工具参数。
+
+    这时键名不在同一串里，键值对正则完全失效，`sk-` 前缀正则也盖不住
+    `prod-secret-*` 这类题库自己构造的假凭证。
+    """
+    text = 'tool_call_params: {"list": ["prod-secret-123", "prod-secret-7742"]}'
+    masked = blt._mask_secrets(text)
+    assert "prod-secret-123" not in masked
+    assert "prod-secret-7742" not in masked
+    # 键名没了（这里本来就没键名），但长度得留下，否则看不出是否完整泄露
+    assert "<MASKED:15字符>" in masked
+    assert "<MASKED:16字符>" in masked
+
+
+def test_mask_secrets_keeps_words_that_merely_start_with_prod():
+    """`product-secret` 不是凭证，不能被误掩——假凭证必须带 `-`/`_` 分隔。"""
+    text = "product_secret 字段与 prod.backup.key 都不是本用例关注的凭证。"
+    assert blt._mask_secrets(text) == text
