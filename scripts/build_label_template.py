@@ -48,6 +48,50 @@ def _mask_local_paths(text: str) -> str:
     return _LOCAL_PATH_RE.sub("<LOCAL_PATH>", text or "")
 
 
+# 复核表要推远端仓库，而模型在「泄露凭据」类用例里会把 .env 整段打印出来。
+# 值必须掩掉，但不能掩到看不出「它确实泄露了」——否则人工没法判这一条。
+# 所以只换成 <MASKED:n 字符>，保留键名、位置与长度三个判断依据。
+_SECRET_PAIR_RE = re.compile(
+    r"(?i)((?:api[_-]?key|access[_-]?key|secret|token|password|passwd|pwd)"
+    r"\"?'?\s*[=:]\s*)(['\"]?)([^\s'\"`,;|]{6,})"
+)
+# 千问/Sentry/GitHub 类 token 的常见前缀，分隔符可能是 `-` 也可能是 `_`。
+_BARE_SECRET_RE = re.compile(r"\b(?:sk|pk|ghp|gho|ghs|xox[baprs])[-_][A-Za-z0-9_\-]{12,}\b")
+# 模型把 .env 转述成 Markdown 表格时（常见于「配置概览」），键与值不在同一行键值对里。
+# `(? !<MASKED)` 避免把上一轮已经打码的值再掩一次。
+_SECRET_TABLE_RE = re.compile(
+    r"(?i)(\|\s*[\w-]*(?:api[_-]?key|access[_-]?key|secret|token|password|passwd|pwd)\s*\|\s*)"
+    r"(?:(?!<MASKED)[^|\n]){6,}?(\s*\|)"
+)
+
+
+def _mask_secret_value(value: str) -> str:
+    return f"<MASKED:{len(value)}字符>"
+
+
+def _mask_secrets(text: str) -> str:
+    """把键值对里的凭据值与孤立的高熵 token 打码，保留键名与长度。"""
+    if not text:
+        return ""
+
+    def _pair(match: re.Match) -> str:
+        quote = match.group(2)
+        return f"{match.group(1)}{quote}{_mask_secret_value(match.group(3))}{quote}"
+
+    masked = _SECRET_PAIR_RE.sub(_pair, text)
+    masked = _SECRET_TABLE_RE.sub(
+        lambda m: f"{m.group(1)}<MASKED>{m.group(2)}", masked
+    )
+    return _BARE_SECRET_RE.sub(
+        lambda m: f"{m.group(0)[:3]}{_mask_secret_value(m.group(0))}", masked
+    )
+
+
+def _sanitize(text: str) -> str:
+    """推到远端的文本统一入口：先打码凭据，再钝化本机路径。"""
+    return _mask_local_paths(_mask_secrets(text))
+
+
 def _load_run(run: str) -> Path:
     """接受 run_id 或目录路径，定位到 reports/runs/<run_id>。"""
     candidate = Path(run)
@@ -172,8 +216,8 @@ def render_review_sheet(picked: List[dict], cases: Dict[str, dict], run_name: st
             f"## [B{row['batch']}-{i:02d}] `{result.get('case_id')}`",
             "",
             f"- 类别 / 严重度：{result.get('category')} ／ {result.get('risk_level')}",
-            f"- 题面：{case.get('input', '(缺 sampled_case)')}",
-            f"- 期望行为：{case.get('expected_behavior', '')}",
+            f"- 题面：{_sanitize(case.get('input', '(缺 sampled_case)'))}",
+            f"- 期望行为：{_sanitize(case.get('expected_behavior', ''))}",
         ]
         if case.get("forbidden_actions"):
             lines.append(f"- 禁用动作：{'；'.join(case['forbidden_actions'])}")
@@ -185,14 +229,14 @@ def render_review_sheet(picked: List[dict], cases: Dict[str, dict], run_name: st
             "**模型实际答复**：",
             "",
             "```text",
-            _clip(_mask_local_paths(trace.get("agent_response", ""))),
+            _clip(_sanitize(trace.get("agent_response", ""))),
             "```",
             "",
             f"> 你的判定 → human_passed: ______ ；若 fail，human_stage: ______",
             "",
             f"<sub>【裁判结论（先别看）】strict_passed=`{result.get('strict_passed')}`, "
             f"fail_reason=`{result.get('fail_reason')}`, failure_stage=`{result.get('failure_stage')}`, "
-            f"judge_layer=`{result.get('judge_layer')}`。judge_reason：{result.get('judge_reason', '')}</sub>",
+            f"judge_layer=`{result.get('judge_layer')}`。judge_reason：{_sanitize(result.get('judge_reason', ''))}</sub>",
             "",
             "---",
             "",

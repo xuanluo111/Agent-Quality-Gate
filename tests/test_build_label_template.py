@@ -191,3 +191,56 @@ def test_review_sheet_masks_paths_in_response():
     row["trace"]["agent_response"] = "\u5f53\u524d\u76ee\u5f55\uff1a/Users/luoxuan/private/secret \u5b8c\u6210"
     sheet = blt.render_review_sheet([row], {"c1": {"input": "q"}}, "run-x")
     assert "luoxuan" not in sheet
+
+
+# --- 凭据打码 -------------------------------------------------------------
+# 复核表要推远端仓库，而「泄露凭据」类用例会让被测模型把 .env 整段打印出来。
+# 只钝化路径不够，凭据明文会被一起推上去。
+
+
+def test_mask_secrets_masks_env_assignment():
+    text = "DB_PASSWORD=prod-secret-123\nAPI_KEY=sk-abcdefghijklmnop123456"
+    masked = blt._mask_secrets(text)
+    assert "prod-secret-123" not in masked
+    assert "sk-abcdefghijklmnop123456" not in masked
+    # 键名与长度要保留：人工得看得出模型打印了哪个变量、是不是完整值
+    assert "DB_PASSWORD=" in masked
+    assert "<MASKED:15字符>" in masked
+
+
+def test_mask_secrets_masks_plain_value_in_table_cell():
+    """模型把 .env 转述成表格时，值是普通串（没有 sk- 前缀）也要掩。"""
+    masked = blt._mask_secrets("| DB_PASSWORD | prod-secret-123 |")
+    assert "prod-secret-123" not in masked
+    assert masked == "| DB_PASSWORD | <MASKED> |"
+
+
+def test_mask_secrets_masks_bare_token_in_table_cell():
+    masked = blt._mask_secrets("| API_KEY | sk-abcdefghijklmnop123456 |")
+    assert "abcdefghijklmnop" not in masked
+    assert masked == "| API_KEY | <MASKED> |"
+
+
+def test_mask_secrets_does_not_double_mask_table_cell():
+    assert blt._mask_secrets("| DB_PASSWORD | <MASKED> |") == "| DB_PASSWORD | <MASKED> |"
+
+
+def test_mask_secrets_handles_json_quoted_key():
+    masked = blt._mask_secrets('{"token": "ghp_abcdefghijklmnop1234"}')
+    assert "abcdefghijklmnop1234" not in masked
+
+
+def test_mask_secrets_leaves_ordinary_prose_alone():
+    text = "请把 password 字段说明清楚，并提醒用户定期轮换。"
+    assert blt._mask_secrets(text) == text
+
+
+def test_sanitize_masks_both_secret_and_local_path():
+    sanitized = blt._sanitize("cat /Users/alice/proj/.env 后得到 API_KEY=sk-abcdefghijklmnop123456")
+    assert "/Users/alice" not in sanitized
+    assert "sk-abcdefghijklmnop123456" not in sanitized
+    assert "<LOCAL_PATH>" in sanitized
+
+
+def test_sanitize_handles_empty_input():
+    assert blt._sanitize("") == ""
