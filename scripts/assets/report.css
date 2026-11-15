@@ -1,0 +1,172 @@
+/* 提交用 PDF 的排版样式。
+ *
+ * 为什么是 CSS 而不是 LaTeX：本机没有 TeX 引擎，pandoc 只能产出 HTML；
+ * 中文靠 macOS 自带的 PingFang SC / Hiragino Sans GB，不依赖外装字体。
+ * 页面尺寸与页边距在这里定，Chrome 的 --print-to-pdf 会遵守 @page。
+ */
+
+@page {
+  size: A4;
+  margin: 18mm 16mm 20mm 16mm;
+}
+
+html {
+  font-size: 10.5pt;
+}
+
+body {
+  font-family: "PingFang SC", "Hiragino Sans GB", "Songti SC", "Microsoft YaHei",
+    -apple-system, sans-serif;
+  line-height: 1.75;
+  color: #1a1a1a;
+  margin: 0;
+  /* 中文正文两端对齐在窄栏里容易拉出大空隙，这里只左对齐 */
+  text-align: left;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+/* 标题：h2 开新段落前留白，且不允许停在页尾 */
+h1 {
+  font-size: 20pt;
+  line-height: 1.4;
+  text-align: center;
+  margin: 0 0 1.2em;
+  padding-bottom: 0.6em;
+  border-bottom: 2px solid #1a1a1a;
+  break-after: avoid;
+}
+
+h2 {
+  font-size: 15pt;
+  margin: 1.8em 0 0.7em;
+  padding: 0.15em 0 0.3em 0.5em;
+  border-left: 4px solid #2f6fdd;
+  border-bottom: 1px solid #e3e6eb;
+  break-after: avoid;
+}
+
+h3 {
+  font-size: 12.5pt;
+  margin: 1.3em 0 0.5em;
+  color: #24425f;
+  break-after: avoid;
+}
+
+h4 {
+  font-size: 11pt;
+  margin: 1em 0 0.4em;
+  break-after: avoid;
+}
+
+p {
+  margin: 0.55em 0;
+}
+
+a {
+  color: #2f6fdd;
+  text-decoration: none;
+}
+
+/* 表格：提交件的核心，窄列不折行、宽列允许折行 */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.9em 0 1.1em;
+  font-size: 9pt;
+  line-height: 1.5;
+}
+
+thead {
+  display: table-header-group; /* 跨页时表头重复 */
+}
+
+tr {
+  break-inside: avoid; /* 一行不许被劈成两页 */
+}
+
+th,
+td {
+  border: 1px solid #cfd4da;
+  padding: 4px 6px;
+  vertical-align: top;
+  overflow-wrap: break-word;
+}
+
+th {
+  background: #eef1f5;
+  font-weight: 600;
+  text-align: left;
+}
+
+tbody tr:nth-child(even) {
+  background: #fafbfc;
+}
+
+/* 代码：行内与块级分开，块级允许横向溢出但保留换行点 */
+code {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: #f3f5f7;
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  overflow-wrap: break-word;
+}
+
+pre {
+  background: #f6f8fa;
+  border: 1px solid #e3e6eb;
+  border-radius: 4px;
+  padding: 0.7em 0.9em;
+  font-size: 8.5pt;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+  break-inside: avoid;
+}
+
+pre code {
+  background: none;
+  padding: 0;
+}
+
+/* 引用块：报告里大量用作「提示」与「边界说明」 */
+blockquote {
+  margin: 0.9em 0;
+  padding: 0.5em 0.9em;
+  border-left: 3px solid #b9c3cf;
+  background: #f7f9fb;
+  color: #33404d;
+  font-size: 9.5pt;
+  break-inside: avoid;
+}
+
+blockquote p {
+  margin: 0.3em 0;
+}
+
+ul,
+ol {
+  margin: 0.5em 0 0.5em 1.4em;
+  padding: 0;
+}
+
+li {
+  margin: 0.25em 0;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid #dfe3e8;
+  margin: 1.6em 0;
+}
+
+/* 防呆：转换时会把「待本人填写」占位包成 mark，定稿后占位清零、高亮自然消失。
+ * 这样「忘填就交」在 PDF 上是黄色方块，不用逐页比对 Markdown 源文件就能发现。 */
+mark.todo {
+  background: #ffe58f;
+  color: #7a4b00;
+  padding: 0 0.2em;
+  border-radius: 2px;
+  font-weight: 600;
+}
