@@ -10,6 +10,10 @@
 #
 # 中文字体用 macOS 自带的 PingFang SC，不需要额外安装字体。
 #
+# 注意：Chrome 在带 seatbelt 的受控终端里起不来，启动即 SIGTRAP
+# （bootstrap_check_in MachPortRendezvousServer 被拒）。这个脚本必须在
+# 不套那一层沙箱的终端里跑。
+#
 # 用法：
 #   scripts/render_report_pdf.sh deliverables/qwen-2610/01-评测报告.md
 #   scripts/render_report_pdf.sh deliverables/qwen-2610/*.md
@@ -70,12 +74,15 @@ with open(path, "w", encoding="utf-8") as fh:
     fh.write(html)
 PY
 
-  # --disable-dev-shm-usage / --user-data-dir 两项都是必需的：
-  # 前者不加，Chrome 在这台机器上启动即 SIGTRAP 崩溃（实测 Trace/BPT trap: 5）。
-  # 后者不给独立目录，本机 Chrome 已在运行时 headless 会静默不产出文件。
+  # 硬条件实际上只有两条：
+  # 1) 不在 seatbelt 沙箱里执行——沙箱内 Chrome 连 mach port 都注册不上
+  #    （bootstrap_check_in 被拒），加什么参数都会崩在这个点上；
+  # 2) --user-data-dir 给独立目录——本机 Chrome 已在运行时，
+  #    headless 复用主进程会静默不产出文件。
+  # （--disable-dev-shm-usage 是 Linux 容器的规避项，macOS 上实测可省，故不加。）
   #
-  # 不要加 --virtual-time-budget：实测它在 headless=new 下同样引发 SIGTRAP，
-  # 而我们的字体与样式全在本机，没有需要等待的网络资源。
+  # 也不需要 --virtual-time-budget：样式与字体全在本机，没有要等的网络资源。
+  # 截图场景才需要它来等 JS 渲染，打印 PDF 不需要。
   # stderr 收到文件，失败时再回显——Chrome 会往 stderr 刷大量无害的
   # CVDisplayLink 报错，直接打到屏幕上会把真正的问题冲掉。
   chrome_log="$WORK/chrome.log"
@@ -83,7 +90,6 @@ PY
     --headless=new \
     --disable-gpu \
     --no-sandbox \
-    --disable-dev-shm-usage \
     --no-pdf-header-footer \
     --user-data-dir="$tmp_profile" \
     --print-to-pdf="$out" \
