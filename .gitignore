@@ -42,3 +42,21 @@ coverage.json
 
 # PDF 渲染的临时目录（scripts/render_report_pdf.sh 用，退出时自删）
 .tmp-pdf/
+
+# 本地 zip 备份目录，不入库
+.zip_backup_*/
+
+# 私料不公开清单（2026-11-17 历史清除）：面试底稿/内部过程/本地路径，仅本地保留
+.private_backup_*/
+docs/qwen-eval-2610/
+docs/ccf-2026-chinasoft/00-待做清单.md
+docs/x-agi-2026/00-四框架知识映射.md
+deliverables/qwen-2610/04-原创性佐证.zip
+deliverables/qwen-2610/备用-报告与佐证.zip
+deliverables/qwen-2610/备用-提交总包.zip
+deliverables/qwen-2610/备用-表单填写稿.md
+deliverables/qwen-2610/备用-提交页字段对照表.md
+reports/risk_ledger.json
+reports/oracle_selfcheck.json
+reports/oracle_selfcheck.md
+reports/probes/
