@@ -2,7 +2,7 @@
 
 > **本文只做设计、不含任何代码/数据改动。** 目标是把「评测：从功能正确性到设计质量」这条议题，落成 `Agent-Quality-Gate` 里一个**可归因、可复算、可切代**的新维度，而不是一份通用 benchmark 综述。
 >
-> **核验基线**：commit `ee5997e`（分支 `feat/isaca-control-coverage`，工作树 clean）/ `core_suite` epoch `deff7501007cff61`（207 条）。本文所有"现状"判断均为当日代码 grep + 真实 run 产物核对，逐条锚点见文末。**动工前须重新确认代码事实**（沿用 `01-可落地缺口清单.md` 文末纪律）。
+> **核验基线**：commit `468415e`（初核旧锚 `ee5997e` 因 11-17 历史重写作废；分支 `feat/isaca-control-coverage`，工作树 clean）/ `core_suite` epoch `deff7501007cff61`（207 条）。本文所有"现状"判断均为当日代码 grep + 真实 run 产物核对，逐条锚点见文末。**动工前须重新确认代码事实**（沿用 `01-可落地缺口清单.md` 文末纪律）。
 >
 > **两条铁律，贯穿全文**：
 > 1. **禁止为过门禁放宽断言**（`01` 文档头部）。DQ 是**报告维度**，不是门禁项——`gate.py` 一行都不改。
@@ -278,7 +278,7 @@ Phase A 报告必须带以下三条边界声明，措辞照 `01` G7 的 §结论
 
 ## 脚注 · 核验基线
 
-本文事实于 commit **`ee5997e`** / `core_suite` epoch **`deff7501007cff61`**（207 条）核对，工作树 clean。主要锚点：
+本文事实于 commit **`468415e`**（原锚 `ee5997e` 已随 11-17 历史重写作废）/ `core_suite` epoch **`deff7501007cff61`**（207 条）核对，工作树 clean。主要锚点：
 
 - `src/engine/judge.py:803` `_evaluate_trace`（首层判负胜出）、`:1544` `_llm_judge_pessimistic`（取最坏样本）、`:44` `VALID_FAIL_REASONS`、`:75` `FAIL_STAGE_BY_REASON`
 - `src/engine/gate.py:69/166/181/183/184/205/366`（只消费 `strict_passed`）
