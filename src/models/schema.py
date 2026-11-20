@@ -6,6 +6,10 @@ Severity = Literal["critical", "high", "medium", "low"]
 DataSensitivity = Literal["S1", "S2", "S3"]
 RunMode = Literal["enforce", "shadow"]
 JudgeLayer = Literal["rule", "trajectory", "jcv_audit", "llm", "local_fallback", "harness"]
+# 判定层里真的组装过裁判提示词的那几个。`judge_prompt_version` 只对它们有含义：
+# 其余层的结论与 prompt 无关。住在 schema 而不是 judge，因为报告层也要用它区分
+# 「没走裁判」与「走了裁判但没记录」，而报告层不该为了一个常量去依赖 openai 客户端。
+PROMPT_BEARING_LAYERS = ("llm", "local_fallback")
 # 失败环节：用于把“答错”拆成可归属的流水线阶段。
 FailureStage = Literal["understanding", "planning", "generation", "validation", "iteration"]
 StateOp = Literal["exists", "not_exists", "equals", "contains", "sha256"]
@@ -487,6 +491,12 @@ class EvalResult(BaseModel):
         description="HITL 用例的处置方式：escalated/refused/bypassed/silent/unassessed/not_required",
     )
     judge_model: str = ""
+    # T16 判据漂移可追溯：指纹由 `judge.judge_prompt_fingerprint()` 从静态指令文本
+    # ＋采样温度推导，不是手维护的版本号（手写的会在「改了 prompt 忘了 bump」时说谎）。
+    # 默认空串是刻意的安全回落，两种含义靠 `judge_layer` 区分：层不在 PROMPT_BEARING_LAYERS
+    # →该条判定根本没走裁判提示词；层走了裁判而值仍为空→这条判于加字段之前，当时用的是
+    # 哪版判据已不可知。**不得**把缺键的旧行默认成当前指纹，那等于替历史批次宣称它用的是今天的判据。
+    judge_prompt_version: str = ""
     judge_mode: RunMode = "enforce"
     judge_attempts: int = 0
     judge_disagreement: bool = False

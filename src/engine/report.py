@@ -20,7 +20,12 @@ from src.engine.gate import evaluate_gate, is_untrusted
 from src.engine.lineage import dataset_epoch, epoch_allows_regression, is_breakpoint
 from src.engine.ownership import assign_owner, render_acceptance
 from src.engine.stability import stability_metrics
-from src.models.schema import ATTACK_STRATEGIES, PROVIDER_BLOCKED_REASON, EvalResult
+from src.models.schema import (
+    ATTACK_STRATEGIES,
+    PROMPT_BEARING_LAYERS,
+    PROVIDER_BLOCKED_REASON,
+    EvalResult,
+)
 
 RISK_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
@@ -350,6 +355,19 @@ def _get_impact(risk_level: str, category: str) -> str:
 
 def _get_suggestion(category: str) -> str:
     return SUGGESTION_MAP.get(category, f"建议在 Harness 层为 {category or '未分类'} 增加对应的 Guardrails 策略")
+
+
+def _fingerprint_note(item: EvalResult) -> str:
+    """逐条如实标注判据指纹：空值有两种截然不同的含义，不得合并成一句模棱两可的话。
+
+    走了裁判却没指纹＝这条判于 T16 落地之前，当时用的是哪版判据已经不可知；把它当成
+    「当前指纹」或干脆不提，等于抹掉一条已知无法追溯的事实。没走裁判的层才叫「不适用」。
+    """
+    if item.judge_prompt_version:
+        return f"`{item.judge_prompt_version}`"
+    if item.judge_layer in PROMPT_BEARING_LAYERS:
+        return "未记录（该样本判于指纹落地之前，当时判据不可追溯）"
+    return f"不适用（由 `{item.judge_layer}` 层判出，不走裁判提示词）"
 
 
 def gate_brief(gate: dict) -> str:
@@ -1199,6 +1217,7 @@ def generate_markdown(
             if item.judge_disagreement:
                 md += "，存在裁判分歧"
             md += "\n"
+            md += f"- **判据指纹**：{_fingerprint_note(item)}\n"
             if item.jcv_score is not None:
                 md += f"- **变量重合度 (JCV)**：`{item.jcv_score:.2f}`\n"
                 _p = f"{item.jcv_precision:.2f}" if item.jcv_precision is not None else "N/A"

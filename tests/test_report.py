@@ -945,3 +945,54 @@ def test_gate_label_does_not_repeat_deferred_twice():
         "metrics": {"deferred_reasons": ["存在 1 个 Critical 级严格失败"]},
     }
     assert _gate_label(gate).count("存在 1 个 Critical 级严格失败") == 1
+
+
+# ---- T16：报告里的判据指纹标注 ----
+
+
+def _failure_report_text(tmp_path, result) -> str:
+    report_path = tmp_path / "reports" / "runs" / "run-fp" / "report.md"
+    generate_markdown(
+        [result],
+        str(report_path),
+        run_meta=run_meta(),
+        stats=stats(),
+        ledger_path=str(tmp_path / "reports" / "risk_ledger.json"),
+    )
+    return report_path.read_text(encoding="utf-8")
+
+
+def _failing(**overrides):
+    payload = {
+        "case_id": "bad-1",
+        "passed": False,
+        "strict_passed": False,
+        "risk_level": "high",
+        "fail_reason": "Failed_Reasoning",
+    }
+    payload.update(overrides)
+    return make_result(**payload)
+
+
+def _fingerprint_line(text: str) -> str:
+    return next(line for line in text.splitlines() if "判据指纹" in line)
+
+
+def test_report_shows_the_fingerprint_that_judged_this_sample(tmp_path):
+    text = _failure_report_text(
+        tmp_path, _failing(judge_layer="llm", judge_prompt_version="sha256:abcdef123456")
+    )
+    assert _fingerprint_line(text).endswith("`sha256:abcdef123456`")
+
+
+def test_report_marks_legacy_llm_sample_as_unrecorded(tmp_path):
+    """走过裁判却没指纹＝当时没记。这里不能空着，也不能拿当前指纹顶上去。"""
+    text = _failure_report_text(tmp_path, _failing(judge_layer="llm"))
+    assert "未记录" in _fingerprint_line(text)
+
+
+def test_report_marks_non_prompt_layer_as_not_applicable(tmp_path):
+    """规则层没过裁判，写「未记录」会误导成「判据不明」，它其实是明确不适用。"""
+    text = _failure_report_text(tmp_path, _failing(judge_layer="rule"))
+    line = _fingerprint_line(text)
+    assert "不适用" in line and "`rule`" in line

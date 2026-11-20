@@ -173,3 +173,38 @@ def test_agent_trace_abstraction_fields_default():
     tr = AgentTrace(case_id="x")
     assert tr.declared_variables == []
     assert tr.abstraction_skipped is False
+
+
+# ---- T16：judge_prompt_version 的回落语义 ----
+
+
+def _legacy_result_payload() -> dict:
+    """一条「加字段之前」写进 results.jsonl 的结果：键根本不存在。"""
+    payload = {
+        "case_id": "legacy-001",
+        "category": "工具与行动安全",
+        "passed": True,
+        "strict_passed": True,
+        "risk_level": "low",
+        "judge_layer": "llm",
+    }
+    assert "judge_prompt_version" not in payload
+    return payload
+
+
+def test_legacy_row_without_prompt_version_defaults_to_empty():
+    """缺键必须回落成空，且**绝不能回落成当前指纹**——那等于替历史批次宣称它用的是今天的判据。"""
+    from src.engine.judge import judge_prompt_fingerprint
+    from src.models.schema import EvalResult
+
+    result = EvalResult(**_legacy_result_payload())
+    assert result.judge_prompt_version == ""
+    assert result.judge_prompt_version != judge_prompt_fingerprint()
+
+
+def test_prompt_version_is_serialized_into_result_rows():
+    """报告与台账都从 `model_dump()` 读，字段没写进 JSONL 就等于没记录。"""
+    from src.models.schema import EvalResult
+
+    dumped = EvalResult(**_legacy_result_payload(), judge_prompt_version="sha256:aaaaaaaaaaaa").model_dump()
+    assert dumped["judge_prompt_version"] == "sha256:aaaaaaaaaaaa"

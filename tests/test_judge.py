@@ -1,11 +1,14 @@
 import json
 
+from src.engine import judge as judge_module
 from src.engine.judge import (
+    JUDGE_SYSTEM_PROMPT,
     LayeredJudge,
     compute_role_accuracy,
     compute_variable_pr,
     egress_attempts,
     escalation_summary_gaps,
+    judge_prompt_fingerprint,
     leaked_secrets,
     memory_leaks,
     model_policy_violations,
@@ -1119,3 +1122,68 @@ def test_compute_role_accuracy_ignores_name_gloss():
     ]) == 0.0
     # 不做子串误配：ad_spend_total 不应匹配 ad_spend
     assert compute_role_accuracy({"ad_spend": "X"}, [{"name": "ad_spend_total", "role": "X"}]) == 0.0
+
+
+# ---- T16：判据指纹（裁判 prompt 版本可事后追溯）----
+
+
+def test_judge_prompt_fingerprint_is_stable_and_self_describing():
+    value = judge_prompt_fingerprint()
+    assert value == judge_prompt_fingerprint()
+    # 前缀写明它是内容指纹，不是会被当成「v2 比 v1 新」的版本号。
+    assert value.startswith("sha256:")
+    assert len(value) == len("sha256:") + 12
+
+
+def test_fingerprint_changes_when_system_prompt_changes(monkeypatch):
+    before = judge_prompt_fingerprint()
+    monkeypatch.setattr(judge_module, "JUDGE_SYSTEM_PROMPT", JUDGE_SYSTEM_PROMPT + "\n新增一条判据。")
+    assert judge_prompt_fingerprint() != before
+
+
+def test_fingerprint_covers_user_prefix(monkeypatch):
+    """只 hash system 会留一个洞：开场白也是判据，改它同样该换号。"""
+    before = judge_prompt_fingerprint()
+    monkeypatch.setattr(judge_module, "JUDGE_USER_PREFIX", "换一句开场白。\n")
+    assert judge_prompt_fingerprint() != before
+
+
+def test_fingerprint_covers_temperature(monkeypatch):
+    """0.1 调到 0.7 不动一个文字，但确实在改裁判行为——不能算「判据没变」。"""
+    before = judge_prompt_fingerprint()
+    monkeypatch.setattr(judge_module, "JUDGE_TEMPERATURE", 0.7)
+    assert judge_prompt_fingerprint() != before
+
+
+def test_llm_verdict_carries_current_fingerprint():
+    judge = LayeredJudge(client=FakeClient([judge_response(True, True)]), model="judge", samples=1)
+    result = judge.evaluate(make_case(), make_trace())
+    assert result.judge_layer == "llm"
+    assert result.judge_prompt_version == judge_prompt_fingerprint()
+
+
+def test_rule_layer_verdict_carries_no_fingerprint():
+    """规则层根本没走裁判提示词；给它挂上指纹等于伪装「它也过了裁判」。"""
+    case = make_case(data_sensitivity="S3", expected_behavior="拒绝上云，仅允许本地处理")
+    trace = make_trace(policy_blocked=True, privacy_transform="s3_cloud_blocked")
+    result = LayeredJudge().evaluate(case, trace)
+    assert result.judge_layer == "rule"
+    assert result.judge_prompt_version == ""
+
+
+def test_judge_unavailable_still_records_fingerprint():
+    """裁判崩了的那条最需要留下版本：判据改动把裁判打成不吐合法 JSON 时，只能靠它定位。"""
+    judge = LayeredJudge(client=FakeClient([RuntimeError("judge down")]), model="judge", samples=1)
+    result = judge.evaluate(make_case(), make_trace())
+    assert result.judge_layer == "local_fallback"
+    assert result.judge_prompt_version == judge_prompt_fingerprint()
+
+
+def test_fingerprint_is_not_a_gate_input():
+    """指纹只做留痕与追溯，绝不能变成准出条件：把它当门禁就是拿「prompt 有没有变」
+    替代「模型行为对不对」，而且旧批次一律没有指纹，会集体判红。"""
+    import inspect
+
+    from src.engine import gate as gate_module
+
+    assert "judge_prompt_version" not in inspect.getsource(gate_module)

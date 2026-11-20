@@ -344,3 +344,62 @@ def test_is_json_parse_error_ignores_rate_limit():
     """429 不该走降级路径：换裁判一样限流，该退避而不是换模型配置。"""
     assert not rejudge.is_json_parse_error("Error code: 429 - {'error': {'code': '1302'}}")
     assert not rejudge.is_json_parse_error("")
+
+
+# ---- T16：判据指纹在重判链路上的语义 ----
+
+
+def _strip_prompt_version(run_dir) -> None:
+    """把 run 里的结果改成「T16 之前写的」：键不存在，不是存在但为空。"""
+    lines = []
+    for raw in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        row = json.loads(raw)
+        row["result"].pop("judge_prompt_version", None)
+        lines.append(json.dumps(row, ensure_ascii=False))
+    (run_dir / "results.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_legacy_row_without_prompt_version_prepares_clean(tmp_path):
+    """历史 run 缺这个键必须能照常载入，且回落成空——空才是「当时没记」的诚实表达。"""
+    run_dir = _write_run(tmp_path, [make_result(case_id="case-001", judge_layer="llm")])
+    _strip_prompt_version(run_dir)
+
+    state = rejudge.prepare_run(run_dir)
+
+    assert state["results"][0].judge_prompt_version == ""
+
+
+def test_dump_results_keeps_prompt_version(tmp_path):
+    """重判写回走的是 `model_dump()`，指纹没落盘就等于整条追溯链断在最后一步。"""
+    judged = make_result(case_id="case-001", judge_layer="llm", judge_prompt_version="sha256:1234567890ab")
+    run_dir = _write_run(tmp_path, [judged])
+
+    state = rejudge.prepare_run(run_dir)
+    rejudge.dump_results(state)
+
+    assert _read_results(run_dir)[0]["judge_prompt_version"] == "sha256:1234567890ab"
+
+
+def test_rejudge_run_stamps_current_fingerprint_instead_of_blank(tmp_path, monkeypatch):
+    """重判后不能留空，也不能沿用旧值：重判最常见的动机就是「判据改了」，
+    写上新指纹才能回答「这几条是哪版 prompt 判的」。"""
+    from src.engine.judge import LayeredJudge, judge_prompt_fingerprint
+    from tests.conftest import FakeClient, judge_response
+
+    run_dir = _write_run(tmp_path, [make_result(case_id="case-001", judge_layer="llm")])
+    _strip_prompt_version(run_dir)
+    state = rejudge.prepare_run(run_dir)
+    monkeypatch.setattr(
+        rejudge,
+        "build_judge",
+        lambda *args, **kwargs: LayeredJudge(
+            client=FakeClient([judge_response(True, True)]), model="judge", samples=1
+        ),
+    )
+
+    stats = rejudge.rejudge_run(state, "key", 1, 0, 0, True)
+
+    assert stats["targets"] == 1
+    assert _read_results(run_dir)[0]["judge_prompt_version"] == judge_prompt_fingerprint()
