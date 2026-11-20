@@ -24,6 +24,9 @@ reports/partial_results*.jsonl
 reports/latest.md
 reports/observability.json
 
+# 批跑前台日志与 PID：真实运行产物，含请求上下文，不入库
+logs/
+
 # 本地数据备份包与归档目录，不入库
 .reports-backup-*.zip
 .reports-archive-*/
