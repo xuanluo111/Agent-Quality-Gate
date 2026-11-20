@@ -1,0 +1,56 @@
+Evaluation Data Licence — CC BY 4.0 ( Attribution 4.0 International )
+=====================================================================
+
+Scope of THIS file (not the whole repository)
+---------------------------------------------
+
+The following paths are evaluation data / measurement outputs, not code, and
+they are licensed under Creative Commons Attribution 4.0 International
+("CC BY 4.0"):
+
+  - cases/     the test corpus: hand-written cases, regression deposits,
+               generated and mutated adversarial cases, the built
+               `core_suite.jsonl` / `smoke.jsonl` and `suite_manifest.json`
+  - reports/   the evaluation facts: per-run results, batch summaries,
+               risk-ledger snapshots, oracle self-check reports, charts
+
+Everything else in this repository (src/, scripts/, tests/, .github/,
+Makefile, and all Markdown documentation) is MIT-licensed; see LICENSE.
+
+Why the data is not MIT
+-----------------------
+
+Cases and reports are reproducible measurements, not executable assets. A
+derivative work (further mutated cases, a comparison report) must keep the
+attribution and the provenance chain, otherwise a number can be quoted without
+its measurement conditions. A copyleft licence (ShareAlike) would
+unnecessarily restrict how a paper or a third-party re-evaluation may cite
+them, and a proprietary licence would block reproduction altogether. CC BY 4.0
+keeps them freely usable and redistributable while requiring attribution.
+
+How to attribute
+----------------
+
+When reusing `cases/` or `reports/`, credit:
+
+  Agent-Quality-Gate (c) 2026 xuanluo111,
+  dataset epoch <dataset_epoch> (see cases/suite_manifest.json),
+  licensed under CC BY 4.0.
+
+State the dataset epoch (or the run id for a report) whenever you quote a
+number: the risk ledger and pass rates are only comparable within one dataset
+epoch, so an un-epoch-ed citation is not reproducible. Do not imply that the
+original authors endorse any derivative conclusion.
+
+Boundaries
+----------
+
+  - `models*.json`, `.env` and any file containing credentials or internal
+    addresses are outside both licences and must not be committed.
+  - Model outputs quoted inside reports remain the property of the respective
+    model vendors; this repository claims attribution only for the evaluation
+    orchestration and its statistical conclusions.
+  - The full legal text of CC BY 4.0 governs and is not reproduced here:
+    <https://creativecommons.org/licenses/by/4.0/legalcode>
+    (human-readable summary: <https://creativecommons.org/licenses/by/4.0/>)
+  - SPDX identifier for the data: CC-BY-4.0. SPDX identifier for the code: MIT.

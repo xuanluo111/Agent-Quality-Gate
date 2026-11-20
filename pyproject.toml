@@ -8,9 +8,12 @@ version = "0.4.0"
 description = "A layered evaluation harness for AI agent safety, tool use, and data routing."
 readme = "README.md"
 requires-python = ">=3.11"
+# 本仓库是「代码 + 评测数据」双许可：这份 distribution 只打包代码（见下方 packages），
+# 所以 SPDX 写 MIT；仓内 `cases/` 与 `reports/` 属评测数据，适用 CC-BY-4.0，
+# 声明见 LICENSE-DATA（它们不随 wheel 分发）。代码许可证文本在 LICENSE。
+license = "MIT"
 classifiers = [
     "Development Status :: 4 - Beta",
-    "License :: OSI Approved :: MIT License",
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Testing",
 ]
