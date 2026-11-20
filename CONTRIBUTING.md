@@ -7,7 +7,7 @@ Python 3.11+（CI 双矩阵 3.11 / 3.13）。依赖以 `requirements.lock` 为�
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-make verify        # 提交前基线：离线层全 13 项（单测/能力/数据集/题面地基/台账/dry-run），全程 0 成本
+make verify        # 提交前基线：离线层全部项（单测/条数声明/能力/数据集/题面地基/台账/dry-run），全程 0 成本
 ```
 
 ## 分支纪律
@@ -18,8 +18,8 @@ make verify        # 提交前基线：离线层全 13 项（单测/能力/数�
 
 ## 提交前检查（三项全过才允许提交）
 
-1. `python -m pytest -q` 全绿；含业务逻辑的改动必须配套单元测试（表驱动风格，见 `tests/`）；
-2. 敏感扫描：diff 中不得出现 API Key、内网 `base_url`、真实用户数据；`models.json`、`.env`、`batch-*.log` 已被 `.gitignore` 拦截，但不要依赖它兜底，检查暂存区内容；
+1. `python -m pytest -q` 全绿；含业务逻辑的改动必须配套单元测试（表驱动风格，见 `tests/`）；**动了用例数就要同步 `README.md`／`README.en.md`「测试与 CI」两处的条数声明**——`make verify` 的「声明条数自检」会拿它与 `--collect-only` 实测数比对，忘了改或只改中英其中一份都会直接判红；
+2. 敏感扫描：diff 中不得出现 API Key、内网 `base_url`、真实用户数据；`models.json`、`.env`、`batch-*.log` 已被 `.gitignore` 拦截，但不要依赖它兜底，检查暂存区内容。**本机身份另有机器门禁**：`make verify` 的「本机身份不入库」会扫全部已跟踪文件里的操作者用户名与家目录绝对路径，命中即红——测试样例请用占位符（如 `/Users/someuser/…`）而不是自己机器的真路径；文档里要写验收命令时用 `$(whoami)`，别把真名贴进去（11-20 就发生过：为了在 CHANGELOG 里写明「已清干净」，把用户名原样抄进了验收命令，自己造出一处新命中，是同一趟 grep 复核抓回来的——这条自检就是为了不必再靠人记得复核）。注意它只覆盖入库件：本机被忽略的归档（`workspace/`、`.reports-archive-*/`、`.private_backup_*/`）仍需人工判断，外发前另查。
 3. 文档内 mermaid 图须通过校验（版本 ≤ 8.8.3 语法，`classDef` 配色，禁 ASCII 图），禁止未经解析器实跑就宣称"图没问题"。
 
 ## 双语文档

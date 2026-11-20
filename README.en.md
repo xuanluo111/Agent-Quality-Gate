@@ -174,14 +174,14 @@ python scripts/run_eval.py --suite smoke --limit 18
 python scripts/run_eval.py --suite core --limit 0
 ```
 
-`scripts/verify.py` runs the offline layer by default: environment, unit tests, six capabilities (synthetic traces, no model), dataset rebuild determinism and new-capability coverage, the control-coverage matrix, four case-groundwork audits (C01 oracle self-check / C04 judgeability and semantic duplication / C03 `spec_leak` / K13 four-question completeness), the C14′ fixture landing precheck, the M1 ledger ownership check, and finally smoke/core dry-runs. Only `--live` calls real models (6 capability cases picked from smoke, forcing `--no-regression` so verification cannot pollute the dataset), and it also health-checks summary fields and report sections; add `--repeat 2` to verify pass^k with isolated workspaces.
+`scripts/verify.py` runs the offline layer by default: environment, unit tests, the **declared-count check** (the unit-test count declared in the README must equal the `--collect-only` count, and the Chinese and English copies must agree), the **local-identity check** (`git grep` scans every tracked file for the operator's username and absolute home directory; any hit fails the run — generic accounts such as CI's `runner` are not scanned, but the output then states "skipped" instead of pretending a scan happened, and files excluded by `.gitignore` are outside its scope), six capabilities (synthetic traces, no model), dataset rebuild determinism and new-capability coverage, the control-coverage matrix, four case-groundwork audits (C01 oracle self-check / C04 judgeability and semantic duplication / C03 `spec_leak` / K13 four-question completeness), the C14′ fixture landing precheck, the M1 ledger ownership check, and finally smoke/core dry-runs. The step count is deliberately not written into the docs (the script output is authoritative); otherwise adding one self-check step would mean editing a whole batch of documents. Only `--live` calls real models (6 capability cases picked from smoke, forcing `--no-regression` so verification cannot pollute the dataset), and it also health-checks summary fields and report sections; add `--repeat 2` to verify pass^k with isolated workspaces.
 
 Makefile targets:
 
 ```bash
 make dev          # install runtime + test dependencies
 make test         # offline unit tests
-make verify       # one-shot self-check, all 13 offline steps: tests + capabilities + dataset + case-groundwork + ledger + dry-runs (zero cost)
+make verify       # one-shot self-check of the whole offline layer: tests + declared count + capabilities + dataset + case-groundwork + ledger + dry-runs (zero cost; step count per script output)
 make verify-live  # self-check + 6 live capability cases + pass^k (costs money)
 make build-suite  # rebuild core/smoke and the audit manifest
 make oracle-selfcheck  # C01 oracle self-check: case-trust audit (zero cost)
@@ -343,6 +343,17 @@ Judge JSON field names are a hard contract (`judge.py:JUDGE_SYSTEM_PROMPT`): `pa
 
 When no final reply fits in budget, `final_response` becomes the `[NO_FINAL_RESPONSE]` placeholder, the judge reads `round_history` instead, and the cause is attributed to `Step_Budget_Exceeded` / `Token_Budget_Exceeded` rather than generically to reasoning failure.
 
+### Judgment fingerprint: which prompt produced this verdict
+
+Every result carries `judge_prompt_version` (a `results.jsonl` field, shown per sample in the failure details). Its value is a fingerprint **derived from the criteria content**, not a hand-written version number:
+
+- **What it covers**: the full `JUDGE_SYSTEM_PROMPT`, the fixed user-message prefix that never varies per sample, and the sampling temperature. Editing any of them changes the fingerprint — **including changing `temperature` alone**: going 0.1 → 0.7 touches no text yet really changes how the judge behaves.
+- **Why not a hand-maintained `v1`/`v2`**: a manual number starts lying the moment someone edits the prompt and forgets to bump it, and this field exists purely to trace criteria drift afterwards. A content-derived fingerprint neither forgets nor misremembers; the `sha256:` prefix is there to block reading it as "v2 is newer than v1" — it answers only "did it change, is it the same build", never old vs new.
+- **What it does not cover (stated plainly)**: the per-trace payload assembly logic and the judge model itself. The model name lives separately in `judge_model`; the two fields together form the full criteria identity.
+- **Only prompt-bearing layers carry a value**: `llm` and `local_fallback` (the fail-closed one especially needs a version — when a criteria edit makes the judge stop emitting valid JSON, this is the only way to locate which prompt started it). `rule`/`trajectory`/`jcv_audit`/`harness` never touched a prompt, so reports say "not applicable"; stamping them would fake "this also went through the judge".
+- **Empty values are not backfilled**: historical samples judged before the fingerprint existed lack the key, fall back to empty and are labelled "unrecorded (criteria at the time are unrecoverable)". Today's fingerprint is **never** substituted for yesterday's criteria.
+- **Not a gate input**: `gate.py` does not read it. Substituting "did the prompt change" for "is the behaviour right" is a criteria mismatch, and since old batches uniformly lack the field, gating on it would turn every historical run red.
+
 ### HITL splits into two measures
 
 `requires_human_confirm` cases are no longer one-size-fits-all on "did it call `request_human_confirmation`"; two metric groups are reported:
@@ -383,6 +394,8 @@ Above all three sits one discipline that constrains every criterion — **a crit
 ## Release gate
 
 `src/engine/gate.py` uses Strict metrics:
+
+> **Scope: short-horizon.** A single case gets a wall-clock budget of **480 seconds** by default (`--case-time-budget`, in seconds; `<=0` disables it), and one batch is a synchronous single-process run. This gate answers “**can this change ship**”; it does **not** cover long-horizon agents that run for hours or days across sessions — accumulated retries, resumable runs and cost accounting for those are outside this project (see “Known limitations”). Treating it as a certificate of fitness for long-horizon tasks is a misuse.
 
 - any Strict failure with `critical` risk → `blocked`
 - Strict pass rate below `--strict-baseline` (default 80%) → `blocked`
@@ -425,13 +438,16 @@ python scripts/run_eval.py --suite core --min-valid-rate 70
 The batch summary does more than sort — it states whether gaps are credible:
 
 - Every model gets a Wilson 95% interval on Strict, alongside the valid-only column, so low scores from `invalid` runs never enter comparison directly.
-- The leader among valid samples serves as baseline for two-sided two-proportion z-tests, reporting `p` and "significant / statistically indistinguishable"; the decision uses the same three-decimal rounding as the display, preventing "p=0.050 yet called significant" self-contradiction.
-- Threshold 0.05 with **no multiple-comparison correction**; `p≥0.05` means "this batch cannot demonstrate a difference", not "the models are equally good".
+- The leader among valid samples serves as baseline for two-sided two-proportion z-tests. **Those m "each model vs baseline" comparisons are corrected with Holm–Bonferroni step-down** (`dataset.holm_adjust`, α=0.05, on by default, no off switch): uncorrected, 6 comparisons under a true null hypothesis give ≈ 26% odds of at least one false positive, so "significant" may only ever appear next to a corrected p. Raw and corrected p are **listed side by side** (that is the before/after comparison table), and comparisons flipped by the correction (raw p<0.05, corrected p≥0.05) are named one by one in the footnote.
+- The decision uses the same three-decimal rounding as the display, preventing "p=0.050 yet called significant" self-contradiction (correction runs on unrounded p, then rounds to the display convention).
+- Each row also carries an **effect size**: the percentage-point gap versus the baseline and Cohen's h. p answers "can this gap be told apart from sampling noise", not "how big is it" — with enough samples even 0.5 points reaches `p<0.001`. Conventional h benchmarks: 0.2/0.5/0.8 = small/medium/large.
+- Conclusions get an **A/B/C grade** (strength of evidence, not a capability tier): **A** corrected-significant **and** the gap exceeds the noise band → usable as a conclusion; **B** only one of the two axes holds (including "significant before correction, eaten by it") → a lead only, never an external conclusion; **C** neither axis holds → difference not demonstrated. The **noise band** is the mean of the two groups' Wilson 95% half-widths — a **proxy under the same convention, not measured jitter** (a measured band requires repeat runs at fixed configuration, see T32).
+- `p≥0.05` means "this batch cannot demonstrate a difference", not "the models are equally good". Report wording is standardized on "**difference not demonstrated**"; "statistically indistinguishable" is gone because it reads as "they are the same".
 - Runs with insufficient validity get `*`: scores listed, ranking conclusions excluded.
-- **Intervals only order and sample; they never gate.** `wilson_interval` appears only in `report.py` (display) and `drift_check.py` (batch drift); `gate.py` never references it, deliberately. No "confidence / interval lower bound" number may become a release condition: loosening it buys a pass with statistical noise, tightening it turns small batches red for no reason. Blocking must rest on deterministic criteria only (Critical, Strict baseline, pass^k, valid rate, κ authority) — see "Release gate".
+- **Intervals, effect sizes and grades only order and sample; they never gate.** `wilson_interval` appears only in `report.py` (display) and `drift_check.py` (batch drift); `gate.py` never references it, deliberately. No "confidence / interval lower bound / A・B・C grade" number may become a release condition: loosening it buys a pass with statistical noise, tightening it turns small batches red for no reason. Blocking must rest on deterministic criteria only (Critical, Strict baseline, pass^k, valid rate, κ authority) — see "Release gate".
 - This repository has **no** `confidence` / `session_confidence` field (zero hits repo-wide). Any claim that confidence orders sampling comes from outside boilerplate — do not change code for it; if sampling order is genuinely needed, sort by reproducible deterministic keys (`occurrences`, `risk_level`, `judge_layer`).
 
-At this project's 120-sample scale (batch `20261025-100521`), leader ling-3.1-flash (93.33%) vs runner-up mimo-v2.6-flash (87.50%) gives `p=0.125` — statistically indistinguishable; only from third place spark-x2.5-1.7b (80.00%) onward do gaps reach `p=0.002`. Hence reports advise against reading rank as absolute capability ordering.
+At this project's 120-sample scale (batch `20261025-100521`), leader ling-3.1-flash (93.33%) vs runner-up mimo-v2.6-flash (87.50%) gives `p=0.125` — the difference is not demonstrated; only from third place spark-x2.5-1.7b (80.00%) onward do gaps reach `p=0.002`. Hence reports advise against reading rank as absolute capability ordering. **Convention timestamp (important)**: that batch's artifacts were rendered by the **uncorrected** old code, so the two p values above are raw p. They must not be compared directly against today's "corrected p" column in `summary.md` (the Holm multiplier depends on a comparison's rank among the ascending p values, so there is no single conversion factor). Old batch artifacts are neither re-run nor re-rendered, per the red line; citing them requires stating the uncorrected convention.
 
 ### Three statistical disciplines for reading κ and trends
 
@@ -501,6 +517,8 @@ python scripts/rejudge.py --runs 'reports/runs/20261021-*' --report-only # rebui
 ```
 
 Idempotent by default: it rejudges only samples polluted by the old parsing bug (`judge_reason` placeholder or `Judge_Unavailable`), so reruns don't spend twice; `--force` also redoes already-rejudged llm verdicts. Before executing, `results.jsonl`, the ledger and batch reports are backed up to `.rejudge_backup/<timestamp>/`.
+
+Rejudging stamps the **current criteria** fingerprint onto the samples it re-decides (see "Judgment fingerprint"): the most common reason to rejudge is precisely that the criteria changed, and keeping the old value or leaving it blank would make "which prompt judged these" unanswerable again. Untouched rows stay as they were — historical samples that never had a fingerprint honestly remain "unrecorded".
 
 After changing rule/trajectory verdict criteria, use `--recheck-rule` to recompute non-llm samples; after touching only HITL criteria, `--recheck-hitl` is cheaper — recomputing `requires_human_confirm` cases fully locally:
 
@@ -576,9 +594,9 @@ python -m pytest -q
 python scripts/selfcheck_oracles.py   # C01 oracle self-check: case-trust audit (also zero cost)
 ```
 
-Coverage: schema normalization, sandbox path/command limits, variable extraction, S2/S3 routing, HITL, canary, token/step budgets, retry storms, dual-track judge semantics and pessimistic sampling, oracle self-check (positive/negative references, leaky detection, honest denominator), gate branches, data loading/dedup/sampling, reports and ledger, Markdown/summary visualization parsing.
+Coverage: schema normalization, sandbox path/command limits, variable extraction, S2/S3 routing, HITL, canary, token/step budgets, retry storms, dual-track judge semantics and pessimistic sampling, criteria fingerprint (coverage scope, per-layer attribution, legacy missing-value fallback), oracle self-check (positive/negative references, leaky detection, honest denominator), gate branches, data loading/dedup/sampling, ranking statistics (Holm–Bonferroni correction, effect sizes, A/B/C confidence grades), reports and ledger (incl. M1 owner dispatch and sign-off validation), Markdown/summary visualization parsing, human-label templates and review-sheet rendering (surfacing executor facts only, never judge verdicts), and the self-check rules of `verify.py` itself (declared-count alignment, local-identity scan of tracked files), plus the pre-run key self-check (same resolution chain as `run_batch`, no network in tests) and judge token burn-rate extrapolation from pinned `results.jsonl`.
 
-> **The only unit-test count declared in this repository**: **673 (collect reading, `python -m pytest -q --collect-only`, measured 2026-11-20)**. It is a snapshot, not a contract — it expires with every added case, which is why it is not mirrored into badges, command comments or other documents. Until T15 (`verify.py` asserting "declared == collected") lands, any other concrete count elsewhere counts as a duplicated reading.
+> **The only unit-test count declared in this repository**: **747 (collect reading, `python -m pytest -q --collect-only`, measured 2026-11-21, including one `xfail(strict)` pin marking a known gap)**. It is a snapshot, not a contract — it expires with every added case, which is why it is not mirrored into badges, command comments or other documents. This alignment is now machine-enforced: `verify.py` fails when the declared count no longer matches the collected one, or when the Chinese and English READMEs disagree. Any other concrete count elsewhere still counts as a duplicated reading.
 
 GitHub Actions runs offline checks only: install, pytest, supply-chain lock integrity, dataset rebuild, smoke dry-run — never calling real models; a separate `supply-chain` job generates a CycloneDX SBOM from `requirements.lock` and runs `pip-audit` (advisory-level). For real evaluations configure `.env` locally and run manually.
 
@@ -630,6 +648,7 @@ docs/                       # see docs/README.md: machine inputs (K13 exemptions
 - **Dataset epochs track corpora, not views**: a subset view (e.g. `cases/attack_probe.jsonl`) has a different file fingerprint than the corpus; without explicitly declaring `--dataset-generation` (matrix key `dataset_generation`) it will be treated as a new epoch, faking an epoch switch in the ledger and re-anchoring the cross-epoch degradation guardrail (only same-epoch `resolved→open` is a regression) onto the subset file. Declared values must be 16 hex digits equal to the **corpus** `dataset_epoch` (tests fail when the probe set declares the wrong epoch).
 - Attack-strategy labels (`attack_strategies`) are **manually backfilled by `attack_logic` prefix** (`scripts/apply_attack_strategies.py`, idempotent, fails loudly on no match), not model-recognized; unregistered prefixes make new mutation cases fail the script rather than silently missing labels. Strategy buckets are non-exclusive — don't read hit rates as proportions.
 - S2 redaction is regex-based and may miss names, addresses, secrets in free text; cloud-bound copies are redacted but `sampled_cases.jsonl` in run directories keeps original inputs — manage as sensitive.
+- One class of misses is **not** free text: **credential assignments without a `sk-/ak-/pk-` prefix** (`DB_PASSWORD=…`, `OSS_ACCESS_KEY_SECRET=…`). Detection names every one of them via field-name rules (`privacy.secret_literals`), while the egress side only knows the five hard formats in `MASK_RULES`, so when a whole `.env` goes to the cloud only the `sk-` line gets redacted. The asymmetry is pinned in `tests/test_privacy.py`: the detection side (a full `.env` pasted into the response must be itemised) is green, and the egress side is kept as `xfail(strict)` (fixing it turns the run red with XPASS so the marker gets removed). Closing it also means touching the judgement chain (`judge._rule_based`'s S2 branch consumes `mask_sensitive_data` directly), so it is not a standalone small fix.
 - JCV depends on tool-result formats and heuristic extraction; same-meaning different-name variables score as non-overlapping.
 - The LLM judge carries subjectivity and self-preference bias; it defaults to the SUT. Configure an independent judge and accept multi-sampling costs.
 - Wilson intervals address binomial proportions only, ignoring within-category correlations; intervals are wide at small samples.

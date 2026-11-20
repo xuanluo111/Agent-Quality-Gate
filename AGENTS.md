@@ -15,7 +15,7 @@
 
 ```bash
 make test              # 离线单测（条数不写在这里：全仓单点声明见 `README.md`「测试与 CI」）
-make verify            # 离线层全 13 项自检（0 成本，不调模型）
+make verify            # 离线层全部自检项（0 成本，不调模型；项数以脚本输出为准）
 make oracle-selfcheck  # C01 判据自检：题目本身可不可信（0 成本）
 ```
 
@@ -48,8 +48,8 @@ make oracle-selfcheck  # C01 判据自检：题目本身可不可信（0 成本�
 
 ## 五、提交前最小清单
 
-1. `make test` 全绿（新增逻辑带测试）；
-2. `make verify` 13 项全绿；
+1. `make test` 全绿（新增逻辑带测试）；**用例数变了就同步 `README.md`／`README.en.md` 两处条数声明**，否则 `verify` 的「声明条数自检」判红；
+2. `make verify` 离线层全部 [OK]；
 3. `git status` 里没有 `.env`、`models.json`、真实日志、`workspace/`、`reports/runs/`；
 4. 改了 README 事实 → 英文版同步；
 5. 提交信息写**为什么**与**验证方式**（跑什么、结果数字），沿用 `type(scope): 一句话`。
