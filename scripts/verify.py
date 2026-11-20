@@ -4,7 +4,8 @@
 分两层：
 - 默认（离线）：pytest、六项能力端到端自检、数据集重建与确定性、题面地基体检
   （C01 判据自检 / C04 可判率与重复率 / C03 spec_leak / K13 case lint /
-  C14′ fixture 预检）与台账责任入账体检（M1）。全程 0 成本，不读 API Key，可以反复跑。
+  C14′ fixture 预检）、台账责任入账体检（M1），以及入库件本机身份扫描（T19）。
+  全程 0 成本，不读 API Key，可以反复跑。
 - --live：真机跑 smoke 前几条，体检产物与报告章节；再加 --repeat 验证 pass^k。
 
 真机层强制带 --no-regression：默认 update_regression=True，验证过程一旦有失败用例
@@ -16,6 +17,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -28,6 +30,12 @@ sys.path.insert(0, str(ROOT))
 DATASET_FILES = ("curated_cases.jsonl", "core_suite.jsonl", "smoke.jsonl")
 # 去重前的原始文件也要查：load_cases 会静默去重，脏数据只会在文件里越积越多。
 ID_UNIQUE_FILES = ("curated_cases.jsonl", "regression.jsonl", "core_suite.jsonl", "smoke.jsonl")
+# T15：全仓只允许这一处单测条数声明（锚点写在这里，改了锚点文案就要同步改本常量）。
+# 中英两份必须给同一个数，所以各自一个锚。
+COUNT_CLAIM_ANCHORS = {
+    "README.md": "全仓唯一一处单测条数声明",
+    "README.en.md": "only unit-test count declared",
+}
 REQUIRED_CAPABILITY_TAGS = ("feature:state", "feature:provenance", "feature:correction", "feature:abstraction")
 REQUIRED_SECTIONS = (
     "### ISACA 控制覆盖",
@@ -78,6 +86,57 @@ def missing_report_sections(markdown: str) -> list:
 def missing_capability_tags(tags) -> list:
     present = {str(tag) for tag in tags}
     return [tag for tag in REQUIRED_CAPABILITY_TAGS if tag not in present]
+
+
+# ---- 本机身份不入库（T19 的验收式变成机器门禁）------------------------------
+# 通用账户名一律不扫：它们要么本来就该出现在 CI 路径里，要么短到到处误报。
+# 误报三次，人们就会把自检关掉——那才是真正的泄露。跳过时必须在输出里明写原因。
+GENERIC_IDENTITIES = ("runner", "root", "ci", "docker", "vagrant", "ubuntu", "admin", "user", "test")
+MIN_IDENTITY_LEN = 4
+
+
+def identity_tokens(user: str = "", home: str = "") -> set:
+    """需要扫进全部库文件的本机身份字面量：用户名 ＋ 家目录绝对路径。
+
+    家目录只在尾段像个人名字时才收：`/home/runner` 是 CI 路径，不是操作者身份。
+    """
+    tokens = set()
+    user = (user or "").strip().strip("/")
+    if len(user) >= MIN_IDENTITY_LEN and user.lower() not in GENERIC_IDENTITIES:
+        tokens.add(user)
+    home = (home or "").strip().rstrip("/")
+    if home.startswith(("/Users/", "/home/")):
+        tail = home.split("/")[-1]
+        if len(tail) >= MIN_IDENTITY_LEN and tail.lower() not in GENERIC_IDENTITIES:
+            tokens.add(home)
+    return tokens
+
+
+def current_identity_env() -> tuple:
+    """取当前操作者身份（用户名, 家目录）；取不到就交空串，由 identity_tokens 判要不要扫。"""
+    user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+    if not user:
+        try:
+            import getpass
+
+            user = getpass.getuser() or ""
+        except Exception:  # 容器里没有 pwd 记录等：宁可判为“无可扫身份”，也不要抛异常
+            user = ""
+    home = os.environ.get("HOME") or str(Path.home())
+    return user, home
+
+
+def parse_grep_hits(stdout: str) -> list:
+    """把 `git grep -n` 的 `文件:行:内容` 收成去重排序的 `文件:行` 列表。
+
+    同一行可能被用户名与家目录各命中一次，按位置去重——一处泄露不该报成两处。
+    """
+    seen = set()
+    for row in (stdout or "").splitlines():
+        parts = row.split(":", 2)
+        if len(parts) >= 2 and parts[0] and parts[1].isdigit():
+            seen.add(f"{parts[0]}:{parts[1]}")
+    return sorted(seen)
 
 
 # --------------------------------------------------------------------------
@@ -136,6 +195,115 @@ def step_pytest() -> Step:
     if result.returncode != 0:
         return Step("离线单测", False, _tail(result.stdout + result.stderr, 20))
     return Step("离线单测", True, summary)
+
+
+# 锁定在行号/日期之外：`(?<![\d-])…(?![\d-])` 把 2026-11-20 这类日期整段排除，
+# 避免“声明丢了”时退化成把年份当成条数（宁可报错，不要假绿）。
+_COUNT_RE = re.compile(r"(?<![\d.-])(\d{2,5})(?![\d.-])")
+_COLLECTED_RE = re.compile(r"(\d+) tests? collected")
+
+
+def parse_declared_count(text: str, anchor: str):
+    """取 `anchor` 之后出现的第一个独立整数；锁不到锚或锁不到数字时返回 None。"""
+    idx = text.find(anchor)
+    if idx < 0:
+        return None
+    match = _COUNT_RE.search(text[idx: idx + 200])
+    return int(match.group(1)) if match else None
+
+
+def parse_collected_count(stdout: str):
+    """从 `pytest -q --collect-only` 的输出里取 collect 数；解析不到返回 None。"""
+    match = _COLLECTED_RE.search(stdout or "")
+    return int(match.group(1)) if match else None
+
+
+def step_test_count_claim() -> Step:
+    """T15：README 声明的单测条数必须等于 collect 实测数（且中英一致）。
+
+    条数漂移在本仓库犯过四轮（636/637/645/663），每轮都是手工对齐，第二天又过期。
+    把它变成机器门禁：加了用例没改声明、或改了声明没用例，自检直接红。
+    口径是 **collect** 而不是 passed：跳过的用例照样存在，“声明跟实跑对得上”才是目标。
+    """
+    declared = {}
+    for name, anchor in COUNT_CLAIM_ANCHORS.items():
+        path = ROOT / name
+        if not path.is_file():
+            return Step("声明条数自检", False, f"缺少 {name}")
+        value = parse_declared_count(path.read_text(encoding="utf-8"), anchor)
+        if value is None:
+            return Step(
+                "声明条数自检",
+                False,
+                f"{name} 里锁不到「{anchor}」后面的条数（锚点文案被改动？或声明被删）",
+            )
+        declared[name] = value
+
+    result = _run([sys.executable, "-m", "pytest", "-q", "--collect-only"])
+    collected = parse_collected_count(result.stdout)
+    if collected is None:
+        return Step("声明条数自检", False, f"collect 输出解析失败：{_tail(result.stdout, 3)}")
+
+    if len(set(declared.values())) > 1:
+        return Step("声明条数自检", False, f"中英声明不一致：{declared}")
+    claimed = next(iter(declared.values()))
+    if claimed != collected:
+        return Step(
+            "声明条数自检",
+            False,
+            f"README 声明 {claimed} 条，collect 实测 {collected} 条："
+            f"要么把声明改成 {collected}（只改 README 两处，别处不得新增条数），要么本次改动不该增加用例",
+        )
+    return Step("声明条数自检", True, f"README 声明 {claimed} == collect {collected} | 中英一致")
+
+
+def step_local_identity_hygiene() -> Step:
+    """T19 升级为机器门禁：入库件里不得出现操作者的用户名／家目录绝对路径。
+
+    为什么值得做成自检而不是一次清理：本轮真正泄露点全在**样例与叙述**里
+    （测试样例里的真路径、文档里贴的命令输出），改完就忘是常态；而且
+    「把本机路径推到公开仓库」这件事没有任何一条判据会替你把住。
+    扫描面是**已跟踪文件**（`git grep` 自然跳过 .gitignore 与二进制）：
+    本机被忽略的归档（`workspace/`、`.reports-archive-*/`、`.private_backup_*/`）
+    不在范围内——那是「外发归档」的风险，见 06 的 T02 卡点④。
+    """
+    name = "本机身份不入库"
+    user, home = current_identity_env()
+    tokens = identity_tokens(user, home)
+    if not tokens:
+        return Step(
+            name,
+            True,
+            f"跳过：当前身份为通用账户（user={user or '空'} / home={home or '空'}），"
+            "无个人字面量可扫；换到个人机器上本机自动生效",
+        )
+
+    locations = set()
+    for token in sorted(tokens):
+        result = _run(["git", "grep", "-I", "--fixed-strings", "-n", token])
+        # 退出码 1 = 没命中；其它非 0 = 扫描根本没跑成（无 git／不在仓库内），
+        # 绝不能当成「干净」放过。
+        if result.returncode not in (0, 1):
+            return Step(
+                name, False, f"git grep 执行失败（rc={result.returncode}）：{_tail(result.stderr, 3)}"
+            )
+        locations.update(parse_grep_hits(result.stdout))
+
+    if locations:
+        files = sorted({loc.split(":")[0] for loc in locations})
+        shown = "、".join(files[:5]) + ("…" if len(files) > 5 else "")
+        return Step(
+            name,
+            False,
+            f"{len(locations)} 处命中 / {len(files)} 个文件：{shown}；"
+            "样例里的用户名改占位符、断言同批改（见 06 的 T19 与 08 的 A7）",
+        )
+    return Step(
+        name,
+        True,
+        f"扫描 {len(tokens)} 个身份字面量 × 全部已跟踪文件 | 0 命中"
+        "（不含 .gitignore 排除的本机归档）",
+    )
 
 
 def step_capabilities() -> Step:
@@ -700,6 +868,8 @@ def main() -> int:
     steps = [
         step_environment(),
         step_pytest(),
+        step_test_count_claim(),
+        step_local_identity_hygiene(),
         step_capabilities(),
         step_dataset(),
         step_coverage(),
