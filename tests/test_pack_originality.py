@@ -50,7 +50,7 @@ def test_unanswered_lists_only_blank_ones():
 
 
 def test_find_suspects_catches_real_looking_secrets():
-    text = "顺手贴了 sk-abcdefghijklmnop1234 和 /Users/luoxuan/Desktop 的路径"
+    text = "顺手贴了 sk-abcdefghijklmnop1234 和 /Users/someuser/Desktop 的路径"
     labels = [label for label, _ in po.find_suspects(text)]
     assert "OpenAI 风格密钥" in labels
     assert "本地绝对路径" in labels

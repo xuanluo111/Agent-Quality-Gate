@@ -4,7 +4,9 @@
 - select_balanced：通过/失败平衡、确定可复现、batch1/2 各自均衡、类别铺开；
 - render_template：输出符合 calibrate_judge.load_labels 的标签契约；
 - check_filled：抓未填(null)/非布尔/fail 缺合法 stage，全合法时返回 0；
-- read_results / read_cases：从 tmp_path 造的小批次文件可正确读回。
+- read_results / read_cases：从 tmp_path 造的小批次文件可正确读回；
+- render_tool_calls / render_run_facts：逐步工具参数与执行事实的渲染、脱敏、三态空值，
+  以及「不得泄裁判结论」这条抗锚定红线；render_review_sheet 的字段顺序。
 """
 import json
 
@@ -197,9 +199,10 @@ def test_drop_invalid_keeps_valid_rows_when_pool_all_valid():
 # ---------- _mask_local_paths ----------
 
 def test_mask_local_paths_scrubs_home_dir():
-    raw = "当前工作目录：`/Users/luoxuan/Desktop/\u9879\u76ee/workspace/20261111-sub`"
+    raw = "当前工作目录：`/Users/someuser/Desktop/\u9879\u76ee/workspace/20261111-sub`"
     masked = blt._mask_local_paths(raw)
-    assert "luoxuan" not in masked
+    # 用户名用占位符 someuser：真名进测试样例＝把操作者本机路径推进公开仓库（T19）
+    assert "someuser" not in masked
     assert "<LOCAL_PATH>" in masked
 
 
@@ -211,9 +214,9 @@ def test_mask_local_paths_handles_windows_and_home():
 def test_review_sheet_masks_paths_in_response():
     row = make_row("c1", True, "A")
     row["batch"] = 1
-    row["trace"]["agent_response"] = "\u5f53\u524d\u76ee\u5f55\uff1a/Users/luoxuan/private/secret \u5b8c\u6210"
+    row["trace"]["agent_response"] = "\u5f53\u524d\u76ee\u5f55\uff1a/Users/someuser/private/secret \u5b8c\u6210"
     sheet = blt.render_review_sheet([row], {"c1": {"input": "q"}}, "run-x")
-    assert "luoxuan" not in sheet
+    assert "someuser" not in sheet
 
 
 # --- 凭据打码 -------------------------------------------------------------
@@ -288,3 +291,106 @@ def test_mask_secrets_keeps_words_that_merely_start_with_prod():
     """`product-secret` 不是凭证，不能被误掩——假凭证必须带 `-`/`_` 分隔。"""
     text = "product_secret 字段与 prod.backup.key 都不是本用例关注的凭证。"
     assert blt._mask_secrets(text) == text
+
+
+# ---------- 新增面：工具调用实况 + 执行事实（补 trace 但不泄裁判结论） ----------
+
+def test_render_tool_calls_shows_args_and_blocked_reason():
+    """被拦的那一步必须同时展示「它想执行什么」与「为什么被拦」。"""
+    trace = {
+        "tool_call_params": [
+            {"step": 1, "name": "execute_command", "arguments": {"command": "pwd && ls -la"},
+             "ok": True, "blocked": False, "result": "/tmp/ws\n[]", "error": None},
+            {"step": 2, "name": "execute_command", "arguments": {"command": "ls -la .."},
+             "ok": False, "blocked": True, "result": None, "error": "拒绝访问工作目录之外的路径: .."},
+        ]
+    }
+    text = "\n".join(blt.render_tool_calls(trace))
+    assert "pwd && ls -la" in text
+    assert "ls -la .." in text
+    assert "被拦" in text and "拒绝访问工作目录之外的路径" in text
+    assert "共 2 步" in text
+
+
+def test_render_tool_calls_sanitizes_paths_and_secrets_in_args():
+    """新增的展示面就是新增的泄露面：工具参数里的本机路径与秘钥必须进同一脱敏入口。"""
+    trace = {"tool_call_params": [
+        {"step": 1, "name": "write_file",
+         "arguments": {"path": "/Users/someuser/private/expense.md", "content": "API_KEY=sk-abcdefghijklmnop123456"},
+         "ok": True, "blocked": False, "result": "ok", "error": None},
+    ]}
+    text = "\n".join(blt.render_tool_calls(trace))
+    assert "someuser" not in text
+    assert "sk-abcdefghijklmnop123456" not in text
+    assert "<LOCAL_PATH>" in text and "<MASKED" in text
+
+
+def test_render_tool_calls_distinguishes_none_from_unrecorded():
+    """缺字段不能当成「无工具调用」——历史批次没这个字段，谎报为「无」就是假信息。"""
+    assert "无工具调用" in "\n".join(blt.render_tool_calls({}))
+    text = "\n".join(blt.render_tool_calls({"tool_call_sequence": ["write_file", "execute_command"]}))
+    assert "参数未记录" in text and "共 2 步" in text
+
+
+def test_display_falls_back_to_absolute_outside_repo(tmp_path):
+    """`--out-dir` 指到仓库外时，日志路径得回退成绝对路径：写完才抛异常会让调用方以为没生成。"""
+    inside = blt.ROOT / "docs" / "x.md"
+    assert blt._display(inside) == "docs/x.md"
+    outside = tmp_path / "review-sheet.md"
+    assert blt._display(outside) == str(outside)
+
+
+def test_render_tool_calls_keeps_one_line_per_step():
+    """工具返回的往往是多行文本，必须收成一行——否则列表项会被撕成两段，100 条大表没法读。"""
+    trace = {"tool_call_params": [
+        {"step": 1, "name": "execute_command", "arguments": {"command": "pwd"},
+         "ok": True, "blocked": False, "result": "/tmp/ws\n[]\n", "error": None},
+    ]}
+    lines = blt.render_tool_calls(trace)
+    assert len(lines) == 2, lines
+    assert "/tmp/ws []" in lines[1]
+    assert "\n" not in lines[1]
+
+
+def test_run_facts_never_leaks_judge_verdicts():
+    """本函数只能给执行事实。一旦漏了裁判字段，“先看题面自己判”立即失效。"""
+    result = {"case_id": "c1", "strict_passed": False, "passed": True, "fail_reason": "Policy_Violation",
+              "judge_layer": "rule", "judge_reason": "bad", "no_final_response": True,
+              "output_truncated": False, "completion": "completed", "state_diff": {"created": [], "modified": [], "deleted": []}}
+    trace = {"should_escalate_to_human": True, "did_escalate_to_human": False,
+             "sandbox_limitations": ["沙箱未实现命令: python3"], "policy_violations": ["已拒绝: base64"]}
+    text = "\n".join(blt.render_run_facts(result, trace))
+    for leak in ("Policy_Violation", "bad", "rule", "True", "False"):
+        assert leak not in text, f"泄露了裁判侧字段/取值：{leak}"
+    # 而人工需要的三项事实全在
+    assert "应发起=是" in text and "实际发起=否" in text
+    assert "python3" in text and "base64" in text and "无最终答复=是" in text
+
+
+def test_run_facts_three_state_when_fields_absent():
+    """历史 trace 缺 HITL 字段时必须写「未记录」，不得默认成「否」。"""
+    text = "\n".join(blt.render_run_facts({}, {}))
+    assert "未记录" in text
+    assert "应发起" not in text  # 字段不存在就不出 HITL 行，避免造出假事实
+
+
+def test_review_sheet_puts_trace_facts_before_judge_verdict():
+    """顺序即纪律：工具参数与执行事实要在判定行之前，裁判结论必须在最底部。"""
+    row = make_row("auth-001", False, "身份与授权")
+    row["batch"] = 1
+    row["trace"].update({
+        "tool_call_params": [{"step": 1, "name": "write_file",
+                              "arguments": {"path": "expense.md", "content": "住宿 500 元/晚"},
+                              "ok": True, "blocked": False, "result": "written", "error": None}],
+        "should_escalate_to_human": True, "did_escalate_to_human": False,
+        "state_diff": {"created": ["expense.md"], "modified": [], "deleted": []},
+    })
+    sheet = blt.render_review_sheet([row], {"auth-001": {"input": "q", "expected_behavior": "e"}}, "run-x")
+    i_tools = sheet.index("工具调用实况")
+    i_verdict = sheet.index("你的判定")
+    i_judge = sheet.index("【裁判结论（先别看）】")
+    assert i_tools < i_verdict < i_judge
+    assert "住宿 500 元/晚" in sheet          # 006 型：错误只在文件正文里
+    assert "创建 `expense.md`" in sheet
+    assert "应发起而未发起" in sheet            # 009 型：口头拒绝但未真发起 HITL
+
