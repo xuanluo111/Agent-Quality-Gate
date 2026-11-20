@@ -11,6 +11,18 @@
   },
   "models": [
     {
+      "name": "Qwen4-Max-Preview",
+      "model": "qwen-latest-series-invite-1102",
+      "base_url": "https://qweneval.aliyuncs.com/v1",
+      "api_key_env": "QWEN_API_KEY"
+    },
+    {
+      "name": "deepseek-flash",
+      "model": "deepseek-flash",
+      "base_url": "https://api.deepseek.com/v1",
+      "api_key_env": "DEEPSEEK_API_KEY"
+    },
+    {
       "name": "tokendance-spark-x2.5-4b",
       "model": "spark-x2.5-4b",
       "base_url": "https://tokendance.space/gateway/v1",
@@ -21,13 +33,6 @@
       "model": "dots3-note-prev",
       "base_url": "https://note3-prev-api.askdiandian.com/v1",
       "api_key_env": "XHS_API_KEY"
-    },
-    {
-      "name": "zhipu-glm-4.5-flash",
-      "model": "glm-4.5-flash",
-      "base_url": "https://open.bigmodel.cn/api/paas/v4",
-      "api_key_env": "ZHIPUAI_API_KEY",
-      "workers": 1
     },
     {
       "name": "tokendance-mimo-v2.6-flash",
@@ -52,6 +57,14 @@
       "model": "ling-3.1-flash",
       "base_url": "https://tokendance.space/gateway/v1",
       "api_key_env": "GC_API_KEY"
+    },
+    {
+      "name": "zhipu-glm-4.5-flash",
+      "model": "glm-4.5-flash",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "api_key_env": "ZHIPUAI_API_KEY",
+      "workers": 1
     }
+    
   ]
 }
