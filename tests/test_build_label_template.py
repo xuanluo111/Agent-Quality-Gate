@@ -171,6 +171,29 @@ def test_read_results_and_cases_roundtrip(tmp_path):
     assert cases["c1"]["input"] == "hi"
 
 
+# ---------- drop_invalid ----------
+
+def test_drop_invalid_removes_data_invalid_rows():
+    pool = make_pool()
+    pool[0]["result"]["data_valid"] = False
+    pool[1]["result"]["data_valid"] = True
+    kept = blt.drop_invalid(pool)
+    assert len(kept) == len(pool) - 1
+    assert "A-pass" not in [r["result"]["case_id"] for r in kept]
+
+
+def test_drop_invalid_keeps_rows_without_the_field():
+    pool = make_pool()  # make_row 不带 data_valid，历史批次同此
+    assert len(blt.drop_invalid(pool)) == len(pool)
+
+
+def test_drop_invalid_keeps_valid_rows_when_pool_all_valid():
+    pool = make_pool()
+    for row in pool:
+        row["result"]["data_valid"] = True
+    assert len(blt.drop_invalid(pool)) == len(pool)
+
+
 # ---------- _mask_local_paths ----------
 
 def test_mask_local_paths_scrubs_home_dir():

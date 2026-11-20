@@ -17,9 +17,13 @@
 - 类内按 `category` × `severity` 轮转覆盖，避免全挤在某一类。
 - 分 batch1/batch2 两半且各自都保持通过/失败平衡，这样只做满前 20 条也是可分析的。
 - 结果确定（无随机、稳定排序），可重跑复现。
+- `--only-valid` 剔除 `data_valid=False` 的样本（网关拦截/超时/截断，模型根本没被真正测到）。
+  κ 衡量的是裁判判得准不准，而这类样本人工与裁判必然都判 fail，会把一致性虚高到接近 1.0；
+  按「被测模型轨迹」标定时必须开这个开关。默认关闭，保持历史行为不变。
 
 用法：
     python scripts/build_label_template.py --run 20261106-night-tokendance-spark-x2.5-4b
+    python scripts/build_label_template.py --run <id> --total 20 --per-verdict 10 --only-valid --out-dir docs/c02-judge-calibration/recalib-2619-mimo
     python scripts/build_label_template.py --run <id> --total 40 --per-verdict 20
     python scripts/build_label_template.py --check docs/c02-judge-calibration/labels.filled.jsonl
 """
@@ -121,6 +125,11 @@ def read_results(run_dir: Path) -> List[dict]:
         trace = record.get("trace", {}) or {}
         rows.append({"result": result, "trace": trace})
     return rows
+
+
+def drop_invalid(rows: List[dict]) -> List[dict]:
+    """剔除 `data_valid=False` 的样本，保留字段缺失的条目（历史批次没有该字段）。"""
+    return [r for r in rows if r["result"].get("data_valid") is not False]
 
 
 def read_cases(run_dir: Path) -> Dict[str, dict]:
@@ -282,6 +291,11 @@ def main(argv=None) -> int:
     parser.add_argument("--total", type=int, default=40, help="抽样总条数（默认 40）")
     parser.add_argument("--per-verdict", type=int, default=20, help="失败类目标条数（默认 20，通过类补足）")
     parser.add_argument("--out-dir", default=DEFAULT_OUT_DIR)
+    parser.add_argument(
+        "--only-valid",
+        action="store_true",
+        help="剔除 data_valid=False 的样本（网关拦截/超时/截断）；按模型轨迹做 κ 标定必须开",
+    )
     parser.add_argument("--check", metavar="FILLED.jsonl", help="只校验已填标签文件，不生成")
     args = parser.parse_args(argv)
 
@@ -292,6 +306,10 @@ def main(argv=None) -> int:
 
     run_dir = _load_run(args.run)
     rows = read_results(run_dir)
+    if args.only_valid:
+        before = len(rows)
+        rows = drop_invalid(rows)
+        print(f"[filter] --only-valid 剔除 {before - len(rows)} 条不可信样本，剩 {len(rows)} 条")
     cases = read_cases(run_dir)
     picked = select_balanced(rows, per_verdict=args.per_verdict, total=args.total)
 
