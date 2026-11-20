@@ -279,6 +279,104 @@ def two_proportion_z_test(
     return z, p_value
 
 
+def holm_adjust(p_values: Iterable[float]) -> List[float]:
+    """Holm–Bonferroni 逐步降阶校正，返回**与输入同序**的校正后 p。
+
+    一批发跑里，「每个模型都比一次基准」就是 m 次比较。单看每次的 α=0.05，族错误
+    率（FWER，至少一次误报的概率）会跟着 m 往上走——6 次比较全为真零假设时，至
+    少一次误报的概率≈ 1-0.95^6 ≈ 26%，所以外审点名的「p=0.006 显著」这一档必须
+    校正后才能写。
+
+    做法：把原始 p 升序排，第 i 小的乘 (m-i)，再对排序序列取**前缀最大值**保证单调
+    不减（否则会出现「原始 p 更小但校正后反而更大」），最后裁到 1.0。选 Holm 而不是
+    「全部乘 m」的 Bonferroni：两者都守住 FWER，但 Holm 对每个比较用的乘数更小，
+    **严格不更保守**，没有理由用更粗的那个。没提供「不校正」开关：调用方拿到的
+    就是校正后的 p，默认无法退回未校正口径。空列表返空，单元素恒等（m=1 乘 1）。
+    """
+    ordered = list(p_values)
+    m = len(ordered)
+    if m == 0:
+        return []
+    adjusted = [0.0] * m
+    running = 0.0
+    for rank, index in enumerate(sorted(range(m), key=lambda i: ordered[i])):
+        running = max(running, ordered[index] * (m - rank))
+        adjusted[index] = min(1.0, running)
+    return adjusted
+
+
+def two_proportion_effect_size(
+    successes_a: int, total_a: int, successes_b: int, total_b: int
+) -> Tuple[float, float]:
+    """效应量：返回 (百分点差 p_b-p_a, Cohen's h)。两者都是「差多大」，不是「差是否可信」。
+
+    p 值只回答「这个差异能不能从抽样噪声里区分出来」，样本一大，0.5 个百分点也能
+    拿到 p<0.001。所以报告必须同时给幅度：百分点差给人看量级，h 给跟样本量无关的
+    可比口径（0.2/0.5/0.8 依次为小/中/大效应）。h = 2(asin√p_b - asin√p_a)，反正弦
+    只用标准库。任一组 total<=0 → (0.0, 0.0)，与 z 检验的保守口径一致。
+    """
+    if total_a <= 0 or total_b <= 0:
+        return 0.0, 0.0
+    p_a, p_b = successes_a / total_a, successes_b / total_b
+    diff_pp = (p_b - p_a) * 100
+    h = 2 * (math.asin(math.sqrt(p_b)) - math.asin(math.sqrt(p_a)))
+    return diff_pp, h
+
+
+def wilson_halfwidth_pp(successes: int, total: int, z: float = 1.96) -> float:
+    """单个比例的 Wilson 95% 区间半宽（百分点）——这个估计本身的抖动幅度。"""
+    low, high = wilson_interval(successes, total, z)
+    return (high - low) / 2
+
+
+def noise_band_pp(
+    successes_a: int, total_a: int, successes_b: int, total_b: int, z: float = 1.96
+) -> float:
+    """噪声带（百分点）：两组各自 Wilson 半宽的平均。
+
+    用途是把「p 很小但只差 0.5 个百分点」这类**统计显著≠实际显著**的混淆挡在结论
+    之外。诚实边界：这是同一口径下由区间宽度推出的**代理值**，不是实测抖动——真噪声
+    带要同配置重复跑才能标定（已排 T32）。拿它当「结论强度」的分档依据可以，
+    拿它当「可复现的固有门槛」不行。
+    """
+    return (
+        wilson_halfwidth_pp(successes_a, total_a, z)
+        + wilson_halfwidth_pp(successes_b, total_b, z)
+    ) / 2
+
+
+GRADE_A = "A"
+GRADE_B = "B"
+GRADE_C = "C"
+
+
+def significance_grade(
+    p_raw: float,
+    p_adjusted: float,
+    diff_pp: float,
+    noise_band_pp: float,
+    alpha: float = 0.05,
+) -> str:
+    """结论强度分档 A/B/C（**不是能力分档**，也不是准出条件）。
+
+    两个相互独立的判据：校正后 p 是否显著（可信度）、差异是否超噪声带（量级）。
+    - **A**：两者都满足 → 可作结论。
+    - **B**：只满足其一（含「原始显著却被校正吃掉」）→ 只当线索，不进对外结论。
+    - **C**：两者都不满足 → 只能说「差异未证实」，不得写成「两者相同」。
+
+    为何不把 p 一档到底：α=0.05 是一条断崖，p=0.049 与 p=0.051 实际差异为零，
+    写成「显著/不显著」两种结论会直接把榜单读成能力序。分档拿量级做第二个轴，
+    就是把这两个轴不一致的场次显式标出来。本函数不算 p、不做准出判断：判据在调用方。
+    """
+    significant = p_adjusted < alpha
+    over_band = abs(diff_pp) >= noise_band_pp
+    if significant and over_band:
+        return GRADE_A
+    if significant or p_raw < alpha or over_band:
+        return GRADE_B
+    return GRADE_C
+
+
 def select_smoke(
     cases: List[TestCase],
     max_cases: int = 12,

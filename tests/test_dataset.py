@@ -4,16 +4,24 @@ from pathlib import Path
 import pytest
 
 from src.engine.dataset import (
+    GRADE_A,
+    GRADE_B,
+    GRADE_C,
     audit_cases,
     build_suite,
     dedupe_cases,
     dedupe_cases_detailed,
     duplicate_id_report,
+    holm_adjust,
     load_cases,
+    noise_band_pp,
     read_jsonl,
     select_smoke,
+    significance_grade,
     stratified_sample,
+    two_proportion_effect_size,
     two_proportion_z_test,
+    wilson_halfwidth_pp,
     wilson_interval,
 )
 from src.engine.state import deprecated_values_for, scan_state_pollution
@@ -184,6 +192,94 @@ def test_two_proportion_z_test_small_sample_not_significant():
     # 小样本下的 1~2 条拖动不应被当成显著趋势。
     _z, p = two_proportion_z_test(5, 10, 6, 10)
     assert p > 0.05
+
+
+# ---------- T14：多重比较校正 / 效应量 / 噪声带 / 置信等级 ----------
+
+
+def test_holm_adjust_matches_hand_computed_step_down():
+    """手算对照（m=3）：第 i 小的 p 乘 (m-i)，输出回到输入顺序。"""
+    raws = [0.7272, 0.044, 0.00044]
+    adjusted = holm_adjust(raws)
+    assert adjusted[2] == pytest.approx(0.00044 * 3, abs=1e-9)
+    assert adjusted[1] == pytest.approx(0.044 * 2, abs=1e-9)
+    # 最大的 p 乘数是 1，不校正。
+    assert adjusted[0] == pytest.approx(0.7272, abs=1e-9)
+
+
+def test_holm_adjust_is_monotone_in_rank_order():
+    """前缀最大值不能省：不取的话会出现「原始 p 更小、校正后反而更大」的自相矛盾。"""
+    adjusted = holm_adjust([0.02, 0.03])
+    # 两个都被抬到 0.04：第二个自身的乘数是 1（0.03），但 Holm 要求校正后 p 随
+    # 原始 p 单调不减，所以取 max(2×0.02, 1×0.03)。
+    assert adjusted == [pytest.approx(0.04), pytest.approx(0.04)]
+    paired = sorted(zip([0.02, 0.03], adjusted))
+    assert [value for _rank, value in paired] == sorted(value for _rank, value in paired)
+
+
+def test_holm_adjust_clips_at_one_and_never_exceeds_bonferroni():
+    raws = [0.4, 0.5, 0.6]
+    m = len(raws)
+    adjusted = holm_adjust(raws)
+    assert all(value <= 1.0 for value in adjusted)
+    # Holm 包络 Bonferroni：同一族错误率下乘数更小，严格不更保守。
+    bonferroni = [min(1.0, p * m) for p in raws]
+    assert all(h <= b + 1e-12 for h, b in zip(adjusted, bonferroni))
+
+
+def test_holm_adjust_edge_cases():
+    assert holm_adjust([]) == []
+    # m=1 乘 1：单一比较下校正应该是恒等变换，不然就是在无根据地扣 p。
+    assert holm_adjust([0.03]) == [pytest.approx(0.03)]
+
+
+def test_two_proportion_effect_size_gives_magnitude_not_just_verdict():
+    diff_pp, h = two_proportion_effect_size(190, 207, 165, 207)
+    assert diff_pp == pytest.approx((165 / 207 - 190 / 207) * 100, abs=1e-9)
+    assert diff_pp < 0 and h < 0  # 方向一致：B 组差于 A 组
+    # 与 z 检验不同：只换两组顺序，效应量是反号而不是不变。
+    assert two_proportion_effect_size(165, 207, 190, 207)[0] == pytest.approx(-diff_pp, abs=1e-9)
+
+
+def test_two_proportion_effect_size_identical_and_degenerate():
+    assert two_proportion_effect_size(50, 100, 50, 100) == (0.0, 0.0)
+    # 任一侧无样本 → 不给效应量（与 z 检验的保守口径一致，不假装「差为 0」是真的 0）。
+    assert two_proportion_effect_size(0, 0, 50, 100) == (0.0, 0.0)
+
+
+def test_noise_band_shrinks_with_sample_size_and_is_symmetric():
+    small = noise_band_pp(30, 60, 22, 60)
+    large = noise_band_pp(150, 400, 110, 400)
+    assert 0 < large < small
+    assert noise_band_pp(190, 207, 165, 207) == pytest.approx(
+        noise_band_pp(165, 207, 190, 207), abs=1e-9
+    )
+    # 带必须跟单个估计的抖动同量级（取两组半宽的平均）。
+    assert noise_band_pp(190, 207, 165, 207) == pytest.approx(
+        (wilson_halfwidth_pp(190, 207) + wilson_halfwidth_pp(165, 207)) / 2, abs=1e-9
+    )
+
+
+def test_significance_grade_needs_both_credibility_and_magnitude():
+    # A：校正后显著 **且** 差距超噪声带。
+    assert significance_grade(0.00044, 0.001, -12.08, 4.62) == GRADE_A
+    # B：统计显著但只差 1 个百分点——量级不够，不能当结论。
+    assert significance_grade(0.0004, 0.001, -1.0, 4.0) == GRADE_B
+    # B：原始显著被校正吃掉（m=3 下 0.044 → 0.088），即使差距超带也只算线索。
+    assert significance_grade(0.044, 0.088, -6.28, 4.29) == GRADE_B
+    # B：两者都不显著但差距超出噪声带（样本不足）——不能归入 C。
+    assert significance_grade(0.06, 0.18, -12.0, 4.0) == GRADE_B
+    # C：不显著 **且** 未超噪声带。
+    assert significance_grade(0.727, 0.727, -0.97, 3.88) == GRADE_C
+
+
+def test_significance_grade_boundaries_are_inclusive_on_the_band():
+    # 噪声带是“差到此以上才有量级意义”，恰好等于带上算超出（>=，不是 >）。
+    assert significance_grade(0.001, 0.001, -4.0, 4.0) == GRADE_A
+    # α 边界：校正后 p 恰好 0.05 算不显著（判定与展示用同一个三位小数值，不会 p=0.050 却写显著）。
+    assert significance_grade(0.049, 0.05, -12.0, 4.0) == GRADE_B
+    # alpha 可调，但只影响显著轴，不影响量级轴。
+    assert significance_grade(0.001, 0.001, -1.0, 4.0, alpha=0.01) == GRADE_B
 
 
 def test_select_smoke_prioritizes_features():

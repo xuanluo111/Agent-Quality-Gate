@@ -166,3 +166,92 @@ def test_summary_states_same_source_judge_is_a_red_line():
     text = run_batch.render_summary("batch-test", meta, rows)
     assert "裁判与被测模型同源" in text and "不构成能力结论" in text
     assert "打折" not in text
+
+
+# ---------- T14：排名解读的多重比较校正 / 效应量 / 置信等级 ----------
+
+TOTAL = 207
+
+
+def _matrix_row(name: str, passed: int, **metrics_over) -> dict:
+    """按 run_batch 实际消费的 summary 字段造一场（只给排名用到的那几个）。"""
+    metrics = {
+        "total_cases": TOTAL,
+        "strict_pass": passed,
+        "strict_pass_rate_valid_only": passed / TOTAL * 100,
+        "strict_ci_low": 80.0,
+        "strict_ci_high": 95.0,
+        "valid_cases": passed,
+        "data_reliable": True,
+    }
+    metrics.update(metrics_over)
+    return {"name": name, "status": "ok", "suite": "core", "limit": 0, "metrics": metrics}
+
+
+def _four_model_rows() -> list[dict]:
+    # 190/207 基准；188 差 1 条；177 原始 p=0.044（校正后翻车）；165 校正后仍显著。
+    return [
+        _matrix_row("ling", 190),
+        _matrix_row("dots", 188),
+        _matrix_row("mimo", 177),
+        _matrix_row("spark", 165),
+    ]
+
+
+def _row_of(text: str, name: str) -> str:
+    return next(line for line in text.splitlines() if f"| {name} |" in line)
+
+
+def test_rank_block_corrects_p_and_shows_effect_size():
+    text = run_batch._rank_block(_four_model_rows())
+
+    assert "| 名次 | 模型 | Strict | Strict(仅可信) | 95% CI | 可信样本 | 相对基准 | 原始 p | 校正后 p | 结论 |" in text
+    # 「校正」字样必须显式落到读者眼前，而不是藏在实现里。
+    assert "Holm–Bonferroni" in text
+    assert "未做多重比较校正" not in text
+
+    mimo = _row_of(text, "mimo")
+    assert "| -6.28pp（h=0.20） | 0.044 | 0.088 | B｜" in mimo
+    dots = _row_of(text, "dots")
+    assert "| -0.97pp（h=0.03） | 0.727 | 0.727 | C｜" in dots
+    assert "<0.001 | 0.001 | A｜" in _row_of(text, "spark")
+
+
+def test_rank_block_flips_the_marginal_call_and_says_so():
+    """验收「校正前后对照」：原始 p<0.05 而校正后≥0.05 的场次必须被点名。"""
+    text = run_batch._rank_block(_four_model_rows())
+    assert "翻转场次：mimo" in text
+
+    corrected = run_batch._rank_block([_matrix_row("ling", 190), _matrix_row("mimo", 177)])
+    # m=1 时校正不该改变任何结论，对照行要如实说「无翻转」。
+    assert "无翻转场次" in corrected
+    assert "| 0.044 | 0.044 | A｜" in _row_of(corrected, "mimo")
+
+
+def test_rank_block_never_writes_that_two_models_are_equal():
+    """措辞红线：p≥0.05 只能说「差异未证实」，不能写成「统计上不可区分」。"""
+    text = run_batch._rank_block(_four_model_rows())
+    assert "统计上不可区分" not in text
+    assert "不是「两者相同」" in text
+    assert "差异未证实（未超噪声带）" in text
+
+
+def test_rank_block_marks_the_band_as_a_proxy_not_a_measured_noise_floor():
+    text = run_batch._rank_block(_four_model_rows())
+    assert "代理值、非实测抖动" in text
+    assert "T32" in text
+    # 等级不是准出条件，这句必须在场，否则读者会以为 A/B/C 会拦发布。
+    assert "任何一档都不是准出条件" in text
+
+
+def test_rank_block_is_absent_below_two_comparable_rows():
+    assert run_batch._rank_block([_matrix_row("ling", 190)]) == ""
+    assert run_batch._rank_block([]) == ""
+
+
+def test_rank_block_correction_is_load_bearing(monkeypatch):
+    """反例验证：把校正换成恒等，mimo 必须从 B 变回 A，且对照行不再点名它。"""
+    monkeypatch.setattr(run_batch, "holm_adjust", lambda p_values: list(p_values))
+    text = run_batch._rank_block(_four_model_rows())
+    assert "| 0.044 | 0.044 | A｜" in _row_of(text, "mimo")
+    assert "翻转场次：" not in text

@@ -17,7 +17,6 @@
 """
 import argparse
 import json
-import math
 import os
 import re
 import shutil
@@ -34,6 +33,13 @@ from dotenv import load_dotenv
 
 load_dotenv(ROOT / ".env")
 
+from src.engine.dataset import (
+    holm_adjust,
+    noise_band_pp,
+    significance_grade,
+    two_proportion_effect_size,
+    two_proportion_z_test,
+)
 from src.engine.report import gate_brief
 
 RUN_EVAL = ROOT / "scripts" / "run_eval.py"
@@ -365,20 +371,38 @@ def _hitl_cell(metrics: dict) -> str:
     return f"{safe:.1f}% / {escalate:.1f}%"
 
 
-def _two_prop_p(a: int, n1: int, b: int, n2: int) -> float:
-    """双比例 z 检验的双侧 p 值。样本百级、比例接近 1 时只能作粗略参考。"""
-    if n1 <= 0 or n2 <= 0:
-        return 1.0
-    pooled = (a + b) / (n1 + n2)
-    se = math.sqrt(pooled * (1 - pooled) * (1 / n1 + 1 / n2))
-    if se == 0:
-        return 1.0
-    z = abs(a / n1 - b / n2) / se
-    return math.erfc(z / math.sqrt(2))
+def _fmt_p(value: float) -> str:
+    """p 值统一三位小数；下界一律写 `<0.001`，不假装有更多有效位。"""
+    return "<0.001" if value < 0.001 else f"{value:.3f}"
+
+
+def _rank_verdict(grade: str, p_raw: float, p_holm: float) -> str:
+    """把等级与「可信度／量级」两个轴的不一致情况翻成一句能说出口的话。
+
+    措辞红线：**不写「统计上不可区分」**——它会被读成「两个模型一样」，而它本
+    来的意思只是「这批样本不够证明有差异」。统一改成「差异未证实」。
+    """
+    if grade == "A":
+        return "差异显著（校正后 p 显著，且差距超噪声带）"
+    if grade == "C":
+        return "差异未证实（未超噪声带）"
+    if p_holm < ALPHA:
+        return "校正后显著，但差距未超噪声带"
+    if p_raw < ALPHA:
+        return "原始 p 显著，被多重比较校正吃掉"
+    return "差距超噪声带，但校正后不显著（样本不足）"
+
+
+ALPHA = 0.05
 
 
 def _rank_block(rows: list[dict]) -> str:
-    """排名必须带显著性：120 条样本下，几个百分点的差距常常说明不了问题。"""
+    """排名必须带显著性：120 条样本下，几个百分点的差距常常说明不了问题。
+
+    三个轴一起给（X-D4/M2/R-P2 是同一包统计补强，拆开做会只修一半）：
+    族错误率（Holm–Bonferroni，默认开启、不可关）· 幅度（百分点差 + Cohen's h）
+    · 结论强度（A/B/C）。判定用与展示相同的三位小数，避免出现 `p=0.050` 却写「显著」。
+    """
     entries = []
     for row in rows:
         metrics = row.get("metrics") or {}
@@ -403,36 +427,81 @@ def _rank_block(rows: list[dict]) -> str:
         return ""
     ranked = sorted(entries, key=lambda entry: entry["rate"], reverse=True)
     baseline = next((entry for entry in ranked if entry["reliable"]), ranked[0])
+    rivals = [entry for entry in ranked if entry is not baseline]
+
+    # 校正必须在未舍入的 p 上算（排序与单调性都在那里成立），算完再按展示口径舍入。
+    raw_ps = [
+        two_proportion_z_test(baseline["passed"], baseline["total"], e["passed"], e["total"])[1]
+        for e in rivals
+    ]
+    stats = []
+    for entry, p_raw, p_holm in zip(rivals, raw_ps, holm_adjust(raw_ps)):
+        shown_raw, shown_holm = round(p_raw, 3), round(p_holm, 3)
+        diff_pp, cohen_h = two_proportion_effect_size(
+            baseline["passed"], baseline["total"], entry["passed"], entry["total"]
+        )
+        band = noise_band_pp(
+            baseline["passed"], baseline["total"], entry["passed"], entry["total"]
+        )
+        grade = significance_grade(shown_raw, shown_holm, diff_pp, band, alpha=ALPHA)
+        stats.append(
+            {
+                "entry": entry,
+                "p_raw": shown_raw,
+                "p_holm": shown_holm,
+                "diff_pp": diff_pp,
+                "cohen_h": cohen_h,
+                "band": band,
+                "grade": grade,
+            }
+        )
+
     lines = [
         "",
         "## 排名解读（Strict，全量口径）",
         "",
-        "| 名次 | 模型 | Strict | Strict(仅可信) | 95% CI | 可信样本 | 与第 1 名相比 | 判定 |",
-        "|---|---|---|---|---|---|---|---|",
+        "| 名次 | 模型 | Strict | Strict(仅可信) | 95% CI | 可信样本 | 相对基准 | 原始 p | 校正后 p | 结论 |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ]
+    by_name = {stat["entry"]["name"]: stat for stat in stats}
     for index, entry in enumerate(ranked, 1):
-        if entry is baseline:
-            compared, verdict = "—", "基准"
-        else:
-            # 判定用与展示相同的三位小数，避免出现 p=0.050 却写“显著”的自相矛盾。
-            p = round(
-                _two_prop_p(entry["passed"], entry["total"], baseline["passed"], baseline["total"]), 3
-            )
-            compared = "p<0.001" if p < 0.001 else f"p={p:.3f}"
-            verdict = "统计上不可区分" if p >= 0.05 else "差异显著"
+        name = entry["name"] + (" *" if not entry["reliable"] else "")
         low, high = entry["ci_low"], entry["ci_high"]
         ci = f"{low:.2f}~{high:.2f}" if low is not None and high is not None else "-"
         valid_rate = entry.get("rate_valid")
         valid_text = f"{valid_rate:.2f}%" if valid_rate is not None else "-"
-        name = entry["name"] + (" *" if not entry["reliable"] else "")
+        if entry is baseline:
+            lines.append(
+                f"| {index} | {name} | {entry['rate']:.2f}% | {valid_text} | {ci} "
+                f"| {entry.get('valid') or '-'}/{entry['total']} | — | — | — | 基准（{baseline['name']}） |"
+            )
+            continue
+        stat = by_name[entry["name"]]
+        verdict = _rank_verdict(stat["grade"], stat["p_raw"], stat["p_holm"])
         lines.append(
             f"| {index} | {name} | {entry['rate']:.2f}% | {valid_text} | {ci} "
-            f"| {entry.get('valid') or '-'}/{entry['total']} | {compared} | {verdict} |"
+            f"| {entry.get('valid') or '-'}/{entry['total']} "
+            f"| {stat['diff_pp']:+.2f}pp（h={abs(stat['cohen_h']):.2f}） "
+            f"| {_fmt_p(stat['p_raw'])} | {_fmt_p(stat['p_holm'])} "
+            f"| {stat['grade']}｜{verdict} |"
         )
+
+    flipped = [s["entry"]["name"] for s in stats if s["p_raw"] < ALPHA <= s["p_holm"]]
+    bands = [s["band"] for s in stats]
+    m = len(rivals)
+    fwer = (1 - (1 - ALPHA) ** m) * 100
     lines += [
         "",
-        "> 双比例 z 检验（双侧，全量口径），未做多重比较校正；p≥0.05 只代表「这批样本不足以证明有差异」，不是「两者相同」。"
-        "标 * 的场次数据有效率不足，分数受环境故障影响，不参与排名结论。",
+        f"> 多重比较校正：{m} 次「各模型 vs 基准」的双比例 z 检验（双侧、全量口径），"
+        f"已按 **Holm–Bonferroni** 逐步降阶校正（α={ALPHA}，默认开启、无关闭开关）。"
+        f"不校正时，{m} 次比较全为真零假设下至少一次误报的概率 ≈ 1-(1-α)^{m} ≈ {fwer:.0f}%。",
+        f"> 校正前后对照：{'『原始 p<0.05 → 校正后≥0.05』的翻转场次：' + '、'.join(flipped) if flipped else '无翻转场次（校正未改变任何一次的结论）'}。",
+        f"> 噪声带取两组各自 Wilson 95% 区间半宽的平均（本批 {min(bands):.2f}~{max(bands):.2f}pp）。"
+        "它是同一口径下的**代理值、非实测抖动**，实测标定需同配置重复跑（已排 T32）。",
+        "> 结论分档：**A** 可作结论；**B** 只当线索，不进对外结论；**C** 差异未证实。"
+        "任何一档都不是准出条件（`gate.py` 不读这些量，只读确定性判据）。",
+        "> `p≥0.05` 只代表「这批样本不足以证明有差异」，**不是「两者相同」**；"
+        "差距几个百分点也不等于能力高低。标 * 的场次数据有效率不足，分数受环境故障影响，不参与排名结论。",
     ]
     return "\n".join(lines)
 
