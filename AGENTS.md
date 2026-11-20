@@ -14,7 +14,7 @@
 ## 二、三条命令起步
 
 ```bash
-make test              # 离线单测，当前 636 条
+make test              # 离线单测（条数不写在这里：全仓单点声明见 `README.md`「测试与 CI」）
 make verify            # 离线层全 13 项自检（0 成本，不调模型）
 make oracle-selfcheck  # C01 判据自检：题目本身可不可信（0 成本）
 ```

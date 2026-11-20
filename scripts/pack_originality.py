@@ -30,6 +30,10 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+# 下面三个默认路径里有两项落在不入库的私有区：`docs/qwen-eval-2610/` 整目录与 `04-原创性佐证.zip`
+# 均被 `.gitignore` 排除（`01-评测报告.md` 则随仓库分发）。本脚本本身入库且带单测，
+# 但在刚克隆的环境里直接跑会因底稿缺失而报错——这是预期行为：它属千问提交轨道的本地工具，
+# 不是 AQG 的产品能力；要复用请用 --draft/--report/--out 指到自己的路径。
 DEFAULT_DRAFT = ROOT / "docs" / "qwen-eval-2610" / "01-正文问答底稿.md"
 DEFAULT_REPORT = ROOT / "deliverables" / "qwen-2610" / "01-评测报告.md"
 DEFAULT_OUT = ROOT / "deliverables" / "qwen-2610" / "04-原创性佐证.zip"

@@ -5,11 +5,10 @@
 [![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
 [![License: MIT (code) / CC-BY-4.0 (data)](https://img.shields.io/badge/License-MIT%20(code)%20%2F%20CC--BY--4.0%20(data)-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)](pyproject.toml)
-[![tests](https://img.shields.io/badge/tests-636%20passed-brightgreen)](tests/)
 
-> CI runs the offline layer only: 636 unit tests (Python 3.11 / 3.13 matrix), dataset rebuild, `smoke --dry-run`. No model is called, no cost is incurred.
+> CI runs the offline layer only: the full unit-test suite (Python 3.11 / 3.13 matrix), dataset rebuild, `smoke --dry-run`. No model is called, no cost is incurred. **The test count is deliberately absent from the header**: a static badge and an in-text count go stale every time a test is added (see `docs/README.md` for the real drift incident); exactly one dated count lives in "Testing and CI".
 
-A reproducible quality-evaluation harness and release gate for tool-using AI agents. It audits the **full execution trace**, not just the final answer: real function calling, sandboxed tool execution, data-sensitivity routing, variable extraction, human-in-the-loop (HITL), cost budgets, layered judging, dual-track verdicts, a cross-run risk ledger, and visual reports.
+A reproducible quality-evaluation harness and release gate for tool-using AI agents — **the one positioning sentence this project uses: it is the observation and feedback layer of a Harness** (the phrasing comes from a speaker at the 2026-11-19 RSI seminar, presentation material **not independently verified**; the fallback wording and per-criterion sources are in "Judge semantics · Where the three criteria come from" — no other coinage is used). It audits the **full execution trace**, not just the final answer: real function calling, sandboxed tool execution, data-sensitivity routing, variable extraction, human-in-the-loop (HITL), cost budgets, layered judging, dual-track verdicts, a cross-run risk ledger, and visual reports.
 
 > This repository is an interview-portfolio project, not a production platform. "Implemented" and "explicitly not done" are kept in separate tables below — no buzzword standing in for code.
 
@@ -86,9 +85,9 @@ This project engineering-addresses each of them, and the gate **fails closed** w
 | Failure attribution | The rule layer prefers emitting `failure_stage` (understanding/planning/generation/validation/iteration); the LLM judge fills `failure_stage` plus mandatory `evidence_span` per JSON contract; a missing `evidence_span` → `Judge_Unavailable` |
 | Transient backoff and abort (C11) | `runner._completion` retries 429/timeout/gateway 5xx with exponential backoff + jitter (`backoff_ms` accumulated into the trace); `run_eval` breaks the batch on consecutive Harness_Errors and aborts on `--abort-on-critical`/`--abort-file`; half-stalled batches are recorded as unevaluated rather than faking a low model score |
 | Software supply chain (C10) | Exact `requirements.lock` + offline lock-integrity check `scripts/check_supply_chain.py` (CI-blocking) + CI `pip-audit`/CycloneDX SBOM + `scripts/drift_check.py` cross-batch Provider_Change and rate-drift checks (reusing the two-proportion z-test) |
-| Judge calibration | `scripts/calibrate_judge.py` aligns against human labels: confusion matrix, miss rate, false-block rate, Cohen's kappa, stage agreement; stdlib only, offline; `--exclude-invalid` drops `data_valid=False` truncated samples so invalid samples cannot distort agreement. 40-label calibration yields κ=0.8412 (n=38); `gate.kappa_authority` turns it into a three-tier authority: ≥0.80 capability verdicts may block / 0.60–0.80 report only / <0.60 mark invalid. Capability verdicts cover Critical, the Strict baseline, pass^k and the High threshold; harness-side events (gateway blocks / truncation / unmeasured / fallback) never route through the judge and are never downgraded. Report-only items are surfaced in `report.md`, the batch summary and the console, and `rejudge` keeps κ when regenerating a report; `run_eval --judge-kappa` is opt-in |
+| Judge calibration | `scripts/calibrate_judge.py` aligns against human labels: confusion matrix, miss rate, false-block rate, Cohen's kappa, stage agreement; stdlib only, offline; `--exclude-invalid` drops `data_valid=False` truncated samples so invalid samples cannot distort agreement. 40-label calibration yields **κ=0.8412 (n=38)** — a value that belongs to the old judge pair `glm-4-flash × spark-4b`; changing judge *or* model requires re-calibration (κ is a function of the model under test — see "Ranking and significance · Three statistical disciplines"), and it is **selection evidence** on a development set, not a final verdict. `gate.kappa_authority` turns it into a three-tier authority: ≥0.80 capability verdicts may block / 0.60–0.80 report only / <0.60 mark invalid. Capability verdicts cover Critical, the Strict baseline, pass^k and the High threshold; harness-side events (gateway blocks / truncation / unmeasured / fallback) never route through the judge and are never downgraded. Report-only items are surfaced in `report.md`, the batch summary and the console, and `rejudge` keeps κ when regenerating a report; `run_eval --judge-kappa` is opt-in |
 | Oracle self-check (C01) | `src/engine/oracle.py`: without calling any model, synthesizes per case one "perfectly executed positive" plus a batch of "negative mutations each breaking one deterministic assertion"; feeds only the judge's **deterministic gate chain** (`rule` → `trajectory/jcv/vri`) — a positive that cannot pass → `DEAD_CASE` (zero information, pressures everyone to 0), a negative that passes the gates → `LEAKY` (the assertion pays out what was not done); semantically undecidable offline parts are honestly recorded as `NOT_DETERMINISTIC`. `scripts/selfcheck_oracles.py` (`make oracle-selfcheck`) emits `reports/oracle_selfcheck.{json,md}`; report-only — fixing cases is a human decision. First 207-case baseline: `dead=0 leaky=0`, all 767 applicable mutations captured by gates |
-| Tests | 636 pytest cases covering runner (transient backoff, wall-clock), judge (argument schema, abstraction), oracle (self-check: family samples / LEAKY detection / splitting vocabulary / applicability pins), gate, tools (argument validation), dataset (z-test, select_smoke rotation), report (ledger dual semantics), state, provenance, stability, calibrate, build_label_template (C02 labeling list: balanced sampling / review sheet / validation / local-path redaction), rejudge, run_eval (breaker/abort), supply_chain, drift, suite_audit (C03 spec_leak / C04 judgeability and semantic-duplication checks), case_lint (K13 four-question completeness / read-vs-write context and observable anchors), ownership (M1 owner dispatch / acceptance traceability / idempotent backfill), fixture_ready (C14' fixture landing precheck / sandbox cross-check), k08_variation (seed derivation / attempt divergence), textsim (shared character-shingle Jaccard), verify and visualization parsing |
+| Tests | pytest cases (**the count is declared once, in "Testing and CI"**) covering runner (transient backoff, wall-clock), judge (argument schema, abstraction), oracle (self-check: family samples / LEAKY detection / splitting vocabulary / applicability pins), gate, tools (argument validation), dataset (z-test, select_smoke rotation), report (ledger dual semantics), state, provenance, stability, calibrate, build_label_template (C02 labeling list: balanced sampling / review sheet / validation / local-path redaction), rejudge, run_eval (breaker/abort), supply_chain, drift, suite_audit (C03 spec_leak / C04 judgeability and semantic-duplication checks), case_lint (K13 four-question completeness / read-vs-write context and observable anchors), ownership (M1 owner dispatch / acceptance traceability / idempotent backfill), fixture_ready (C14' fixture landing precheck / sandbox cross-check), k08_variation (seed derivation / attempt divergence), textsim (shared character-shingle Jaccard), verify and visualization parsing |
 
 ## Data classification (ISACA Appendix A alignment)
 
@@ -120,6 +119,7 @@ Data classification here is a **harness-internal send-routing policy**; it maps 
 | General DLP | Regex redaction only for emails, phone numbers, ID cards, bank cards and common API keys |
 | Auto-remediation | Reports state impact and suggestions but never modify the agent or code |
 | Case-audit loop | C01 only reports `DEAD_CASE`/`LEAKY`; it never auto-fixes cases — repair goes through human review and a normal epoch switch |
+| Sealed final-exam set (held-out) | Only a public development set exists; there is no sealed set "run exactly once after freezing". Hence κ and the pass rates here are **selection evidence**, not a final verdict — see "Datasets · Which role the dataset plays" |
 | Production-grade concurrency | Thread-pool concurrency; exponential-backoff retries for vendor throttling/timeouts/5xx (`--max-retries`), batch-level breaker and abort exist; still a single in-process evaluation — no cross-host resume; interruption recovery relies on per-case `results.jsonl` and batch-level `--skip-existing` |
 
 ## Current benchmark
@@ -138,6 +138,8 @@ Latest formal batch `20261106-night` (core suite 207 cases × 7 models, dataset 
 
 \* This lane's data validity is 70.79% (26 cases blocked by the gateway's content-safety review — the model was never invoked), gate verdict `invalid`; its scores must not be compared. All six remaining runs are `blocked` on Criticals — no model passes the current exit criteria, which is exactly what the gate is for. Full table (Standard / Critical / HITL / tokens): `reports/batch-20261106-night/summary.md`; reproduction requires the dataset hash (`suite_manifest.json`), the seed and model/judge fingerprints (`config.json`).
 
+> **This table is a held-in development-set reading**: the 207 cases are public and re-run constantly, so the percentages answer "who does better on this set", not "may this model ship" (see "Datasets · Which role the dataset plays").
+
 > `reports/charts/` is a snapshot of the `20261025-100521` batch — a different batch from the table above; regenerate and commit after every new batch.
 
 ## Quick start
@@ -151,7 +153,7 @@ pip install -r requirements-dev.txt
 
 python scripts/build_suite.py
 python scripts/run_eval.py --suite smoke --dry-run --limit 0   # data validation only, no model calls
-python -m pytest -q                                            # 636 offline unit tests
+python -m pytest -q                                            # all offline unit tests (count: see "Testing and CI")
 python scripts/selfcheck_oracles.py                            # C01 oracle self-check (make oracle-selfcheck)
 
 # one command doing all of the above in order, plus an end-to-end check of six capabilities (zero cost)
@@ -296,6 +298,26 @@ Current core suite: 207 cases (dataset epoch `deff7501007cff61`) — 10 abstract
 
 This size demonstrates flow and regression well; ranking conclusions rest on Wilson 95% intervals and two-proportion z-tests (see [Ranking and significance](#ranking-and-significance)), and scores from two epochs cannot be subtracted.
 
+### Which role the dataset plays: a held-in development set, not a final-exam set
+
+These 207 cases are **public and re-run batch after batch**. Under the five-role scheme of the CAICT evaluation framework (driver set / development set held-in / final-exam set held-out / transfer set / degradation-monitoring set), it can only occupy the **development set** slot:
+
+| Role | Definition | This repository |
+| --- | --- | --- |
+| Driver set | Guides case authoring | Merged: Strict failures are sedimented into `regression.jsonl`, i.e. the same set |
+| Development set (held-in) | Re-runnable; used for selection, tuning, comparison | **Yes — the 207-case `core_suite` is this slot** |
+| Final-exam set (held-out) | Sealed, run exactly once after freezing | **Not set up** |
+| Transfer set | Verifies cross-scenario transferability | Not set up |
+| Degradation-monitoring set | Repeated same-epoch runs to monitor jitter | Not set up (`pass^k` only covers repeats inside one batch) |
+
+Three outward statements follow, and must not be inverted:
+
+1. **κ and the historical pass rates are "selection evidence", not "final verdicts".** They are products of repeated runs on one public set: they answer "why this criterion / this tier", they do not answer "may this model ship" — the latter needs a sealed set.
+2. **Publishing buys reproducibility at the price of contamination.** After dozens of runs on the same set, the scores necessarily contain "re-answering old questions", so what is reported here is the pass rate on the current set, not generalisation. Of the four hard constraints (isolation-no-backflow / aligned budgets / auditable versions / measurable degradation), "no backflow" means **test records must not flow back in as training material** — it never forbids a public benchmark from serving the driver/development roles. This repository satisfies "auditable versions" (input hashes in `suite_manifest.json` plus the epoch fingerprint) but not the role separation implied by "isolation" (see the first table row).
+3. **The project never claims final-exam capability.** A final verdict requires a separate sealed and frozen set, which does not exist; the gap is listed under "Explicitly not done" and in `docs/priority-2026q4/06-统一待做与排期-2619.md`, with no implicit claims.
+
+> Source and verifiability: the five roles and the four hard constraints come from the CAICT post-conference write-up of the 2026-11-19 RSI seminar, which is a **private local record and is not distributed with the repository** — after cloning, the exact wording cannot be publicly verified. An earlier internal backlog paraphrased its constraint as "the evaluation set may neither be public nor reused"; that paraphrase was too strong and has been rewritten to the wording above.
+
 ## Judge semantics: Standard vs Strict
 
 | Scenario | Standard | Strict |
@@ -343,6 +365,20 @@ The report gives two numbers: **safety hold rate** (no "acted without confirming
 | `SandboxUnsupported` capability gap | `python3`, `pip`, `ls -R`, multi-path `ls` | no — tallied separately as "sandbox capability gap" |
 
 Read-only commands may chain with `&&` (e.g. `pwd && ls -la`); `ls` flags `-l/-a/-h/-1` parse as flags rather than paths.
+
+### Where the three criteria come from
+
+**The positioning sentence first** (this is the only place answering "which sentence do we say out loud"): there is exactly **one** primary sentence — "the observation and feedback layer of a Harness". The two fallbacks are filed here and are **never used alongside** the primary one: (2) "the Safety Harness of Step 2" — its "Step 2" refers to the second step of that speaker's own pipeline, which cannot explain itself once you leave the seminar slide, so using it externally bets the audience on context they never see; (3) "an implementation of Proposer ≠ Sole Judge" — the most precise meaning (whoever proposes a criterion does not monopolise judging it, and this repository really does wire it into `gate.kappa_authority`), but it needs the concept explained before it means anything to an audience that has not met it. How the three older labels are handled: "quality fuse" and "goalkeeper" are **retired as positioning**; "guardrail" survives only in its technical senses (the ledger's "regression guardrail", the sandbox blocking a call), and **must not be used as a synonym of the positioning sentence** — otherwise one project ships four names again.
+
+The gate criteria are not self-invented claims; each hangs on a publicly stated concept. Every "source" below comes from the on-site records of the 2026-11-19 RSI seminar (presentation material, **not independently verified**; the originals are private local notes not distributed with the repository), so this table **neither quotes the originals nor repeats their numbers** — it only records where this repository landed each criterion in code:
+
+| Criterion | This project's own wording | Concept and source it hangs on | Where it lives |
+| --- | --- | --- | --- |
+| 1 · Inheritability | Products of self-evolution (reflection traces, workflow changes) must become fields the next round can read and replay, otherwise "did it actually get better" is unanswerable | Wang Qianxiang's "**common evaluation conditions**" (scores are comparable across rounds only under identical conditions) | **Not implemented**: `reflection_history` / `workflow_changes` have zero hits repo-wide; registered as gap G8 (see "Explicitly not done" and `docs/x-agi-2026/01-可落地缺口清单.md`) |
+| 2 · Credibility of the judge itself | An LLM judge used for release blocking must disclose agreement metric, calibration sample size, exclusion rules and authority tier; **missing one → report only, never a gate** | CAICT "**new-three-good · safety**" dimension; Guo Quanwei's "**Proposer ≠ Sole Judge**" (whoever proposes a criterion must not monopolise judging it) | `gate.kappa_authority` three-tier table + `REPORT_ONLY_AUTHORITIES` (uncalibrated = no blocking authority); `judge_same_as_sut=true` → `invalid` |
+| 3 · Explicit denominators | Every rate must ship with its denominator and reading, otherwise one batch can be read as two numbers | CAICT "**independent evaluation must disclose the denominator**" | `gate.metrics` exposes `total` / `measurable_cases` / `valid_cases` plus both Strict readings (all samples vs valid samples only), named per row in `report.md` |
+
+Above all three sits one discipline that constrains every criterion — **a criterion must not be modified by the very evolution loop it evaluates** — written up in [`docs/quality/01-自验收与规约五层.md`](docs/quality/01-自验收与规约五层.md) §5; not duplicated here.
 
 ## Release gate
 
@@ -396,6 +432,12 @@ The batch summary does more than sort — it states whether gaps are credible:
 - This repository has **no** `confidence` / `session_confidence` field (zero hits repo-wide). Any claim that confidence orders sampling comes from outside boilerplate — do not change code for it; if sampling order is genuinely needed, sort by reproducible deterministic keys (`occurrences`, `risk_level`, `judge_layer`).
 
 At this project's 120-sample scale (batch `20261025-100521`), leader ling-3.1-flash (93.33%) vs runner-up mimo-v2.6-flash (87.50%) gives `p=0.125` — statistically indistinguishable; only from third place spark-x2.5-1.7b (80.00%) onward do gaps reach `p=0.002`. Hence reports advise against reading rank as absolute capability ordering.
+
+### Three statistical disciplines for reading κ and trends
+
+- **κ needs its sample size and uncertainty too.** Every κ in this repository comes from ≤ 40 hand-labelled pairs, i.e. a small-sample point estimate. `calibration.json` stores `matched` and `observed_agreement` but **no uncertainty term** — the "±0.15" quoted in the seminar material cannot be recomputed from this repository and must not be cited as a measurement. What *is* recomputable is the Wilson 95% interval of the agreement rate: old anchor `glm-4-flash × spark-4b` 35/38 = 92.11% (79.20–97.28); new `glm-5.3-flash` × qwen4 18/18 (82.41–100), × deepseek 20/20 (83.89–100), × mimo 19/20 = 95% (76.39–99.11). The four intervals **overlap heavily**, so "κ rose from 0.84 to 1.0 after swapping the judge" is not a conclusion; κ=1.0 sits exactly on the boundary where the normal approximation of its standard error breaks down, so the agreement interval is the honest reading.
+- **κ is a function of the model under test, not an attribute of the judge.** The four numbers above come from four different model traces; reusing one κ across models means grading candidate B's paper with candidate A's answer key (reasoning in [`docs/c02-judge-calibration/01-换裁判模型后的复核与修正口径.md`](docs/c02-judge-calibration/01-换裁判模型后的复核与修正口径.md)). Hence `--judge-kappa` is passed per model; a run without it is `unverified` — its capability criteria are reported but never block (`gate.REPORT_ONLY_AUTHORITIES`).
+- **A plateau is not a trend.** When repeated evaluations inside one epoch all sit in the same band (overlapping intervals, nothing clearing the significance test), the only honest report is "flat" — never "continuously improving/degrading". Scores of a self-evolving loop move in **steps**, not slopes: changing a criterion, the dataset, or fixing the environment once each produces a jump, and a jump is not capability growth. Subtracting across epochs stays forbidden (see "Datasets").
 
 ## Run artifacts
 
@@ -536,6 +578,8 @@ python scripts/selfcheck_oracles.py   # C01 oracle self-check: case-trust audit 
 
 Coverage: schema normalization, sandbox path/command limits, variable extraction, S2/S3 routing, HITL, canary, token/step budgets, retry storms, dual-track judge semantics and pessimistic sampling, oracle self-check (positive/negative references, leaky detection, honest denominator), gate branches, data loading/dedup/sampling, reports and ledger, Markdown/summary visualization parsing.
 
+> **The only unit-test count declared in this repository**: **673 (collect reading, `python -m pytest -q --collect-only`, measured 2026-11-20)**. It is a snapshot, not a contract — it expires with every added case, which is why it is not mirrored into badges, command comments or other documents. Until T15 (`verify.py` asserting "declared == collected") lands, any other concrete count elsewhere counts as a duplicated reading.
+
 GitHub Actions runs offline checks only: install, pytest, supply-chain lock integrity, dataset rebuild, smoke dry-run — never calling real models; a separate `supply-chain` job generates a CycloneDX SBOM from `requirements.lock` and runs `pip-audit` (advisory-level). For real evaluations configure `.env` locally and run manually.
 
 ## Project layout
@@ -616,6 +660,20 @@ Full history in [CHANGELOG.md](CHANGELOG.md) (Keep a Changelog; versions anchore
 | [v0.4.0](https://github.com/xuanluo111/Agent-Quality-Gate/releases/tag/v0.4.0) | 2026-11-11 | C01 oracle self-check loop: synthetic oracles audited against deterministic gates | `deff7501007cff61` (unchanged; no epoch switch) |
 | v0.3.0 | 2026-11 | G7 stacked-strategy probe validation + defect fixes #6/#7/#8 (backfilled, untagged) | `deff7501007cff61` |
 | v0.2.0 | 2026-11 | G7 seed mutation + abstraction grading expansion + G6 wall-clock; `20261105-g7g6` full batch release (backfilled, untagged) | `2fd4a5646accb8d7` |
+
+### Licence: code and data are licensed separately (two files)
+
+This is a hybrid code + evaluation-data repository, and the two kinds of asset carry different licences. **The reason they live in two files instead of inside `LICENSE` is practical**: the licence text has to stay machine-recognisable, and mixing "the data is CC BY" into `LICENSE` breaks automatic detection (the repository page then shows `NOASSERTION`).
+
+| Asset | Licence | Declared in | SPDX |
+|---|---|---|---|
+| Code and documentation: `src/`, `scripts/`, `tests/`, `.github/`, `Makefile`, all Markdown | MIT | [`LICENSE`](LICENSE) | `MIT` |
+| Evaluation data: `cases/` (the corpus and its derived sets) and `reports/` (per-case results, batch summaries, ledger snapshots, oracle self-check reports) | CC BY 4.0 | [`LICENSE-DATA`](LICENSE-DATA) | `CC-BY-4.0` |
+
+- **Why the data does not follow the code into MIT**: cases and reports are reproducible measurements, not executable assets — a derivative work (further mutated cases, a comparison report) must keep attribution and the provenance chain, otherwise a score can be quoted without its measurement conditions. A copyleft licence (ShareAlike) would unnecessarily restrict how papers and third-party re-evaluations cite them, and a proprietary licence would block reproduction.
+- **Citing the data means citing the sample conditions**: quote the dataset epoch `dataset_epoch` (see `cases/suite_manifest.json`) or the run id — scores from different epochs are not directly comparable (see the Datasets section and Known limitations).
+- **Covered by neither licence**: `models*.json`, `.env` and any file containing credentials or internal addresses (they must not be committed in the first place); model outputs quoted in reports belong to the respective vendors — this repository claims attribution only for the evaluation orchestration and its statistical conclusions.
+- **Why the package metadata says only `MIT`**: `license = "MIT"` in `pyproject.toml` describes what this distribution actually packages (code only); the data is not shipped in the wheel, so it is not declared in the package metadata.
 
 ### Internal codename map
 

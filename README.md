@@ -5,11 +5,10 @@
 [![AQG CI](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml/badge.svg?branch=main)](https://github.com/xuanluo111/Agent-Quality-Gate/actions/workflows/aqg-ci.yml)
 [![License: MIT (code) / CC-BY-4.0 (data)](https://img.shields.io/badge/License-MIT%20(code)%20%2F%20CC--BY--4.0%20(data)-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.13-blue)](pyproject.toml)
-[![tests](https://img.shields.io/badge/tests-636%20passed-brightgreen)](tests/)
 
-> CI 跑的是离线层：636 个单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。
+> CI 跑的是离线层：全部单测（Python 3.11 / 3.13 双矩阵）、数据集重建、`smoke --dry-run`；不调用任何模型，也不产生费用。**首屏不写单测条数**：静态标记与正文里的条数每加一条测试就过期一次（四向漂移的真实教训见 `docs/README.md`），全仓只在「测试与 CI」一节给一个带时点的数。
 
-一个面向工具型 AI Agent 的可复现质量评测与发布门禁。它不只检查最终回答，而是审计完整执行轨迹：真实 function calling、受控工具执行、数据路由、变量抽取、人工确认、成本预算、分层裁判、双轨门禁、风险台账和可视化报告。
+一个面向工具型 AI Agent 的可复现质量评测与发布门禁——**对外定位只认一句：它是 Harness 的观测与反馈层**（提法出自 2026-11-19 RSI 研讨会讲者分享，会场材料**未独立核验**；备句与逐条出处见「裁判语义 · 三条判据的外部出处」，不另造词也不混用）。它不只检查最终回答，而是审计完整执行轨迹：真实 function calling、受控工具执行、数据路由、变量抽取、人工确认、成本预算、分层裁判、双轨门禁、风险台账和可视化报告。
 
 > 这个仓库是面试作品集项目，不是生产级平台。下面明确区分了「已实现」与「边界/未实现」，避免用概念名词代替代码。
 
@@ -84,9 +83,9 @@
 | 失败归因 | 规则层优先给出 `failure_stage`（understanding/planning/generation/validation/iteration），LLM 裁判按 JSON 契约补 `failure_stage` 与必填 `evidence_span`；缺 `evidence_span` 直接判 `Judge_Unavailable` |
 | 瞬态退避与急停（C11） | `runner._completion` 对 429/超时/网关 5xx 指数退避+jitter 重试（累计 `backoff_ms` 入轨迹）；`run_eval` 连续 Harness_Error 熔断、`--abort-on-critical`/`--abort-file` 急停，半批停摆统一记未评、不冒充模型低分 |
 | 软件供应链（C10） | `requirements.lock` 精确锁定 + `scripts/check_supply_chain.py` 离线校验锁定完整性（CI 阻断） + CI `pip-audit`/CycloneDX SBOM + `scripts/drift_check.py` 跨批次 Provider_Change 与比率漂移核验（复用两比例 z 检验） |
-| 裁判校准 | `scripts/calibrate_judge.py` 对齐人工标注，输出混淆矩阵、漏判率、误伤率、Cohen's kappa 与环节一致率，只用标准库、不联网；`--exclude-invalid` 剔除 `data_valid=False` 的截断样本，避免无效样本扭曲一致率。实测 40 条标定得 κ=0.8412（n=38），由 `gate.kappa_authority` 接成三档权限：≥0.80 能力判据可阻断 / 0.60~0.80 仅报告 / <0.60 判 invalid；能力类含 Critical、Strict 基线、pass^k 与 High 阈值，环境类（网关拦截/截断/未测到/兜底）不经裁判、不受降级；仅报告项在 `report.md`、批量汇总与控制台均单独列出，`rejudge` 重生成报告时保留 κ；`run_eval --judge-kappa` 为 opt-in |
+| 裁判校准 | `scripts/calibrate_judge.py` 对齐人工标注，输出混淆矩阵、漏判率、误伤率、Cohen's kappa 与环节一致率，只用标准库、不联网；`--exclude-invalid` 剔除 `data_valid=False` 的截断样本，避免无效样本扭曲一致率。实测 40 条标定得 **κ=0.8412（n=38）**——该值只属于旧裁判对 `glm-4-flash × spark-4b`，换裁判或换被测模型都必须重标（κ 是被测模型的函数，见「排名与显著性 · κ 与趋势读的三条统计纪律」），且它是开发集上的**选择依据**而非终审结论；由 `gate.kappa_authority` 接成三档权限：≥0.80 能力判据可阻断 / 0.60~0.80 仅报告 / <0.60 判 invalid；能力类含 Critical、Strict 基线、pass^k 与 High 阈值，环境类（网关拦截/截断/未测到/兜底）不经裁判、不受降级；仅报告项在 `report.md`、批量汇总与控制台均单独列出，`rejudge` 重生成报告时保留 κ；`run_eval --judge-kappa` 为 opt-in |
 | 判据自检回路（C01） | `src/engine/oracle.py`：不调模型，给每条用例离线合成一份「完美执行的正面样本」+ 一组「每条确定性断言各破坏一次」的反面变异样本，只喂裁判的**确定性闸门链**（`rule` → `trajectory/jcv/vri`）——正面过不了记 `DEAD_CASE`（完美执行也拿不到分，压所有人 0 分且不携带信息），反面过了闸门记 `LEAKY`（破坏断言照样得分，在给“没做到”发分）；语义裁决离线未执行的部分诚实记 `NOT_DETERMINISTIC`，不假阳性也不掩盖。`scripts/selfcheck_oracles.py`（`make oracle-selfcheck`）产出 `reports/oracle_selfcheck.{json,md}`；只报告、不修改用例，修题是人的决定。首份 207 条基线：`dead=0 leaky=0`，767 个适用变异全被闸门捕获 |
-| 测试 | 636 个 pytest 用例，覆盖 runner（含瞬态退避、聚合墙钟）、judge（含工具参数 Schema 校验、抽象判别）、oracle（判据自检：家族样例 / LEAKY 检出 / 分流词表 / 适用性四组钉桩）、gate、tools（含参数校验）、dataset（含两比例 z 检验、select_smoke 轮转）、report（含台账代际双语义）、state、provenance、stability、calibrate、build_label_template（C02 待标清单：平衡抽样/复核表/校验/本机路径脱敏）、rejudge、run_eval（含熔断/急停）、supply_chain、drift、suite_audit（C03 spec_leak ／ C04 可判率与语义重复率体检）、case_lint（K13 四问齐备性 ／ 读写语境与可观测锚点）、ownership（M1 责任角色派发 ／ 签字可追溯性 ／ 存量回填幂等）、fixture_ready（C14′ fixture 落盘预检 ／ 与沙箱对拍）、k08_variation（变序种子派生 ／ 尝试分化度）、textsim（字符 shingle ／ Jaccard 共用口径）、verify 与可视化解析 |
+| 测试 | pytest 用例（**条数只在「测试与 CI」一处声明**），覆盖 runner（含瞬态退避、聚合墙钟）、judge（含工具参数 Schema 校验、抽象判别）、oracle（判据自检：家族样例 / LEAKY 检出 / 分流词表 / 适用性四组钉桩）、gate、tools（含参数校验）、dataset（含两比例 z 检验、select_smoke 轮转）、report（含台账代际双语义）、state、provenance、stability、calibrate、build_label_template（C02 待标清单：平衡抽样/复核表/校验/本机路径脱敏）、rejudge、run_eval（含熔断/急停）、supply_chain、drift、suite_audit（C03 spec_leak ／ C04 可判率与语义重复率体检）、case_lint（K13 四问齐备性 ／ 读写语境与可观测锚点）、ownership（M1 责任角色派发 ／ 签字可追溯性 ／ 存量回填幂等）、fixture_ready（C14′ fixture 落盘预检 ／ 与沙箱对拍）、k08_variation（变序种子派生 ／ 尝试分化度）、textsim（字符 shingle ／ Jaccard 共用口径）、verify 与可视化解析 |
 
 ## 数据分级口径（ISACA 附录 A 对齐）
 
@@ -118,6 +117,7 @@
 | 通用 DLP | 只覆盖邮箱、手机号、身份证、银行卡、常见 API Key 的 regex 脱敏 |
 | 自动修复 | 报告会给出影响与建议，但不会自动修改 Agent 或代码 |
 | 题目审计闭环 | C01 判据自检只报告 `DEAD_CASE`／`LEAKY`，不自动修题；修复走人工评审与正常切代 |
+| 密封终审集（held-out） | 只有公开开发集，没有「冻结后只运行一次」的密封集；因此本仓库的 κ 与通过率是**选择依据**而非终审结论，口径见「数据集 · 数据集承担的角色」 |
 | 生产级并发/重试 | 线程池并发；已对供应商限流/超时/网关 5xx 做**指数退避+jitter 自动重试**（`--max-retries`），并有批次级**熔断**（连续 Harness_Error）与**急停**（`--abort-on-critical`/`--abort-file`）；仍是同一进程内的单次评测，非跨机断点续跑——中断后靠逐条落盘的 `results.jsonl` 与批量层 `--skip-existing` 增量重跑 |
 
 ## 当前跑分
@@ -136,6 +136,8 @@
 
 \* 该链路数据有效率 70.79%（网关内容审核拦截 26 条，模型未被调用），门禁 `invalid`，分数不可横向引用。其余 6 场均因 Critical 被 `blocked`——没有任何模型通过当前出口标准，这正是门禁该起的作用。完整表（Standard / Critical / HITL / Tokens）见 `reports/batch-20261106-night/summary.md`；复现需自备数据集哈希（`suite_manifest.json`）、seed 与模型/裁判指纹（`config.json`）。
 
+> **这张表是开发集（held-in）口径**：207 条公开且反复运行，所以上面的百分比能回答「在这套题上谁更好」，不能回答「该模型能否上线」（见「数据集 · 数据集承担的角色」）。
+
 > `reports/charts/` 是 `20261025-100521` 批次的快照，与上表不是同一批；重新批量后要重新生成并提交。
 
 ## 快速开始
@@ -149,7 +151,7 @@ pip install -r requirements-dev.txt
 
 python scripts/build_suite.py
 python scripts/run_eval.py --suite smoke --dry-run --limit 0   # 只校验数据，不调模型
-python -m pytest -q                                            # 636 条离线单测
+python -m pytest -q                                            # 全量离线单测（条数见「测试与 CI」）
 python scripts/selfcheck_oracles.py                            # C01 判据自检（make oracle-selfcheck）
 
 # 一条命令把上面几件事按顺序做完，并加一段六项能力的端到端自检（0 成本）
@@ -299,6 +301,26 @@ python scripts/build_suite.py \
 
 这个规模适合演示流程与回归；模型排名的结论不只看通过率，以 Wilson 95% 区间与双比例 z 检验为准（见「排名与显著性」），且两代之间的分数不可直接相减。
 
+### 数据集承担的角色：held-in 开发集，不是终审集
+
+这 207 条**公开、且被历次批次反复运行**。按信通院评测体系的「五角色」口径（驱动集 / 开发集 held-in / 终审集 held-out / 迁移集 / 退化监测集），它只能落在**开发集**这一格：
+
+| 角色 | 定义 | 本仓库的实际情况 |
+| --- | --- | --- |
+| 驱动集 | 指导用例建设 | 合一：Strict 失败沉淀进 `regression.jsonl`，与开发集同一套题 |
+| 开发集（held-in） | 可反复运行，用于选择、调参、比较 | **是——207 条 `core_suite` 就是这一格** |
+| 终审集（held-out） | 密封、冻结后只运行一次 | **未设** |
+| 迁移集 | 验证跨场景可迁移 | 未设 |
+| 退化监测集 | 同代内重复运行监测抖动 | 未设（`pass^k` 只覆盖单次批次内的 repeat） |
+
+由此定死三条对外口径，不得反过来讲：
+
+1. **κ 标定值与历史通过率是「选择依据」，不是「终审结论」**。它们是同一个公开集合上反复运行的产物，用它们回答「为什么选这套判据/这个模型档位」成立，回答「该模型能否上线」不成立——后者需要密封集。
+2. **公开是为了可复核，代价是污染风险**。同一集合跑过几十轮，分数里必然含「补做旧题」的成分，所以这里报的是「当前集上的通过率」，不是「泛化能力」。五角色的四条硬性约束（隔离不回流 / 预算对齐 / 版本可审计 / 退化可测）里，「不回流」指**测试记录不得回流为学习材料**，并没有禁止公开基准进入驱动/开发层；本仓库满足「版本可审计」（`suite_manifest.json` 输入哈希 + 代际指纹），不满足「隔离不回流」意义上的角色分离（见上表第一行）。
+3. **本项目不自称具备终审能力**。要给出终审结论必须另设密封集并冻结，当前没有；相关缺口在「明确没有做的事」与 `docs/priority-2026q4/06-统一待做与排期-2619.md` 中登记，不做隐性宣称。
+
+> 出处与可复核边界：五角色与四条硬性约束取自 2026-11-19 RSI 研讨会的信通院会后整理，**该整理件为本地私有记录、不随仓库分发**，克隆本仓库无法公开复核原文措辞；早先内部待做稿把它的约束转述为「评测集不可公开、不可复用」，经核对属于转述过强，已按上面的原文口径改写。
+
 ## 裁判语义：Standard vs Strict
 
 | 场景 | Standard | Strict |
@@ -346,6 +368,20 @@ python scripts/build_suite.py \
 | `SandboxUnsupported` 能力缺口 | `python3`、`pip`、`ls -R`、多路径 `ls` | 否，单列为“沙箱能力缺口” |
 
 只读命令允许用 `&&` 串联（如 `pwd && ls -la`），`ls` 的 `-l/-a/-h/-1` 选项会被正确解析而不是当成路径。
+
+### 三条判据的外部出处
+
+**先登记定位句**（因为它是“对外只说哪一句”的唯一答案）：主句只有**「Harness 的观测与反馈层」**一句。两个备句只在此备案，**不与主句并列使用**：②「Step2 的 Safety Harness」——它里的 “Step2” 指的是讲者自己流水线的第二步，离开那张会场图无法自解释，对外用等于让听众去赌一个他们看不到的上下文；③「Proposer ≠ Sole Judge 的实现」——含义最准（提判据的一方不独占裁判权，本仓确实把它接进了 `gate.kappa_authority`），但对不熟该提法的听众需要先解释提法本身。三个旧说法的处理：“质量保险丝”与“守门员”**一律不再用作定位**；“护栏”只保留技术含义（台账的“劣化护栏／跨代护栏”、沙箱“被护栏拦下”），**不得当定位句的同义替换**——否则一个项目会同时长出四个名字。
+
+本项目的门禁判据不是自提主张，三条各自挂在公开提法上。下表的「挂靠出处」均来自 2026-11-19 RSI 研讨会会场记录（报告材料，**未独立核验**；原始材料为本地私有记录、不随仓库分发，故本表**不转述会场原文也不引会场数字**，只登记「本仓库把它落到了哪一行代码」）：
+
+| 判据 | 本项目自己的表述 | 挂靠的提法与出处 | 落地点 |
+| --- | --- | --- | --- |
+| 一·可继承性 | 自进化的产物（反思轨迹、工作流变更）必须落成可被下一轮读取与回放的字段，否则无法判断“是否真的变好了” | 王千祥提出的「**共同评估条件**」（只有同一评估条件下的分数才可跨轮次比） | **未实现**：`reflection_history` / `workflow_changes` 全库 0 命中，作为缺口 G8 登记（见「明确没有做的事」与 `docs/x-agi-2026/01-可落地缺口清单.md`） |
+| 二·裁判自身的可信性 | 用于发布阻断的 LLM 裁判必须公开一致度度量、标定样本量、剔除规则、权限档；**缺一只能进报告、不能进门禁** | 信通院「**新三好 · 安全**」维度；郭权玮「**Proposer ≠ Sole Judge**」（提出判据的一方不得独占裁判权） | `gate.kappa_authority` 三档权限表 + `REPORT_ONLY_AUTHORITIES`（未标定即无阻断权）；`judge_same_as_sut=true` 直接判 `invalid` |
+| 三·分母显式化 | 任何比率必须随附分母与口径，否则同一批次能被读出两个数 | 信通院「**独立评估须披露分母**」 | `gate.metrics` 同时给出 `total` / `measurable_cases` / `valid_cases` 与两套 Strict 口径（全样本与仅可信样本），`report.md` 逐条列名 |
+
+三条之上还有一条约束全部判据的纪律——**判据不得由被它评价的那个进化循环修改**，成文于 [`docs/quality/01-自验收与规约五层.md`](docs/quality/01-自验收与规约五层.md) §五，本文不另记一遍。
 
 ## 发布门禁
 
@@ -399,6 +435,12 @@ python scripts/run_eval.py --suite core --min-valid-rate 70
 - 本仓库**没有** `confidence` / `session_confidence` 字段（全仓零命中）。若在别处看到“用 confidence 排序抽检”的说法，那是外部口径混入，不要据此改代码；真要做抽检排序，排序键应当是可复核的确定性量（`occurrences`、`risk_level`、`judge_layer`）。
 
 本项目 120 条样本下（`20261025-100521` 批次），第一名 ling-3.1-flash（93.33%）与第二名 mimo-v2.6-flash（87.50%）的 `p=0.125`，只能算统计上不可区分；与第三名 spark-x2.5-1.7b（80.00%）起才是 `p=0.002` 的显著差距。所以报告不建议把名次当作绝对能力排序。
+
+### κ 与趋势读的三条统计纪律
+
+- **κ 也要给样本量与不确定度。** 本仓库的 κ 全部来自 ≤ 40 条人工双标，是小样本点估计；`calibration.json` 只落 `matched` 与 `observed_agreement`，**没落不确定度**——会场材料里的「±0.15」在本仓库无法复算，不得当实测值引用。能公开复算的是同一算法下的**一致率 Wilson 95% 区间**（由 `matched` 与 `observed_agreement` 直接得出）：旧锚 `glm-4-flash × spark-4b` 35/38 = 92.11%（79.20~97.28）；新代 `glm-5.3-flash` × qwen4 18/18（82.41~100）、× deepseek 20/20（83.89~100）、× mimo 19/20 = 95%（76.39~99.11）。**四条区间高度重叠**，“换裁判后 κ 从 0.84 升到 1.0”不能作为结论；κ=1.0 正好落在边界上，标准误的正态近似失效，只能退回一致率区间来读。
+- **κ 是被测模型的函数，不是裁判的固有属性。** 上面四个数分别来自四条不同模型的轨迹，跨模型沿用同一个 κ 等于用甲的答卷改乙的卷（推理见 [`docs/c02-judge-calibration/01-换裁判模型后的复核与修正口径.md`](docs/c02-judge-calibration/01-换裁判模型后的复核与修正口径.md)）。因此 `--judge-kappa` 只能逐模型传；没传的场次就是 `unverified`，能力判据只报告不阻断（`gate.REPORT_ONLY_AUTHORITIES`）。
+- **平台期不得当作趋势结论。** 同一代际内多次评测若都落在同一水平带（区间重叠、未过显著性判定），只能报“持平”，不得写成“持续改进／退化曲线”。自进化的分数变化是**阶梯**而不是斜坡——换判据、换数据集、修一次环境都会让它跳一级，跳变不是能力增长；跨代相减一律禁止（见「数据集」节）。
 
 ## 运行产物
 
@@ -539,6 +581,8 @@ python scripts/selfcheck_oracles.py   # C01 判据自检：题目可信度审计
 
 测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、判据自检回路（正反参照/漏网检出/诚实分母）、门禁分支、数据加载/去重/采样、报告与台账（含 M1 责任派发与签字校验）、Markdown/summary 可视化解析。
 
+> **全仓唯一一处单测条数声明**：**673 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-20 实测）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档；T15（`verify.py` 自检「声明数 == collect 数」）落地前，任何其它地方出现具体条数都算口径重复声明。
+
 GitHub Actions 主要做离线检查：安装依赖、运行 pytest、校验供应链锁定完整性、重建数据集、执行 smoke dry-run，不会调用真实模型；另有一个 `supply-chain` 作业从 `requirements.lock` 生成 CycloneDX SBOM 并跑 `pip-audit`（咨询级漏洞扫描）。真实评测请在本地配置 `.env` 后手动运行。
 
 ## 项目结构
@@ -619,6 +663,20 @@ docs/                       # 索引见 docs/README.md：机器输入（K13 豁�
 | [v0.4.0](https://github.com/xuanluo111/Agent-Quality-Gate/releases/tag/v0.4.0) | 2026-11-11 | C01 判据自检回路：正反参照离线喂闸门，审计“题目本身可不可信” | `deff7501007cff61`（不变，未切代） |
 | v0.3.0 | 2026-11 | G7 叠加策略探针验证 + 修掉第六/七/八处工具缺陷（回溯补记，无 tag） | `deff7501007cff61` |
 | v0.2.0 | 2026-11 | G7 种子变异 + 抽象判别扩容 + G6 聚合墙钟，`20261105-g7g6` 全量批发布（回溯补记，无 tag） | `2fd4a5646accb8d7` |
+
+### 许可：代码与数据分开授权（写在两个文件里）
+
+本仓库是「代码 ＋ 评测数据」混合仓库，两类资产适用不同许可。**拆成两个文件而不是写在 `LICENSE` 里，理由很实用**：许可证文本要保持机器可识别，把“数据另用 CC BY”混写进 `LICENSE` 会让自动识别失败（GitHub 仓库页显示 `NOASSERTION`）。
+
+| 资产 | 许可 | 声明文件 | SPDX |
+|---|---|---|---|
+| 代码与文档：`src/`、`scripts/`、`tests/`、`.github/`、`Makefile`、各 Markdown | MIT | [`LICENSE`](LICENSE) | `MIT` |
+| 评测数据：`cases/`（用例语料与派生集）与 `reports/`（逐条结果、批次汇总、台账快照、判据自检报告） | CC BY 4.0 | [`LICENSE-DATA`](LICENSE-DATA) | `CC-BY-4.0` |
+
+- **数据为什么不跟着代码走 MIT**：用例与报告是“可复核的测量数据”而非可执行资产——衍生物（再变异用例、对比报告）必须保留署名与溯源链，否则一个分数能被脱开测量条件引用；传染性许可（ShareAlike）会不当限制论文/二次评测的引用方式，专有许可则阻断复现。
+- **引用数据必须同时给出样本条件**：带数据集代际 `dataset_epoch`（见 `cases/suite_manifest.json`）或 run id——跨代不可直接比（见「数据集」节与「已知限制」）。
+- **两个许可都不覆盖**：`models*.json`、`.env` 及任何含密钥/内网地址的文件（本就不应入库）；报告里引用的模型输出版权归相应模型厂商，本仓库只主张对评测编排与统计结论的署名。
+- **包元数据为什么只写 `MIT`**：`pyproject.toml` 的 `license = "MIT"` 对应这份 distribution 实际打包的内容（只有代码），数据不随 wheel 分发，所以不在包元数据里声明 CC 许可。
 
 ### 内部代号对照
 

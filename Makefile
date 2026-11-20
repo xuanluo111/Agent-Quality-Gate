@@ -64,5 +64,5 @@ visualize:
 
 clean:
 	rm -rf .pytest_cache reports/runs reports/batch-* workspace
-	@echo "保留 reports/charts（入库快照）与 reports/risk_ledger.json（入库台账）"
+	@echo "保留 reports/charts（已入库的快照）与 reports/risk_ledger.json（不入库：.gitignore 已排除，只是本地跨运行状态，克隆仓库后不存在）"
 	@echo "只清运行数据请用：git clean -Xdf reports/"

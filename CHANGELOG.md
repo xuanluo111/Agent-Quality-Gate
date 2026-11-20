@@ -2,9 +2,26 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式；版本号与**数据集代际**对齐（每个改变 `core_suite` 指纹的发布切一个 minor 版）。历史条目最初以日期为标题记录在 README，此处保留原文并补挂版本锚点；只有 v0.4.0 起有 git tag（此前的代际切换未打 tag，属回溯补记——引用旧代际请以台账 `dataset_epoch` 为准，不要以 tag 为准）。
 
+> **数字读法（适用于本文件全部条目）**：条目内出现的单测条数、台账条数、`verify` 项数等均为**该条目撰写／回归时点的实测值**，不随后续提交更新，也**不得**被当作当前值引用——全仓唯一的现态单测条数声明在 [`README.md`](README.md)「测试与 CI」。把旧条目的数字改成今天的值等于重写交付记录，所以只加时点、不改原文（同一原则见 [`docs/priority-2026q4/02-11-19对比批口径声明.md`](docs/priority-2026q4/02-11-19对比批口径声明.md) ①）。
+>
+> **私有材料读法（同样适用于全部条目）**：条目里提到的 `docs/qwen-eval-2610/`、`docs/ccf-2026-chinasoft/00-待做清单.md`、`docs/x-agi-2026/00-四框架知识映射.md` 整份**不随仓库分发**（`.gitignore` 已排除，克隆后路径不存在）；`deliverables/qwen-2610/` 是**部分入库**——其中 `04-原创性佐证.zip` 与 `备用-报告与佐证.zip`／`备用-提交总包.zip`／`备用-表单填写稿.md`／`备用-提交页字段对照表.md` 五项被 `.gitignore` 排除、只存本地（可用 `git check-ignore -v deliverables/qwen-2610/*` 核对），其余随仓库分发。因此上述私有件支撑的结论与数字**无法公开复核**；历史条目不就地重写，所以只在此统一声明一次（逐文件清单见 [`docs/README.md`](docs/README.md) §三／§五 的 🔒 标记）。
+
 ## [v0.4.0] - 2026-11-11
 
 数据集代际不变（`deff7501007cff61`）。本轮只加审计工具与文档，不改题面、不动裁判，因此不切代。
+
+### 2026-11-20：判据授权分档收紧（T13）＋ 许可拆分 ＋ 口径清账（11-18–11-20 未提交改动一并登记）
+
+- **`src/engine/gate.py`：`unverified` 不再享有隐式阻断权**。新增 `REPORT_ONLY_AUTHORITIES = ("report", "unverified")`——未标 κ 时能力类判据只进报告不做门禁，环境类（外泄/越权）仍保留 `blocked`。原行为是“没标定就能拦人”，等于拿未知精度当全权。
+- **`gate.py`：K09 异源红线改为 fail-closed**。`evaluate_gate(judge_same_as_sut=True)` 在 shadow 之后、有效率之前直接判 `invalid`；之前只是“需谨慎解读”的文案，不阻断发布。
+- **报告与汇总文案跟着升级**：`report.py` 页眉新增「判据授权」行（κ ＋ 权限档／未标定），同源文案从“需谨慎解读”改成红线说明；`run_batch.py` 汇总从「判分需打折」改为原话“分数为自评，不构成能力结论，须配异源裁判后重跑”；`rejudge.py` 的 κ 透传注释改口径（丢了 κ 的后果从“warn 翻回 blocked”变为“已获阻断授权的批次被报告重建静默放宽成 warn”）。
+- **一个必须写明的后果（没有靠重放把它抹平）**：按新代码，`20261118-131428` 批的 6 场 `blocked` 应判 `warn`。**未重放**——用新代码重写已归档 `report.md` 等于篡改历史产物，旧报告保持原样并按 [`docs/priority-2026q4/02-11-19对比批口径声明.md`](docs/priority-2026q4/02-11-19对比批口径声明.md) 的权限档读法解释。**T13 没解决的**：“能力类判据”仍是整桶降级（含 `judge_layer="rule"` 的确定性断言与 Strict/pass^k 聚合），拆桶登记为 T46。
+- **`scripts/build_label_template.py` 新增 `--only-valid`**：剔除 `data_valid=False` 的样本（网关拦截/超时/截断，模型根本没被真正测到）。这类样本人工与裁判必然同判 fail，会把 κ 虚高到接近 1.0；默认关闭以保持历史行为不变。服务于 11/19 批后的换裁判复标（`docs/c02-judge-calibration/recalib-*` 八个样本目录）。
+- **许可拆分（代码与数据分开授权）**：`LICENSE` 改为**未被污染的纯 MIT 文本**（混写注释/scope note 会让 GitHub 自动识别失败而显示 `NOASSERTION`）；新建 [`LICENSE-DATA`](LICENSE-DATA)（CC BY 4.0，适用 `cases/` 与 `reports/`，要求引用带 `dataset_epoch`）；`pyproject.toml` 改用 PEP 639 的 `license = "MIT"` 并删除 `License :: OSI Approved :: MIT License` classifier（该 distribution 只打包代码）；README 中英各新增许可小节。
+- **口径清账（T05–T12，文档）**：① **数字单点声明**——全仓唯一的现态单测条数声明只保留在 README「测试与 CI」，旧条目只加时点不改原文；② **私有引用可辨识**——`docs/README.md` 索引行级 🔒 ＋ 逐文件头部统一声明；③ **对外定位句统一**为“Harness 的观测与反馈层”，旧说法（保险丝/守门员）不再并列，“护栏”仅保留台账劣化护栏等技术含义；④ **κ 不确定度纪律**——只能给 Wilson 95% 区间，不得用“0.84→1.0”下结论；⑤ held-in 五角色声明落地。
+- **新增五份 priority 文档**（`docs/priority-2026q4/03`–`07`）：外审逐条裁定、两份原文存档、**统一待做与排期（06，此后待做状态只在这里更新）**、三页纸数字勘误备忘（07）。
+- **验证（均为可复跑命令）**：`pytest -q` → **673 passed**；`scripts/verify.py` 仅离线 **13 项全 OK**。零污染复验：`cases/` 下 12 个入库文件 `git hash-object` 对 `HEAD` 全 IDENTICAL（`verify` 会跑两遍 `build_suite` 做确定性比对，因此 mtime 会变、内容不变）；`reports/runs/` 因 `.gitignore:18` 不入库，`git status` 无法作证，改用 `find reports -newermt "2026-11-20 00:00:00"` = **0 个文件**证明 9 场产物未动；代际指纹重算仍为 `deff7501007cff61`。
+- **不改动**：`judge.py` 未动、题面未动、本批不重跑不重判 → `core_suite` 指纹不变，不切 minor。
 
 ### 2026-11-14：千问 Qwen4-Max-Preview 专业评测——规则读完了，先说清哪里不兼容
 
