@@ -455,7 +455,9 @@ def render_summary(batch_id: str, meta: dict, rows: list[dict]) -> str:
     if judges:
         line = f"- 裁判模型：{', '.join(judges)}"
         if same_source:
-            line += f"（{', '.join(same_source)} 场次与被测模型同源，判分需打折）"
+            # K09 红线：同源不是“打个折还能引用”，而是本轮分数不成立（门禁已判 invalid）。
+            # 旧文案写“判分需打折”，会把一个应当重跑的批次读成“牵强可用”。
+            line += f"（{', '.join(same_source)} 场次裁判与被测模型同源：分数为自评，不构成能力结论，须配异源裁判后重跑）"
         lines.append(line)
     lines += [
         "",

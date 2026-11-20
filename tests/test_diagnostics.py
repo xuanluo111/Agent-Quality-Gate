@@ -1,7 +1,7 @@
 import json
 
 from run_eval import _explain_lines
-from src.engine.gate import case_diagnostic, evaluate_gate
+from src.engine.gate import KAPPA_BLOCK_MIN, case_diagnostic, evaluate_gate
 from src.engine.report import generate_markdown
 from tests.conftest import make_result
 
@@ -92,7 +92,8 @@ def test_blocked_gate_carries_diagnostics_into_report(tmp_path):
         failed(fail_reason="State_Mismatch", evidence=json.dumps(mismatch), evidence_span="state:notes.md"),
         make_result(case_id="case-002"),
     ]
-    gate = evaluate_gate(results)
+    # κ 到阻断档：本用例要的是「真的走到 blocked」，诊断信息能跟随 gate 进报告。
+    gate = evaluate_gate(results, judge_kappa=KAPPA_BLOCK_MIN)
     assert gate.status == "blocked"
     assert gate.to_dict()["diagnostics"][0]["fix_hint"] == "终态与期望不符：notes.md"
 

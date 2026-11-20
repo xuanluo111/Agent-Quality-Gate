@@ -399,8 +399,8 @@ def build_run_meta(state: dict) -> dict:
         "max_high": config.get("max_high", 3),
         "min_valid_rate": config.get("min_valid_rate", 90.0),
         # 重判后要重建报告，κ 必须带出来：丢了它 kappa_authority 会退回 unverified，
-        # 同一批结果会从 warn 翻回 blocked，等于凭报告重建反转发布结论。
-        # 旧 run 的 config.json 没有这个字段，get 回落 None 即 opt-in 未启用。
+        # 而 T13 之后 unverified 属于「只报告」档——已获阻断授权的批次会被重建报告静默放宽成 warn。
+        # 旧 run 的 config.json 没有这个字段，get 回落 None 就是真的未标定。
         "judge_kappa": config.get("judge_kappa"),
     }
 

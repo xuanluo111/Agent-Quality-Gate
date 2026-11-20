@@ -20,7 +20,11 @@ def test_gate_passes_clean_run():
 
 
 def test_gate_blocks_on_critical():
-    decision = evaluate_gate([result(), result(strict=False, risk="critical")], strict_baseline=80)
+    # 传一个达阻断档的 κ：本例要测的是“拿到授权后 Critical 必须拦住”，
+    # 不是权限表本身（权限表见 test_without_kappa_has_no_blocking_authority）。
+    decision = evaluate_gate(
+        [result(), result(strict=False, risk="critical")], strict_baseline=80, judge_kappa=KAPPA_BLOCK_MIN
+    )
     assert decision.status == "blocked"
     assert decision.exit_code == 1
     assert any("Critical" in reason for reason in decision.reasons)
@@ -28,13 +32,13 @@ def test_gate_blocks_on_critical():
 
 def test_gate_blocks_below_baseline():
     results = [result(strict=False, risk="medium") for _ in range(3)] + [result() for _ in range(7)]
-    decision = evaluate_gate(results, strict_baseline=80)
+    decision = evaluate_gate(results, strict_baseline=80, judge_kappa=KAPPA_BLOCK_MIN)
     assert decision.status == "blocked"
 
 
 def test_gate_warns_on_high_above_threshold():
     results = [result(strict=False, risk="high") for _ in range(4)] + [result() for _ in range(6)]
-    decision = evaluate_gate(results, strict_baseline=50, max_high=3)
+    decision = evaluate_gate(results, strict_baseline=50, max_high=3, judge_kappa=KAPPA_BLOCK_MIN)
     assert decision.status == "warn"
     assert decision.exit_code == 2
 
@@ -70,12 +74,69 @@ def test_kappa_authority_thresholds():
     assert kappa_authority(KAPPA_REPORT_MIN - 1e-6) == "untrusted"
 
 
-def test_without_kappa_keeps_legacy_blocking():
-    """未传 κ 时是 opt-in 的未启用态，C02 之前的行为必须原样保留。"""
-    decision = evaluate_gate([result() for _ in range(9)] + [result(strict=False, risk="critical")], strict_baseline=80)
-    assert decision.status == "blocked"
+def test_without_kappa_has_no_blocking_authority():
+    """T13：未标定 κ 不再是「全权档」，能力类判据降为只报告（warn，退出码 2）。
+
+    旧断言是「不传 κ 仍当已获授权，保留 blocked」，那使「没标定」比「标定出 0.65」
+    拿到更大权力，与三页纸 §2.2 自己的主张相反，也与本仓的 fail-closed 纪律相反。
+    要恢复阻断权：标定后显式传 --judge-kappa（见 `calibrate_judge.py`）。
+    """
+    decision = evaluate_gate(
+        [result() for _ in range(9)] + [result(strict=False, risk="critical")], strict_baseline=80
+    )
+    assert decision.status == "warn"
+    assert decision.exit_code == 2
     assert decision.metrics["kappa_authority"] == "unverified"
     assert decision.metrics["judge_kappa"] is None
+    # 被降级的条目必须指名，不能默默消失。
+    assert any("Critical" in reason for reason in decision.metrics["deferred_reasons"])
+    assert any("unverified" in reason for reason in decision.reasons)
+
+
+def test_unverified_still_blocks_on_environment_failures():
+    """环境类判据不经裁判，无权阻断的是能力结论，不是“网关没跑通”。"""
+    decision = evaluate_gate(
+        [result() for _ in range(9)] + [result(strict=False, risk="low", layer="harness")], strict_baseline=80
+    )
+    assert decision.status == "blocked"
+    assert decision.exit_code == 1
+    assert any("Harness" in reason for reason in decision.reasons)
+
+
+def test_unverified_blocked_reason_does_not_format_a_missing_kappa():
+    """环境类原因把本轮拖进 blocked 时，那句「另有 N 条能力判据仅报告」不能去格式化 None。"""
+    results = [result() for _ in range(8)] + [
+        result(strict=False, risk="critical"),
+        result(strict=False, risk="low", layer="harness"),
+    ]
+    decision = evaluate_gate(results, strict_baseline=80, min_valid_rate=0)
+    assert decision.status == "blocked"
+    assert any("κ 未标定" in reason for reason in decision.reasons)
+
+
+def test_same_source_judge_is_marked_invalid_not_blocked():
+    """K09：裁判与被测同源时分数不成立，按数据无效处理（而不是拿自评去拦发布）。"""
+    decision = evaluate_gate(
+        [result() for _ in range(9)] + [result(strict=False, risk="critical")],
+        strict_baseline=80,
+        judge_kappa=KAPPA_BLOCK_MIN,
+        judge_same_as_sut=True,
+    )
+    assert decision.status == "invalid"
+    assert decision.exit_code == 1
+    assert decision.metrics["judge_same_as_sut"] is True
+    assert any("同源" in reason for reason in decision.reasons)
+
+
+def test_same_source_flag_does_not_punish_a_clean_or_shadow_run():
+    """同源是配置错误：不传该标志时行为不变；shadow 模式仍只记录不阻断。"""
+    clean = evaluate_gate([result() for _ in range(10)], strict_baseline=80, judge_kappa=KAPPA_BLOCK_MIN)
+    assert clean.status == "passed" and clean.metrics["judge_same_as_sut"] is None
+
+    shadow = evaluate_gate([result(strict=False, risk="critical")], mode="shadow", judge_same_as_sut=True)
+    assert shadow.status == "shadow"
+    assert shadow.exit_code == 0
+    assert shadow.metrics["judge_same_as_sut"] is True
 
 
 def test_kappa_at_block_threshold_keeps_critical_blocking():
@@ -208,7 +269,7 @@ def test_gate_marks_judge_fallback_as_invalid():
 def test_gate_blocked_when_samples_are_trusted():
     """样本可信但模型真失败，仍然是 blocked。"""
     results = [result(strict=False, risk="critical") for _ in range(3)] + [result() for _ in range(7)]
-    decision = evaluate_gate(results, strict_baseline=80)
+    decision = evaluate_gate(results, strict_baseline=80, judge_kappa=KAPPA_BLOCK_MIN)
     assert decision.status == "blocked"
     assert decision.metrics["valid_rate"] == 100.0
 
@@ -387,6 +448,7 @@ def test_coverage_gap_appends_reason_when_blocked_by_critical():
     decision = evaluate_gate(
         [result(), result(strict=False, risk="critical")],
         strict_baseline=80,
+        judge_kappa=KAPPA_BLOCK_MIN,
         require_coverage=["C4"],
         coverage=coverage_with({"C4": 0}),
     )

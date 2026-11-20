@@ -440,6 +440,7 @@ def summarize(
     require_coverage: Optional[list] = None,
     coverage: Optional[dict] = None,
     judge_kappa: Optional[float] = None,
+    judge_same_as_sut: Optional[bool] = None,
 ) -> dict:
     run_meta = run_meta or {}
     stats = stats or {}
@@ -467,6 +468,7 @@ def summarize(
         require_coverage=require_coverage,
         coverage=coverage,
         judge_kappa=judge_kappa,
+        judge_same_as_sut=judge_same_as_sut,
     )
     stability = stability_metrics(results)
 
@@ -931,12 +933,17 @@ def generate_markdown(
     # 覆盖度无论是否要求都加载：报告要展示“这套用例能验证哪些控制项”，这是产品事实；
     # require_coverage 只决定要不要把 0 覆盖升级为门禁 warn。
     require_coverage = _parse_require_coverage(baseline.get("require_coverage", run_meta.get("require_coverage", "")))
-    # C02 κ 权限表：只有显式传入校准值才启用，不传则沿用旧行为（视为已授权）。
+    # C02 κ 权限表：能力类判据的阻断权只给显式校准过的裁判（T13 后 `unverified` 也归入只报告档）。
     # 回落要看“两侧都没有值”，不能看“baseline 有没有这个键”：重判会写入 judge_kappa=None，
-    # 那时 run_meta 里的值反而应该生效，否则同一批结果会从 warn 翻回 blocked。
+    # 那时 run_meta 里的值反而应该生效——丢了 κ，已获授权的批次会从 blocked 翻成 warn（放宽）。
     judge_kappa = baseline.get("judge_kappa")
     if judge_kappa is None:
         judge_kappa = run_meta.get("judge_kappa")
+    # K09 同源红线：同一个回落形状——重判写的可能是 None，不能让 baseline 里的 None
+    # 盖住 run_meta 的真值，否则同源批次会从 invalid 翻回正常判定。
+    same_as_sut = baseline.get("judge_same_as_sut")
+    if same_as_sut is None:
+        same_as_sut = run_meta.get("judge_same_as_sut")
     coverage = load_coverage_summary(
         baseline.get("coverage_matrix") or run_meta.get("coverage_matrix") or COVERAGE_MATRIX_PATH
     )
@@ -953,6 +960,7 @@ def generate_markdown(
         require_coverage=require_coverage,
         coverage=coverage,
         judge_kappa=judge_kappa,
+        judge_same_as_sut=same_as_sut,
     )
     # 声明的代际优先于算出来的：子集视图（探针集等）的文件指纹与语料不同，
     # 不声明就会被当成“下一代数据集”，在台账里伪造成一次代际切换，
@@ -1041,12 +1049,30 @@ def generate_markdown(
     model_label = f"`{summary['model']}`"
     if summary["model_version"] and summary["model_version"] != summary["model"]:
         model_label += f" ({summary['model_version']})"
+    # 裁判授权要在页眉看得见：很多人只读 report.md 的前十行就决定能不能引用这个分数，
+    # 「κ 标定没有、这一轮的能力判据没有阻断权」是比正文里某一句解释更硬的约束。
+    # 取 gate.metrics 里的值：那才是真正参与本轮判定的那一份，不是 run_meta 的原样回显。
+    gate_metrics = summary["gate"]["metrics"]
+    gate_kappa = gate_metrics.get("judge_kappa")
+    if gate_kappa is None:
+        kappa_label = "κ 未标定（能力判据仅报告，无阻断权）"
+    else:
+        kappa_label = f"κ={gate_kappa:.4f}（权限档 `{gate_metrics.get('kappa_authority')}`）"
+    same_source_flag = gate_metrics.get("judge_same_as_sut")
+    if same_source_flag is None:
+        same_source_flag = summary["judge_same_as_sut"]
+    same_source_label = (
+        "\n> ⚠️ **裁判与被测模型同源**：本轮分数是被测模型的自评，不构成能力结论"
+        "（K09 红线，门禁直接判 invalid，请配齐异源裁判三件套后重跑）"
+        if same_source_flag
+        else ""
+    )
     md = f"""# Agent-Quality-Gate 质量评测报告
 
 > **生成时间**：{timestamp}
 > **运行 ID**：`{summary['run_id']}`
 > **被测模型**：{model_label}
-> **裁判模型**：`{summary['judge_model']}`{'（与被测模型同源，需谨慎解读）' if summary['judge_same_as_sut'] else ''}
+> **裁判模型**：`{summary['judge_model']}` | **判据授权**：{kappa_label}{same_source_label}
 > **运行模式**：`{mode}` | **采样 seed**：`{summary['seed']}`
 > **数据集**：`{summary['dataset']}` | **SHA256**：`{summary['dataset_hash'][:16] or '-'}` | **代际**：`{summary['dataset_epoch'] or '-'}`
 {generation_block}> **Git**：`{summary['git_sha'] or '-'}`

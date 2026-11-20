@@ -1,6 +1,6 @@
 from run_eval import run_single_case
 
-from src.engine.gate import evaluate_gate
+from src.engine.gate import KAPPA_BLOCK_MIN, evaluate_gate
 from src.engine.report import generate_markdown, summarize
 from src.engine.stability import attempt_outcomes, merge_attempts, stability_metrics
 from src.models.schema import AttemptResult
@@ -92,7 +92,10 @@ def test_stability_metrics_without_attempts_reports_single_run():
 
 
 def test_gate_require_stable_blocks_flaky_run():
-    decision = evaluate_gate([flaky_result()], strict_baseline=80.0, require_stable=True)
+    # κ 到阻断档：pass^k 是能力类判据，没标定就没阻断权（另有用例测降级）。
+    decision = evaluate_gate(
+        [flaky_result()], strict_baseline=80.0, require_stable=True, judge_kappa=KAPPA_BLOCK_MIN
+    )
     assert decision.status == "blocked"
     assert any("pass^2" in reason for reason in decision.reasons)
     assert decision.metrics["pass_pow_k"] == 0.0

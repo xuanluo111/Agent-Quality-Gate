@@ -25,11 +25,23 @@ _STATE_REASONS = {STATE_MISMATCH_REASON, COLLATERAL_DAMAGE_REASON, STATE_POLLUTI
 KAPPA_BLOCK_MIN = 0.80
 KAPPA_REPORT_MIN = 0.60
 
+# T13：能力类判据的「只能报告」档。`unverified` 以前掉进了「全权」档，方向上是错的：
+# 那等于说「没做过标定」比「标定过但只有 0.60~0.80」拿到更大的权力。
+# 三页纸 §2.2 自己的主张是「κ、样本量、剔除规则、权限档四项缺一，结论只能进报告」，
+# 本表把这句主张落到代码：未标定 = 无权阻断。环境类判据（不经裁判的 harness 事件）不受影响。
+#
+# 口径边界（T13 没解决、也不假装解决了的）：这里的「能力类判据」是一个整桶，
+# 含 `judge_layer="rule"` 确定性断言判出的 Critical 与 Strict 通过率。把它整桶降级
+# 不是 T13 新发明的放宽：原有的 `report` 档（0.60≤κ<0.80）一直是整桶降级，T13 只是把
+# 未标定归到同一档。要让「确定性断言照旧阻断、只有 LLM 结论降档」，需要按 judge_layer
+# 拆桶（Critical 可拆，Strict/pass^k 是聚合量拆不干净），已登记为 T46（见 `docs/priority-2026q4/06-统一待做与排期-2619.md` §四 Backlog），不在本项里顺手改。
+REPORT_ONLY_AUTHORITIES = ("report", "unverified")
+
 
 def kappa_authority(kappa: Optional[float]) -> str:
     """把裁判校准度翻译成门禁权限。
 
-    - unverified：未提供 κ（opt-in 未开启），沿用旧行为，视为有权阻断；
+    - unverified：未提供 κ——**不属于任何一档**，能力类判据只报告不阻断（T13）；
     - block：κ ≥ 0.80，能力类判据可进 blocked；
     - report：0.60 ≤ κ < 0.80，能力类判据只报告不阻断；
     - untrusted：κ < 0.60，裁判结论不可采信，能力类失败判 invalid 而非 blocked。
@@ -41,6 +53,11 @@ def kappa_authority(kappa: Optional[float]) -> str:
     if kappa >= KAPPA_REPORT_MIN:
         return "report"
     return "untrusted"
+
+
+def _kappa_label(kappa: Optional[float]) -> str:
+    """给人看的 κ 标签：`unverified` 档根本没有值，不能拼 `κ=None` 也不能格式化。"""
+    return f"κ={kappa:.4f}" if kappa is not None else "κ 未标定"
 
 
 @dataclass
@@ -175,6 +192,7 @@ def evaluate_gate(
     require_coverage: Optional[List[str]] = None,
     coverage: Optional[dict] = None,
     judge_kappa: Optional[float] = None,
+    judge_same_as_sut: Optional[bool] = None,
 ) -> GateDecision:
     items = list(results)
     total = len(items)
@@ -267,6 +285,8 @@ def evaluate_gate(
         "scored_cases": len(scored),
         "judge_kappa": judge_kappa,
         "kappa_authority": authority,
+        # K09 同源红线：None = 调用方未告知（不做假设），True 直接判 invalid。
+        "judge_same_as_sut": judge_same_as_sut,
         "deferred_reasons": [],
         # 提示级（High 阈值）里被 κ 降为只报告的部分，不进 status/exit_code。
         "deferred_warning_reasons": [],
@@ -296,6 +316,24 @@ def evaluate_gate(
                 f"影子模式仅记录：Critical={critical}, High={high}, Strict={strict_rate:.2f}%",
                 f"可信样本 {valid_cases}/{total}（有效率 {valid_rate:.2f}%）",
                 *_coverage_gap_reasons(require_coverage, coverage),
+            ],
+            metrics,
+            diagnostics,
+        )
+
+    # K09 同源红线：裁判与被测模型是同一个系统时，“能力结论”就是被测模型的自评。
+    # 它不属于任何 κ 权限档，也不能靠 κ 补救（自评的一致度只会虚高），所以排在
+    # 有效率判定之前：这是配置错误，不是模型行为，本轮分数不成立。
+    # shadow 模式不走这里（已在上方 early return）：它的契约是只记录、不阻断。
+    if judge_same_as_sut:
+        return GateDecision(
+            "invalid",
+            1,
+            True,
+            [
+                "裁判与被测模型同源（judge_same_as_sut=true）：本轮分数是被测模型的自评，不构成能力结论",
+                "请显式配置异源裁判三件套（AQG_JUDGE_MODEL／AQG_JUDGE_BASE_URL／AQG_JUDGE_API_KEY）后重跑；"
+                "裁判配置缺省会回落到被测模型（见 config.py 的 __post_init__），这比报错静默得多",
             ],
             metrics,
             diagnostics,
@@ -385,12 +423,12 @@ def evaluate_gate(
             metrics,
             diagnostics,
         )
-    # 0.60 ≤ κ < 0.80：能力判据降级为只报告（warn），不替模型背发布结论。
-    # κ < 0.60 时阻断级判据已在上方判 invalid，剩下的只有 High 这类提示级判据——
-    # 它不足以构成“数据无效”，一并降为只报告，否则 warn 级信号会打出 exit 1。
+    # 0.60 ≤ κ < 0.80，以及根本未标定的 unverified：能力判据降级为只报告（warn），
+    # 不替模型背发布结论。κ < 0.60 时阻断级判据已在上方判 invalid，剩下的只有 High
+    # 这类提示级判据——它不足以构成“数据无效”，一并降为只报告，否则 warn 级信号会打出 exit 1。
     deferred_blocking: List[str] = []
     deferred_noted: List[str] = []
-    if authority == "report":
+    if authority in REPORT_ONLY_AUTHORITIES:
         deferred_blocking, deferred_noted = list(capability_reasons), list(capability_warnings)
         capability_reasons, capability_warnings = [], []
     elif authority == "untrusted":
@@ -409,7 +447,7 @@ def evaluate_gate(
             # 拦截时也必须点名只报告项：本分支的 reasons 可能只剩环境类原因，
             # 不补这一句，报告读者会以为本轮根本没判出 Critical。
             reasons = reasons + [
-                f"另有 {len(deferred)} 条能力判据（裁判 κ={judge_kappa:.4f} 未达阻断档）仅报告："
+                f"另有 {len(deferred)} 条能力判据（裁判 {_kappa_label(judge_kappa)} 未获阻断授权）仅报告："
                 + "；".join(deferred)
             ]
         # 覆盖缺口不升级 blocked：它随数据集走，与本轮模型行为无关。能力判定已经要
@@ -427,14 +465,21 @@ def evaluate_gate(
     # 降级成 warn（退出码 2）。与「未测到单列、不当通过也不当答错」是同一条纪律。
     coverage_reasons = _coverage_gap_reasons(require_coverage, coverage)
     if deferred_blocking:
+        if authority == "unverified":
+            head = (
+                "未提供裁判 κ 标定值（kappa_authority=unverified）：能力判据仅报告，不阻断发布"
+                "（标定后用 --judge-kappa 显式传入即可恢复阻断权）"
+            )
+        else:
+            head = (
+                f"裁判 κ={judge_kappa:.4f} 落在 [{KAPPA_REPORT_MIN:.2f}, {KAPPA_BLOCK_MIN:.2f})："
+                "能力判据仅报告，不阻断发布"
+            )
         return GateDecision(
             "warn",
             2,
             True,
-            [
-                f"裁判 κ={judge_kappa:.4f} 落在 [{KAPPA_REPORT_MIN:.2f}, {KAPPA_BLOCK_MIN:.2f})："
-                "能力判据仅报告，不阻断发布"
-            ]
+            [head]
             + [f"仅报告：{reason}" for reason in deferred]
             + coverage_reasons,
             metrics,

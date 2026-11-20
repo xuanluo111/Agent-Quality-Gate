@@ -1,6 +1,7 @@
 import json
 
 import visualize_reports
+from src.engine.gate import KAPPA_BLOCK_MIN
 from src.engine.report import gate_brief, generate_markdown, summarize, update_risk_ledger
 from tests.conftest import make_result
 
@@ -70,7 +71,11 @@ def sample_results():
 
 
 def test_summarize_rates_ci_and_legacy_keys():
-    summary = summarize(sample_results(), run_meta=run_meta(), stats=stats(), strict_baseline=80)
+    # κ 显式给到阻断档：本用例测的是「已获授权 → 能力失败判 blocked → 报告渲染」这条路径。
+    # 「未标定即无阻断权」由 test_gate.py 覆盖，不能靠在这里留空 κ 来测。
+    summary = summarize(
+        sample_results(), run_meta=run_meta(), stats=stats(), strict_baseline=80, judge_kappa=KAPPA_BLOCK_MIN
+    )
     assert summary["total_cases"] == 4
     assert summary["standard_pass"] == 3
     assert summary["strict_pass"] == 2
@@ -99,7 +104,7 @@ def test_generate_markdown_summary_and_ledger(tmp_path):
     summary = generate_markdown(
         sample_results(),
         str(report_path),
-        run_meta=run_meta(),
+        run_meta=dict(run_meta(), judge_kappa=KAPPA_BLOCK_MIN),
         stats=stats(),
         ledger_path=str(ledger_path),
     )
@@ -874,6 +879,36 @@ def test_generate_markdown_falls_back_to_run_meta_when_baseline_kappa_is_none(tm
     assert gate["metrics"]["deferred_reasons"]
 
 
+def test_report_header_states_judge_authority(tmp_path):
+    """κ 与权限档必须写在页眉：只读前十行的人也要能判断这个分数能不能引用。"""
+    calibrated = tmp_path / "calibrated.md"
+    generate_markdown(
+        sample_results(), str(calibrated), run_meta=dict(run_meta(), judge_kappa=KAPPA_BLOCK_MIN), write_ledger=False
+    )
+    text = calibrated.read_text(encoding="utf-8")
+    assert f"κ={KAPPA_BLOCK_MIN:.4f}（权限档 `block`）" in text
+    assert "κ 未标定" not in text
+
+    # 未标定不能伪装成“已授权”：页眉得直接说出能力判据没有阻断权。
+    uncalibrated = tmp_path / "uncalibrated.md"
+    generate_markdown(sample_results(), str(uncalibrated), run_meta=run_meta(), write_ledger=False)
+    assert "κ 未标定（能力判据仅报告，无阻断权）" in uncalibrated.read_text(encoding="utf-8")
+
+
+def test_report_header_flags_same_source_judge_as_red_line(tmp_path):
+    """K09：同源不是“谨慎解读”的提示，而是本轮分数不成立，报告页眉要说清。"""
+    run_md = tmp_path / "same-source.md"
+    summary = generate_markdown(
+        sample_results(),
+        str(run_md),
+        run_meta=dict(run_meta(), judge_same_as_sut=True),
+        write_ledger=False,
+    )
+    assert summary["gate"]["status"] == "invalid"
+    text = run_md.read_text(encoding="utf-8")
+    assert "裁判与被测模型同源" in text and "不构成能力结论" in text
+
+
 def test_gate_label_without_deferred_stays_unchanged():
     """opt-in 未开启时不能凭空多出一句“仅报告”。"""
     from src.engine.report import _gate_label
@@ -905,7 +940,7 @@ def test_gate_label_does_not_repeat_deferred_twice():
         "status": "blocked",
         "reasons": [
             "1 条用例因 Harness 异常未完成评测（失败关闭）",
-            "另有 1 条能力判据（裁判 κ=0.7000 未达阻断档）仅报告：存在 1 个 Critical 级严格失败",
+            "另有 1 条能力判据（裁判 κ=0.7000 未获阻断授权）仅报告：存在 1 个 Critical 级严格失败",
         ],
         "metrics": {"deferred_reasons": ["存在 1 个 Critical 级严格失败"]},
     }

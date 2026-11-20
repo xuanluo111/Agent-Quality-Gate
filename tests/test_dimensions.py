@@ -1,3 +1,4 @@
+from src.engine.gate import KAPPA_BLOCK_MIN
 from src.engine.report import dimension_breakdown, generate_markdown, summarize
 from tests.conftest import make_result
 
@@ -98,7 +99,8 @@ def test_mixed_dimension_reports_wilson_interval():
 
 def test_report_renders_dimension_table_without_weighted_score(tmp_path):
     results = [ok("a1"), ok("a2"), bad("b1", category="prompt_injection")]
-    summary = summarize(results)
+    # κ 到阻断档：下面要断言的是「blocked 状态下维度表仍不分权重」，不是权限本身。
+    summary = summarize(results, judge_kappa=KAPPA_BLOCK_MIN)
     assert summary["gate"]["status"] == "blocked"
     rows = summary["dimension_breakdown"]
     assert row(rows, "gate_status", summary["gate"]["status"])["n"] == 3

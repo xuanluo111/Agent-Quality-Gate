@@ -103,12 +103,12 @@ def test_build_command_supports_no_publish(tmp_path):
 
 
 def test_build_command_passes_judge_kappa(tmp_path):
-    """κ 权限表必须能从清单透传到子进程，否则批跑会静默退回“不传 κ”的旧行为。"""
+    """κ 权限表必须能从清单透传到子进程：没透传就等于未标定，能力判据会静默失去阻断权。"""
     spec = {"name": "m", "model": "m", "base_url": "u", "limit": 0, "judge_kappa": 0.8412}
     command = run_batch.build_command(spec, "run-1", tmp_path, False, False)
     assert "--judge-kappa" in command
     assert command[command.index("--judge-kappa") + 1] == "0.8412"
-    # 未配置时不传，保持旧行为。
+    # 未配置时不硬造一个值：不传就是未标定（unverified），由门禁自己做权限判定。
     default = run_batch.build_command(
         {"name": "m", "model": "m", "base_url": "u", "limit": 0}, "run-1", tmp_path, False, False
     )
@@ -143,3 +143,26 @@ def test_summary_marks_invalid_rows_as_uncomparable(tmp_path):
     assert "Strict(仅可信)" in text
     assert "不能与其他模型横向对比" in text
     assert "仅 1/120 条样本可信" in text
+
+
+def test_summary_states_same_source_judge_is_a_red_line():
+    """K09：同源场次要说成“分数不成立、需重跑”，不能写成“判分需打折”。"""
+    rows = [
+        {
+            "name": "self-judged",
+            "status": "invalid",
+            "suite": "core",
+            "limit": 0,
+            "duration_s": 10.0,
+            "metrics": {
+                "total_cases": 10,
+                "judge_model": "self-judged",
+                "judge_same_as_sut": True,
+                "gate": {"status": "invalid"},
+            },
+        }
+    ]
+    meta = {"on_error": "continue", "on_gate": "stop", "update_regression": False}
+    text = run_batch.render_summary("batch-test", meta, rows)
+    assert "裁判与被测模型同源" in text and "不构成能力结论" in text
+    assert "打折" not in text
