@@ -482,6 +482,12 @@ class EvalResult(BaseModel):
     # 不参与判负（判负仍只认 jcv_score < jcv_threshold）。属运行输出字段，不碰数据集 → 不切代。
     jcv_precision: Optional[float] = Field(default=None, description="变量抽取精确率 |交集|/|实际|，越低越冗余；仅归因不判负")
     jcv_recall: Optional[float] = Field(default=None, description="变量抽取召回率 |交集|/|预期|，越低越漏抽；仅归因不判负")
+    # T23 轨迹冗余（RM-03 改造）：同参重复 / 短周期自环的量化观测。与 jcv_precision 同族——
+    # 只作告警与报告呈现，**不进 gate、不改 passed/strict_passed**（区别于会阻断的 retry_storm：
+    # 后者是 retry_count≥2 经 _fail 落 Strict 失败，本字段只登记冗余程度，不判负）。
+    redundant_calls: int = Field(default=0, description="重复的工具调用次数：同 (name,args) 超出首次的调用 + 短周期自环的重复块")
+    redundancy_rate: float = Field(default=0.0, description="冗余调用率 redundant_calls/工具调用总数（0~1）；仅归因不判负")
+    redundancy_warning: bool = Field(default=False, description="同参重复≥3 次或检出短周期自环：仅告警，不影响门禁")
     data_valid: bool = Field(default=True, description="该样本是否真正测到了被测模型；Runner/网关异常时为 False")
     no_final_response: bool = Field(default=False, description="Harness 未能从模型拿到收尾答复")
     output_truncated: bool = Field(default=False, description="输出被 max_tokens 截断，样本不可信")

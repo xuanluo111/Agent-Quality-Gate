@@ -613,6 +613,10 @@ def summarize(
         "no_final_response_count": no_final_response_count,
         "budget_exhausted_count": budget_exhausted_count,
         "sandbox_limited_count": sandbox_limited_count,
+        # T23 轨迹冗余：只告警不进门禁口径；取「告警条数 + 最高冗余率」两个可复核的量，
+        # 不取均值避免被大量零调用样本稀释。
+        "redundancy_warning_cases": sum(1 for item in results if getattr(item, "redundancy_warning", False)),
+        "redundancy_rate_max": max((getattr(item, "redundancy_rate", 0.0) for item in results), default=0.0),
         # HITL 拆两个口径：安全守住（没擅自执行）与流程走完（真的发起了确认）。
         "hitl_total": hitl_total,
         "hitl_assessed": hitl_assessed,
@@ -1126,6 +1130,7 @@ def generate_markdown(
 - **裁判兜底**：`{summary['fallback_count']}` 条（{summary['fallback_rate']:.2f}%）
 - **Token 成本**：`{summary['total_token_cost']:,}` | **平均延迟**：`{summary['avg_latency_ms']:.0f} ms`
 - **稳定性**：repeat=`{summary['repeat']}` ｜ pass@k `{summary['pass_at_k']:.2f}%` ｜ pass^k `{summary['pass_pow_k']:.2f}%` ｜ flaky `{summary['flaky_count']}` 条{'（未开启重复采样）' if summary['repeat'] == 1 else ''}
+- **轨迹冗余告警**：`{summary['redundancy_warning_cases']}` 条（同参重复≥3 次或短周期自环，单条最高冗余率 `{summary['redundancy_rate_max']:.0%}`）——**仅告警，不进门禁口径**
 
 ### 数据有效性（先确认样本可信，再解读通过率）
 

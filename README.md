@@ -79,6 +79,7 @@
 | 真实工具调用 | OpenAI-compatible function calling，支持多轮工具结果回填 |
 | 受控执行 | 进程内沙箱：相对路径隔离、读写大小限制、命令白名单 `pwd/ls/cat/echo`、拒绝 shell 元字符 |
 | 工具审计 | 记录参数、结果、错误、是否被阻断、调用顺序、重复调用次数 |
+| 轨迹冗余检测（T23） | 从 `tool_call_params` 量测冗余：同 (工具, 参数) 重复＋短周期自环（周期≤3 的块连续重复）→ `redundant_calls` / `redundancy_rate`；同参重复≥3 次或检出自环时置 `redundancy_warning`。**只告警不阻断**：三字段与 `jcv_precision` 同族（仅归因），不进门禁口径（区别于 `retry_storm` 的 Strict 失败），报告在结论摘要区单列告警条数与最高冗余率 |
 | 数据分级路由 | S1 直接上云；S2 在发送前对输入、工具结果、审计记录和最终回复做脱敏；S3 无本地端点时在 Harness 层阻断，不上云 |
 | JCV 变量校验 | 从 CSV/JSON/Markdown 表格/`key=value` 等真实数据型工具结果中启发式抽取变量，计算 Jaccard 重合度 |
 | 抽象能力判别（G3/VRI） | 声明式抽象工件：模型须先调 `formalize` 提交变量与角色（X/Y/XY/NA）；跳过抽象直接动手记 `Fail_Abstraction`（planning 阶段），名字过关但角色标错记 `Variable_Role_Mismatch`（understanding 阶段）；两者均只扣 Strict、Standard 仍过；仅 `requires_abstraction=true` 的用例启用，存量用例字节不受影响 |
@@ -630,9 +631,9 @@ python -m pytest -q
 python scripts/selfcheck_oracles.py   # C01 判据自检：题目可信度审计（同样 0 成本）
 ```
 
-测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、判据指纹（覆盖范围／分层归属／历史缺值回落）、判据自检回路（正反参照/漏网检出/诚实分母）、门禁分支、数据加载/去重/采样、排名统计（Holm–Bonferroni 校正、效应量、A/B/C 置信等级）、报告与台账（含 M1 责任派发与签字校验）、Markdown/summary 可视化解析（含同名模型多场只取最新一场的统计口径）、人工标注模板与复核表渲染（只透执行事实、不透裁判结论）、自检脚本自身的体检规则（声明条数对齐、入库件本机身份扫描）、开跑前 key 生效自检（与 `run_batch` 同一条取 key 链，单测不打网络）、裁判 token 烧速外推（钉桩 `results.jsonl`）与外发打包前的本机身份预检（`pack_originality --scan-paths/--scan-only`）、PR 门禁摘要评论渲染（`pr_comment`：表行/阻断原因/缺字段降级/取最新批次与 dryrun 副产物剔除）。
+测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、判据指纹（覆盖范围／分层归属／历史缺值回落）、判据自检回路（正反参照/漏网检出/诚实分母）、门禁分支、数据加载/去重/采样、排名统计（Holm–Bonferroni 校正、效应量、A/B/C 置信等级）、报告与台账（含 M1 责任派发与签字校验）、Markdown/summary 可视化解析（含同名模型多场只取最新一场的统计口径）、人工标注模板与复核表渲染（只透执行事实、不透裁判结论）、自检脚本自身的体检规则（声明条数对齐、入库件本机身份扫描）、开跑前 key 生效自检（与 `run_batch` 同一条取 key 链，单测不打网络）、裁判 token 烧速外推（钉桩 `results.jsonl`）与外发打包前的本机身份预检（`pack_originality --scan-paths/--scan-only`）、PR 门禁摘要评论渲染（`pr_comment`：表行/阻断原因/缺字段降级/取最新批次与 dryrun 副产物剔除）、轨迹冗余检测（T23：同参≥3 次与短周期自环告警线、不阻断判定铁锚、gate 不消费字段钉桩）。
 
-> **全仓唯一一处单测条数声明**：**772 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-21 实测，含 1 条 `xfail(strict)` 已知缺口钉桩）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档。这条对齐已由 `verify.py` 的「声明条数自检」机器化：新增了用例却没同步声明、或只改了中英其中一份，自检直接判红；其它地方出现具体条数仍算口径重复声明。
+> **全仓唯一一处单测条数声明**：**779 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-22 实测，含 1 条 `xfail(strict)` 已知缺口钉桩）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档。这条对齐已由 `verify.py` 的「声明条数自检」机器化：新增了用例却没同步声明、或只改了中英其中一份，自检直接判红；其它地方出现具体条数仍算口径重复声明。
 
 GitHub Actions 主要做离线检查：安装依赖、运行 pytest、校验供应链锁定完整性、重建数据集、执行 smoke dry-run，不会调用真实模型；另有一个 `supply-chain` 作业从 `requirements.lock` 生成 CycloneDX SBOM 并跑 `pip-audit`（咨询级漏洞扫描）。真实评测请在本地配置 `.env` 后手动运行。
 

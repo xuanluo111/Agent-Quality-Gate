@@ -5,6 +5,7 @@ from src.engine.judge import (
     JUDGE_SYSTEM_PROMPT,
     LayeredJudge,
     compute_role_accuracy,
+    compute_trajectory_redundancy,
     compute_variable_pr,
     egress_attempts,
     escalation_summary_gaps,
@@ -1187,3 +1188,82 @@ def test_fingerprint_is_not_a_gate_input():
     from src.engine import gate as gate_module
 
     assert "judge_prompt_version" not in inspect.getsource(gate_module)
+
+
+# ---------- T23 轨迹冗余：只告警不阻断 ----------
+
+def _same_calls(name="file_read", args=None, n=3):
+    args = args if args is not None else {"path": "users.csv"}
+    return [{"name": name, "arguments": dict(args), "ok": True, "blocked": False} for _ in range(n)]
+
+
+def test_redundancy_three_identical_calls_warns():
+    """验收锚点（T23）：同参重复 3 次 → 告警字段非空，冗余计数取超出首次的部分。"""
+    trace = make_trace(tool_call_params=_same_calls(n=3), tool_call_count=3)
+    redundant, rate, warning = compute_trajectory_redundancy(trace)
+    assert redundant == 2
+    assert rate == round(2 / 3, 4)
+    assert warning is True
+
+
+def test_redundancy_double_call_below_threshold():
+    """同参只重复一次（共 2 次）是常见重试语义：记率不告警，告警线压在≥3 次。"""
+    trace = make_trace(tool_call_params=_same_calls(n=2), tool_call_count=2)
+    redundant, rate, warning = compute_trajectory_redundancy(trace)
+    assert redundant == 1
+    assert warning is False
+
+
+def test_redundancy_short_loop_detected():
+    """A-B-A-B 短周期自环：每个签名只重复 2 次未到同参告警线，但周期结构必须检出。"""
+    block = [
+        {"name": "file_read", "arguments": {"path": "a.csv"}, "ok": True},
+        {"name": "list_dir", "arguments": {"path": "."}, "ok": True},
+    ]
+    trace = make_trace(tool_call_params=block * 2, tool_call_count=4)
+    redundant, rate, warning = compute_trajectory_redundancy(trace)
+    assert warning is True
+    assert redundant == 2
+    assert rate == 0.5
+
+
+def test_redundancy_same_args_different_name_not_merged():
+    """不同工具同参数不算冗余：签名必须是 (name, args) 二元，否则 read(a) 与 exec(a) 会被误合。"""
+    trace = make_trace(
+        tool_call_params=[
+            {"name": "file_read", "arguments": {"path": "a"}, "ok": True},
+            {"name": "execute_command", "arguments": {"path": "a"}, "ok": True},
+        ],
+        tool_call_count=2,
+    )
+    assert compute_trajectory_redundancy(trace) == (0, 0.0, False)
+
+
+def test_redundancy_empty_trace():
+    """无工具调用的轨迹不能造出除零或假告警。"""
+    assert compute_trajectory_redundancy(make_trace()) == (0, 0.0, False)
+
+
+def test_redundancy_warning_never_changes_verdict():
+    """不阻断的铁锚：warning=True 时判定仍归裁判——Standard/Strict 照常通过。
+    对比：会阻断的重试风暴走 _fail 直接把 strict_passed 打成 False。"""
+    judge = LayeredJudge(client=FakeClient([judge_response(True, True)]), model="judge", samples=1)
+    result = judge.evaluate(
+        make_case(), make_trace(tool_call_params=_same_calls(n=3), tool_call_count=3)
+    )
+    assert result.redundancy_warning is True
+    assert result.redundant_calls == 2
+    assert result.passed is True
+    assert result.strict_passed is True
+    assert result.fail_reason == "None"
+
+
+def test_redundancy_fields_are_not_gate_inputs():
+    """gate 不得消费冗余字段：一旦拿来判红，「只告警不阻断」的纪律就被打破。"""
+    import inspect
+
+    from src.engine import gate as gate_module
+
+    src_text = inspect.getsource(gate_module)
+    for field in ("redundancy_warning", "redundancy_rate", "redundant_calls"):
+        assert field not in src_text

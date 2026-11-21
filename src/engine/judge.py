@@ -776,6 +776,46 @@ def pr_attribution(precision: Optional[float], recall: Optional[float]) -> str:
     return f"P={p_txt} R={r_txt} → {tag}"
 
 
+def compute_trajectory_redundancy(trace: AgentTrace) -> Tuple[int, float, bool]:
+    """T23（RM-03 改造）：从轨迹量测冗余——只告警不阻断。
+
+    两条正交信号（与会阻断的 retry_storm 分开：那个是 retry_count≥2 经 _fail 落 Strict）：
+      1) 同参重复：同一 (name, 序列化 args) 超首次的调用，全部计入 redundant_calls；
+      2) 短周期自环：周期 P∈{2,3} 的连续重复块≥ 2 轮（如 A-B-A-B），哪怕单次不算“同参重复”也判为自环。
+    返回 (redundant_calls, redundancy_rate, warning)。warning 仅当同参重复≥ 3 次或检出自环；
+    rate 供报告聚合，本身不判负。空轨迹/无工具调用 → (0, 0.0, False)。
+    """
+    params = trace.tool_call_params or []
+    sigs: List[Tuple[str, str]] = []
+    for call in params:
+        if not isinstance(call, dict):
+            continue
+        name = str(call.get("name", ""))
+        try:
+            args = json.dumps(call.get("arguments") or {}, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError):
+            args = str(call.get("arguments"))
+        sigs.append((name, args))
+    total = len(sigs) or (trace.tool_call_count or 0)
+    counts: Dict[Tuple[str, str], int] = {}
+    for sig in sigs:
+        counts[sig] = counts.get(sig, 0) + 1
+    redundant_calls = sum(c - 1 for c in counts.values() if c > 1)
+    max_repeat = max(counts.values(), default=0)
+    # 短周期自环：周期 P 的块紧接一轮完全相同的块（A-B-A-B…），P=1 已由同参重复覆盖。
+    self_loop = False
+    for period in (2, 3):
+        for i in range(len(sigs) - 2 * period + 1):
+            if sigs[i:i + period] == sigs[i + period:i + 2 * period]:
+                self_loop = True
+                break
+        if self_loop:
+            break
+    warning = max_repeat >= 3 or self_loop
+    rate = round(redundant_calls / total, 4) if total else 0.0
+    return redundant_calls, rate, warning
+
+
 class LayeredJudge:
     def __init__(
         self,
@@ -814,6 +854,8 @@ class LayeredJudge:
         result.output_truncated = bool(trace.output_truncated)
         result.sandbox_limited = bool(trace.sandbox_limitations)
         result.provenance_violations = provenance
+        # T23 轨迹冗余：无论哪一层出的结论都挂上观测字段；只告警不阻断，gate 不消费这三个字段。
+        result.redundant_calls, result.redundancy_rate, result.redundancy_warning = compute_trajectory_redundancy(trace)
         result.state_diff = trace.state_diff or diff_states(trace.state_before, trace.state_after)
         # 完成度由终态断言推导，只活在 trace 上；不回填的话报告里的完成度分布永远是 unknown。
         result.completion = getattr(trace, "completion", "unknown") or "unknown"
