@@ -112,3 +112,100 @@ def test_main_builds_zip_with_proof_and_draft(tmp_path):
         assert "| 段 1 | 2 | 2 |" in proof
         assert "| 段 2 | 1 | 1 |" in proof
         assert zf.read("01-正文问答底稿.md").decode("utf-8") == DRAFT_OK
+
+
+# ---------- 待拍板 #11：外发前身份预检 ----------
+
+FAKE_USER = "testid-user"
+FAKE_HOME = "/Users/testid-user"
+
+
+def fake_identity(monkeypatch):
+    monkeypatch.setenv("USER", FAKE_USER)
+    monkeypatch.setenv("LOGNAME", FAKE_USER)
+    monkeypatch.setenv("HOME", FAKE_HOME)
+
+
+def test_scan_text_for_identity_finds_user_and_home():
+    tokens = po.identity_tokens(FAKE_USER, FAKE_HOME)
+    assert po.scan_text_for_identity(f"路径 {FAKE_HOME}/x 与用户 {FAKE_USER}", tokens) == \
+        sorted([FAKE_USER, FAKE_HOME])
+    assert po.scan_text_for_identity("干净文本 someuser", tokens) == []
+    # 空 token 集（CI 通用身份）不得把任何文件报成命中
+    assert po.scan_text_for_identity("anything", po.identity_tokens("runner", "/home/runner")) == []
+
+
+def test_iter_scan_files_skips_binary_and_expands_dirs(tmp_path):
+    (tmp_path / "a.md").write_text(f"{FAKE_USER}\n", encoding="utf-8")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / "b.bin").write_bytes(b"\0" + FAKE_USER.encode())
+    (sub / "c.txt").write_text("clean\n", encoding="utf-8")
+    files = po.iter_scan_files([tmp_path])
+    names = sorted(f.name for f in files)
+    assert names == ["a.md", "c.txt"]  # 二进制被 NUL 嗅探跳过，目录被递归展开
+
+
+def test_main_refuses_pack_when_draft_contains_identity(tmp_path, monkeypatch, capsys):
+    fake_identity(monkeypatch)
+    draft = tmp_path / "draft.md"
+    draft.write_text(DRAFT_OK + f"\n备注：发给 {FAKE_USER}\n", encoding="utf-8")
+    report = tmp_path / "report.md"
+    report.write_text("# 报告\n", encoding="utf-8")
+    out = tmp_path / "out.zip"
+
+    code = po.main(["--draft", str(draft), "--report", str(report), "--out", str(out)])
+
+    assert code == 4
+    assert not out.exists()
+    assert FAKE_USER in capsys.readouterr().err
+
+
+def test_main_scan_paths_hit_in_archive_refuses_pack(tmp_path, monkeypatch):
+    """包里去的文件都干净，但点名的本机归档含身份——同样拒绝成包（#11 的扩面动机）。"""
+    fake_identity(monkeypatch)
+    draft = tmp_path / "draft.md"
+    draft.write_text(DRAFT_OK, encoding="utf-8")
+    report = tmp_path / "report.md"
+    report.write_text("# 报告\n", encoding="utf-8")
+    archive = tmp_path / ".reports-archive-x"
+    archive.mkdir()
+    (archive / "note.md").write_text(f"归属 {FAKE_HOME}\n", encoding="utf-8")
+    out = tmp_path / "out.zip"
+
+    code = po.main(["--draft", str(draft), "--report", str(report), "--out", str(out),
+                    "--scan-paths", str(archive)])
+
+    assert code == 4 and not out.exists()
+
+
+def test_main_scan_only_reports_without_packing(tmp_path, monkeypatch):
+    fake_identity(monkeypatch)
+    archive = tmp_path / "ws"
+    archive.mkdir()
+    (archive / "f.md").write_text(f"{FAKE_USER}\n", encoding="utf-8")
+    out = tmp_path / "out.zip"
+
+    code = po.main(["--draft", str(tmp_path / "missing.md"),
+                    "--scan-only", "--scan-paths", str(archive), "--out", str(out)])
+
+    assert code == 4
+    assert not out.exists()  # scan-only 永远不成包，哪怕目录干净
+    clean = tmp_path / "clean.md"
+    clean.write_text("没事\n", encoding="utf-8")
+    assert po.main(["--draft", str(clean), "--scan-only"]) == 0
+
+
+def test_main_identity_gate_is_noop_without_real_identity(tmp_path, monkeypatch):
+    """CI 里的通用身份（runner）不该把任何包拦下来：tokens 为空则预检直接放行。"""
+    monkeypatch.setenv("USER", "runner")
+    monkeypatch.setenv("LOGNAME", "runner")
+    monkeypatch.setenv("HOME", "/home/runner")
+    draft = tmp_path / "draft.md"
+    draft.write_text(DRAFT_OK, encoding="utf-8")
+    report = tmp_path / "report.md"
+    report.write_text("# 报告\n", encoding="utf-8")
+    out = tmp_path / "out.zip"
+
+    assert po.main(["--draft", str(draft), "--report", str(report), "--out", str(out)]) == 0
+    assert out.exists()

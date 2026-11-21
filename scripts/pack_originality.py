@@ -53,6 +53,56 @@ _SUSPECT = (
     ("本地绝对路径", re.compile(r"/Users/[A-Za-z]")),
 )
 
+# 待拍板第 11 行：verify 的身份门禁只扫**已跟踪**文件，而外发归档走的是另一条路
+# （本机 .reports-archive-*/、workspace/ 这些 gitignore 掉的缓存不会出现在 git grep 里，
+# 但打包/发人时会带上）。身份字面量复用 verify 的单一定义源，不另起一份词表。
+try:
+    from verify import current_identity_env, identity_tokens
+except ImportError:  # 以 scripts.pack_originality 包形式被测试导入时
+    from scripts.verify import current_identity_env, identity_tokens
+
+# 扫描面：二进制嗅探（前 1KiB 含 NUL 即跳）＋体积上限，避免拿文本扫描去啃镜像/压缩包。
+_MAX_SCAN_BYTES = 50 * 1024 * 1024
+
+
+def scan_text_for_identity(text: str, tokens: set) -> list:
+    """返回命中的身份字面量（排序）；空集/无命中返回 []，不回显整行内容。"""
+    return sorted(t for t in tokens if t and t in text)
+
+
+def iter_scan_files(paths) -> "list[Path]":
+    """把文件/目录展开成可扫描的文本文件清单（不跟随符号链接，跳过二进制与超大文件）。"""
+    files = []
+    for p in paths:
+        candidates = [p] if p.is_file() else (sorted(p.rglob("*")) if p.is_dir() else [])
+        for f in candidates:
+            if not f.is_file() or f.is_symlink() or f.is_socket():
+                continue
+            try:
+                if f.stat().st_size > _MAX_SCAN_BYTES:
+                    continue
+                with f.open("rb") as fh:
+                    if b"\0" in fh.read(1024):
+                        continue
+            except OSError:
+                continue
+            files.append(f)
+    return files
+
+
+def scan_paths_for_identity(paths, tokens: set) -> list:
+    """返回 [(文件路径, [命中 token])]；只报文件名与命中的字面量，不回显上下文。"""
+    hits = []
+    for f in iter_scan_files(paths):
+        try:
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        found = scan_text_for_identity(text, tokens)
+        if found:
+            hits.append((str(f), found))
+    return hits
+
 
 def parse_qa(text: str) -> list[dict[str, str]]:
     """把底稿拆成 [{qid, question, answer}]，保持原文顺序。"""
@@ -175,7 +225,28 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="存在空答时仍然打包（仅用于预览包结构，不可提交）",
     )
+    ap.add_argument(
+        "--scan-paths",
+        nargs="*",
+        type=Path,
+        default=[],
+        help="外发前预检：额外扫描指定文件/目录（如本机归档 .reports-archive-*/、workspace/），命中身份字面量即拒绝",
+    )
+    ap.add_argument("--scan-only", action="store_true", help="只扫描不打包（退出码 0=干净，4=命中）")
     args = ap.parse_args(argv)
+
+    if args.scan_only:
+        user, home = current_identity_env()
+        tokens = identity_tokens(user, home)
+        if not tokens:
+            print("取不到本机身份（USER/HOME 为空或通用），无可扫字面量。", file=sys.stderr)
+            return 0
+        targets = [p for p in (args.draft, args.report) if p.exists()] + list(args.scan_paths)
+        hits = scan_paths_for_identity(targets, tokens)
+        for path, found in hits:
+            print(f"身份命中 {path}: {', '.join(found)}", file=sys.stderr)
+        print(f"预检完成：{len(targets)} 个目标，{len(hits)} 个文件含本机身份字面量。", file=sys.stderr)
+        return 4 if hits else 0
 
     if not args.draft.exists():
         print(f"找不到底稿: {args.draft}", file=sys.stderr)
@@ -204,6 +275,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {label}：{snippet}…", file=sys.stderr)
         print("底稿按约定不改不删，请本人改完再打。", file=sys.stderr)
         return 3
+
+    # 身份预检（待拍板 #11）：包里去的每样东西＋点名要扫的本机归档，任一命中即拒绝外发。
+    user, home = current_identity_env()
+    tokens = identity_tokens(user, home)
+    if tokens:
+        identity_hits = scan_paths_for_identity(
+            [args.draft, args.report, *args.scan_paths], tokens)
+        if identity_hits:
+            print(f"本机身份字面量命中 {len(identity_hits)} 个文件，拒绝成包：", file=sys.stderr)
+            for path, found in identity_hits:
+                print(f"  - {path}: {', '.join(found)}", file=sys.stderr)
+            print("这些字面量不会随 git 入库被门禁看见，但会随外发包出去——先清理再打。", file=sys.stderr)
+            return 4
 
     proof = build_proof(args.draft, args.report, items)
     args.out.parent.mkdir(parents=True, exist_ok=True)
