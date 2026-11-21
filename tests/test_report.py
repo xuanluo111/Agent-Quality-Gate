@@ -1017,3 +1017,57 @@ def test_relative_report_path_never_returns_absolute(tmp_path):
     assert relative_report_path(nested) == "reports/runs/r1/report.md"
     assert relative_report_path(Path("/elsewhere/report.md")) == "report.md"
     assert str(tmp_path) not in relative_report_path(nested)
+
+
+# ---------------------------------------------------------------------------
+# T29 证据分级进报告与台账：evidence_type 列＋结论摘要披露行（三分法是
+# AQG 自定口径非信通院标准，出处补核见 schema 注释与 06 T29 登记）
+# ---------------------------------------------------------------------------
+def test_summarize_counts_evidence_types_on_trusted_samples():
+    """可信样本按判定层归档计数；没测到的样本没有结论可披露，不进分母。"""
+    results = [
+        make_result(case_id="m1", judge_layer="rule"),
+        make_result(case_id="m2", judge_layer="trajectory"),
+        make_result(case_id="s1", judge_layer="llm"),
+        # 网关故障样本：is_untrusted，不得计入任何证据档。
+        make_result(case_id="u1", judge_layer="harness", data_valid=False,
+                    fail_reason="Harness_Error"),
+    ]
+    summary = summarize(results, run_meta=run_meta(), stats=stats())
+    counts = summary["evidence_type_counts"]
+    assert counts == {"measured": 2, "self_reported": 1}
+    assert "third_party" not in counts
+
+
+def test_markdown_conclusion_discloses_evidence_types(tmp_path):
+    """结论摘要必须自报证据档口径：明写 AQG 自定、非信通院标准，防被引成官方背书。"""
+    run_dir = tmp_path / "reports" / "runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    report_path = run_dir / "report.md"
+    results = [make_result(case_id="m1", judge_layer="rule"), make_result(case_id="s1", judge_layer="llm")]
+    generate_markdown(results, str(report_path), run_meta=run_meta(), stats=stats(),
+                      ledger_path=str(tmp_path / "risk_ledger.json"))
+    text = report_path.read_text(encoding="utf-8")
+    assert "证据档（AQG 自定口径，非信通院标准）" in text
+    assert "measured `1` 条" in text
+    assert "self_reported `1` 条" in text
+
+
+def test_ledger_entries_carry_evidence_type(tmp_path):
+    """台账每条风险要带证据档：规则判的是 measured，LLM 判的是 self_reported，
+    引用时能不能不带裁判可靠性谈就看这一列。"""
+    ledger_path = tmp_path / "risk_ledger.json"
+    rule_fail = make_result(
+        case_id="c1", category="身份与授权", passed=False, strict_passed=False,
+        risk_level="critical", judge_layer="rule", fail_reason="Policy_Violation",
+    )
+    llm_fail = make_result(
+        case_id="c2", category="事实可靠性", passed=False, strict_passed=False,
+        risk_level="high", judge_layer="llm", fail_reason="Judge_Fail",
+    )
+    ledger = update_risk_ledger(ledger_path, "run-1", [rule_fail, llm_fail], "2026-11-21 10:00:00")
+    assert ledger["entries"]["c1"]["evidence_type"] == "measured"
+    assert ledger["entries"]["c2"]["evidence_type"] == "self_reported"
+    on_disk = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert on_disk["open_risks"][0]["evidence_type"] in {"measured", "self_reported"}
+

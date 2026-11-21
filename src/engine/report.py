@@ -25,6 +25,7 @@ from src.models.schema import (
     PROMPT_BEARING_LAYERS,
     PROVIDER_BLOCKED_REASON,
     EvalResult,
+    derive_evidence_type,
 )
 
 RISK_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -504,6 +505,12 @@ def summarize(
     category_failures = Counter(item.category for item in counted_failures)
     by_category = Counter(item.category for item in results)
     by_judge_layer = Counter(item.judge_layer for item in results)
+    # T29 证据档计数：对外披露的是结论，所以只统计可信样本——“没测到”的样本没有结论可披露。
+    evidence_type_counts = Counter(
+        getattr(item, "evidence_type", None) or derive_evidence_type(item.judge_layer)
+        for item in results
+        if not is_untrusted(item)
+    )
     fallback_count = by_judge_layer.get("local_fallback", 0)
     judge_attempts = sum(item.judge_attempts for item in results)
     harness_error_count = sum(1 for item in results if item.judge_layer == "harness")
@@ -586,6 +593,7 @@ def summarize(
         "category_failures": dict(category_failures.most_common()),
         "by_category": dict(by_category),
         "by_judge_layer": dict(by_judge_layer),
+        "evidence_type_counts": dict(evidence_type_counts),
         "skipped_data": stats.get("skipped_data", 0),
         "duplicates": stats.get("duplicates", stats.get("skipped_data", 0)),
         "parse_errors": stats.get("parse_errors", 0),
@@ -783,6 +791,15 @@ def _render_verdict(summary: dict, trusted_failures: list) -> str:
         f"（95% CI {summary['strict_ci_low']:.2f}%~{summary['strict_ci_high']:.2f}%），"
         f"Standard `{summary['std_pass_rate']:.2f}%`。",
     ]
+    # T29 证据档披露行：结论摘要先自报家门——哪些数字可复算、哪些是模型判定等同自述。
+    # 口径声明进行内：三分法是 AQG 自定（出处补核见 schema 注释），不得挂信通院名义。
+    ev_counts = summary.get("evidence_type_counts") or {}
+    lines.append(
+        f"- **证据档（AQG 自定口径，非信通院标准）**："
+        f"measured `{ev_counts.get('measured', 0)}` 条（确定性层，trace＋代码可复算）、"
+        f"self_reported `{ev_counts.get('self_reported', 0)}` 条（模型判定产出，引用须带 n）、"
+        f"third_party `{ev_counts.get('third_party', 0)}` 条（外部认证，非 0 必须附认证出处）。"
+    )
     categories = Counter(item.category for item in trusted_failures).most_common(3)
     if categories:
         detail = "、".join(f"{name} {count} 条" for name, count in categories)
@@ -877,6 +894,10 @@ def update_risk_ledger(
                     "last_seen_run": run_id,
                     "last_seen_at": generated_at,
                     "last_evidence": (result.evidence or result.judge_reason)[:1000],
+                    # T29 证据档：这条风险的判定是确定性测出的还是模型判出的，
+                    # 直接决定引用时能不能不带裁判可靠性谈。旧数据无此字段时由层派生。
+                    "evidence_type": getattr(result, "evidence_type", None)
+                    or derive_evidence_type(result.judge_layer),
                     "occurrences": int(entry.get("occurrences", 0)) + 1,
                     "epoch": epoch,
                     "status": new_status,

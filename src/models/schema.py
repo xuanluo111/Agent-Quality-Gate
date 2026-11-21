@@ -10,6 +10,33 @@ JudgeLayer = Literal["rule", "trajectory", "jcv_audit", "llm", "local_fallback",
 # 其余层的结论与 prompt 无关。住在 schema 而不是 judge，因为报告层也要用它区分
 # 「没走裁判」与「走了裁判但没记录」，而报告层不该为了一个常量去依赖 openai 客户端。
 PROMPT_BEARING_LAYERS = ("llm", "local_fallback")
+# T29 证据分级（05 清单 P2-4 ＋ 补丁清单 E8 收窄）：某条结论落在哪个证据档。
+# **这不是信通院口径**：官方证据栏是四栏（结果/代价/过程/前提，见
+# docs/caict-2026-rsi/00-12项指标覆盖表.md），「实测/第三方认证/自述」三分法经 11-21
+# 逐页核幻灯片 13 页与五份脑图均无对应句——本节是 AQG 自定的披露档位，引用时
+# 不得挂官方名义。
+# - measured：确定性代码断言/可复算统计产出（rule/trajectory/jcv_audit/harness 层），
+#   复核只需 trace 与代码，不依赖任何模型；
+# - self_reported：模型判定产出（llm/local_fallback 层），披露等级等同自述，
+#   引用必须带 n，不得单独作权威结论；
+# - third_party：外部认证/审计数字。AQG 当前没有，唯一入口是显式赋值，不会凭空出现。
+EvidenceType = Literal["measured", "third_party", "self_reported"]
+EVIDENCE_TYPE_BY_LAYER: Dict[str, EvidenceType] = {
+    "rule": "measured",
+    "trajectory": "measured",
+    "jcv_audit": "measured",
+    "harness": "measured",
+    "llm": "self_reported",
+    "local_fallback": "self_reported",
+}
+
+
+def derive_evidence_type(judge_layer: str) -> EvidenceType:
+    """按判定层派生证据档；未知层保守落 self_reported——宁可把来路不明的结论
+    降档，也不给它确定性名义（fail-closed 同族姿势）。"""
+    return EVIDENCE_TYPE_BY_LAYER.get(judge_layer, "self_reported")
+
+
 # 失败环节：用于把“答错”拆成可归属的流水线阶段。
 FailureStage = Literal["understanding", "planning", "generation", "validation", "iteration"]
 StateOp = Literal["exists", "not_exists", "equals", "contains", "sha256"]
@@ -513,3 +540,14 @@ class EvalResult(BaseModel):
     # G7：本条用例用到的攻击策略叠加（可多个）。报告按它聚合“哪种策略组合真有判别力”，
     # 属运行输出字段，不碰数据集 → 不切代。
     attack_strategies: List[str] = Field(default_factory=list, description="本条样本的攻击策略叠加标签")
+    # T29 证据档：默认由 judge_layer 自动派生（见 EVIDENCE_TYPE_BY_LAYER 与出处补核结论），
+    # 旧 results.jsonl 无此键时加载即派生，无需重判。显式赋值是 third_party 的唯一入口。
+    evidence_type: Optional[EvidenceType] = Field(
+        default=None, description="结论证据档 measured/third_party/self_reported；缺省时由 judge_layer 派生"
+    )
+
+    @model_validator(mode="after")
+    def _fill_evidence_type(self) -> "EvalResult":
+        if self.evidence_type is None:
+            self.evidence_type = derive_evidence_type(self.judge_layer)
+        return self

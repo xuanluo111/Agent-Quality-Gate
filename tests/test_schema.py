@@ -208,3 +208,54 @@ def test_prompt_version_is_serialized_into_result_rows():
 
     dumped = EvalResult(**_legacy_result_payload(), judge_prompt_version="sha256:aaaaaaaaaaaa").model_dump()
     assert dumped["judge_prompt_version"] == "sha256:aaaaaaaaaaaa"
+
+
+# ---------------------------------------------------------------------------
+# T29 证据分级：evidence_type 进 schema（出处补核结论——三分法是 AQG 自定口径，
+# 非信通院标准；官方证据栏是四栏，见 schema 注释与 12 项覆盖表）
+# ---------------------------------------------------------------------------
+def test_derive_evidence_type_covers_all_judge_layers():
+    """六个判定层必须全部有显式映射——漏一层就会静默走保守回落。"""
+    from src.models.schema import EVIDENCE_TYPE_BY_LAYER, JudgeLayer, derive_evidence_type
+
+    for layer in JudgeLayer.__args__:
+        assert layer in EVIDENCE_TYPE_BY_LAYER, f"判定层 {layer} 未登记证据档映射"
+    assert derive_evidence_type("rule") == "measured"
+    assert derive_evidence_type("llm") == "self_reported"
+    assert derive_evidence_type("local_fallback") == "self_reported"
+
+
+def test_derive_evidence_type_unknown_layer_is_conservative():
+    """未知/未来层保守落 self_reported：不给来路不明的结论确定性名义。"""
+    from src.models.schema import derive_evidence_type
+
+    assert derive_evidence_type("brand_new_layer") == "self_reported"
+    assert derive_evidence_type("") == "self_reported"
+
+
+def test_eval_result_evidence_type_derived_from_layer():
+    from src.models.schema import EvalResult
+
+    payload = dict(_legacy_result_payload())
+    assert payload["judge_layer"] == "llm"
+    assert EvalResult(**payload).evidence_type == "self_reported"
+    assert EvalResult(**{**payload, "judge_layer": "rule"}).evidence_type == "measured"
+
+
+def test_eval_result_explicit_third_party_is_preserved_and_serialized():
+    """third_party 唯一入口是显式赋值；赋值后必须进 model_dump（台账/报告都从 dump 读）。"""
+    from src.models.schema import EvalResult
+
+    dumped = EvalResult(**_legacy_result_payload(), evidence_type="third_party").model_dump()
+    assert dumped["evidence_type"] == "third_party"
+
+
+def test_legacy_row_missing_evidence_type_never_becomes_third_party():
+    """旧 results.jsonl 缺键时加载即派生，派生值只会是 measured/self_reported——
+    third_party 不可能凭空出现在历史批次上。"""
+    from src.models.schema import EvalResult
+
+    assert "evidence_type" not in _legacy_result_payload()
+    result = EvalResult(**_legacy_result_payload())
+    assert result.evidence_type in {"measured", "self_reported"}
+
