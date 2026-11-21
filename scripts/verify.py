@@ -523,11 +523,19 @@ def step_coverage() -> Step:
             False,
             f"矩阵对应 suite 指纹 {str(matrix.get('suite_sha256'))[:16]} 与当前 {current[:16]} 不符，重跑 build_coverage_matrix.py",
         )
+    # T27 红线：覆盖图上每个空心节点都必须能反查到 controls.py 已登记的缺口，
+    # 不允许出现「来路不明的空心」。复用 build_coverage_graph 的同一个函数，不另写一份判据。
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from build_coverage_graph import validate_hollow_registration
+
+    unregistered = validate_hollow_registration(matrix)
+    if unregistered:
+        return Step("控制覆盖矩阵", False, "存在未登记的空心节点：" + ", ".join(unregistered))
     return Step(
         "控制覆盖矩阵",
         True,
         f"控制项 {len(matrix.get('covered_ids', []))}/{matrix.get('control_total', 0)} ｜ "
-        f"子控制点 {matrix.get('facet_total', 0) - len(matrix.get('facet_gaps', []))}/{matrix.get('facet_total', 0)} ｜ 未映射 {matrix.get('unmapped_count', 0)} 条 | 产物新鲜",
+        f"子控制点 {matrix.get('facet_total', 0) - len(matrix.get('facet_gaps', []))}/{matrix.get('facet_total', 0)} ｜ 未映射 {matrix.get('unmapped_count', 0)} 条 | 产物新鲜 | 空心全部已登记",
     )
 
 
