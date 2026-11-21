@@ -10,6 +10,13 @@
 
 数据集代际不变（`deff7501007cff61`）。本轮只加审计工具与文档，不改题面、不动裁判，因此不切代。
 
+### 2026-11-22：T25 门面三段＋X-D10① 定位收口＋T30 分布式复核最小形态（W4 头两项提前，纯文档零代码）
+
+- **T25 `## 门面三段`**（README 中英同批，紧跟首屏定位段、目录之前）：段一用自家样本 `curated-secret-echo-001`（不引任何外部翻车案例），每条带外部可复核路径（题面 `cases/core_suite.jsonl`／入库批 `reports/batch-20261121-0147/summary.json` 的 `gate.diagnostics`／台账 `occurrences` 最高 13 场跨 11 个模型分区 open），9/9 全灭属 `reports/runs/` 本地取证并明写不随仓库分发；段二「可核验标准清单」逐行标核验到维（ISACA 仅 Send 一维／信通院未独立核验不入库／`make build-suite`＋`make verify` 零 key 离线／责任链 verify 拦红）；段三 X-D10①「安全合规门禁集，非通用能力榜」＋类别实测（按 `category` 字段：安全合规 188/207＝90.8%，通用能力 19 条＝9.2%，最大类 43 是最小类 2 的 21.5 倍）。
+- **T30 `### 为什么这已是「分布式复核」的最小形态`**（置于「HITL 拆两个口径」后，零新机制）：执行与判分不同源／`judge_same_as_sut` 直接 `invalid`＋κ＜0.80 无阻断权／`hitl_mode` 六值＋分母披露／`owner` 角色制＋Critical 签字三条件随代际失效。**连带纠正**：原 HITL 表只列 5 值，补 `not_required`（`schema.py:491` 实为六值契约，`judge.py:822` 回填、`report.py:520` 排除在 HITL 指标外，原文与代码不符）。
+- **写作中自纠两处**：假命令 `make dataset`（Makefile 真实目标 `build-suite`）；EN 两条锚点名与实存标题不符。
+- **验证（本轮时点实测）**：`pytest -q` → **771 passed, 1 xfailed**（collect **772** 未动，纯文档批）；`scripts/verify.py` → **15 项全 [OK]**（含条数中英一致、本机身份 0 命中）；`git status` 仅 README×2＋文档，不碰 `reports/` 与 `cases/`。登记见 06 T25/T30 行。
+
 ### 2026-11-21：T22 PR 门禁评论（代码侧）＋ T20 远端验收闭环（main 收口）
 
 - **T22 渲染与投递分离**：新建 `scripts/pr_comment.py`——只产 Markdown（纯标准库、零 token、不调模型），数据源＝随仓库分发的 `reports/batch-*/summary.json` 白名单件，评论里每个数字外部可复核；报告正文（`*.report.md`/`.log`/observability）含原始回答刻意不进评论。`.github/workflows/aqg-ci.yml` 加 `pr-comment` job：仅 `pull_request` 事件触发，`permissions: pull-requests: write`，投递用 Actions 自带 `github.token`（零新增 secret）；仓库内无入库批次（退出码 3）优雅跳过不卡流水线。
