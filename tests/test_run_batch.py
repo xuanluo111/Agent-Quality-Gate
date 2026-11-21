@@ -44,6 +44,32 @@ def test_extract_infra_hint_tolerates_missing_and_broken_files(tmp_path):
     assert run_batch.extract_infra_hint(run_dir) == ""
 
 
+def test_already_done_matches_run_dir_by_model_slug(tmp_path):
+    """T24 断点续跑口径：--skip-existing 只认「历史批次目录尾缀 = 模型 slug 且有 report.md」。
+
+    run_dir 布局是 `{batch_id}-{slug(name)}`；这里钉住三个易错面：
+    命中前缀任意批次 ID、未跑过的模型不算完成、有目录没报告（中途崩）不算完成。
+    """
+    (tmp_path / "20261121-0147-my-model" / "run-a").mkdir(parents=True)
+    (tmp_path / "20261121-0147-my-model" / "report.md").write_text("# ok", encoding="utf-8")
+    assert run_batch.already_done(tmp_path, "my-model") is True
+
+    # 换一批批次 ID 也能命中（glob 前缀 `*` 覆盖任意 batch_id）
+    (tmp_path / "20261122-0930-my-model").mkdir()
+    assert run_batch.already_done(tmp_path, "my-model") is True
+
+    assert run_batch.already_done(tmp_path, "other-model") is False  # 没跑过
+
+    (tmp_path / "20261122-0931-half-baked").mkdir()  # 有目录无报告 = 中断过，必须重跑
+    assert run_batch.already_done(tmp_path, "half-baked") is False
+
+
+def test_already_done_rejects_directory_named_report(tmp_path):
+    """report.md 是目录这种脏布局不能算完成：is_file() 而非 exists() 是有意选择。"""
+    (tmp_path / "20261122-0932-weird" / "report.md").mkdir(parents=True)
+    assert run_batch.already_done(tmp_path, "weird") is False
+
+
 def test_min_valid_rate_is_passed_to_run_eval(tmp_path):
     spec = {"name": "m", "model": "m", "base_url": "u", "suite": "smoke", "limit": 10, "min_valid_rate": 85}
     command = run_batch.build_command(spec, "run-1", tmp_path, False, False)

@@ -314,6 +314,85 @@ def test_runner_backoff_skips_non_transient_errors(tmp_path):
     assert delays == []  # 非瞬态，零退避
 
 
+def test_runner_backoff_retries_gateway_503_then_succeeds(tmp_path):
+    """T24 验收锚：mock 网关 503 → 指数退避重试，恢复后不烧成 Harness_Error。
+
+    503 走 TRANSIENT_STATUS_MARKERS 分支（与 429/超时的文本标记分支不同源），
+    本例把这条分支单独钉桩，防止名单回潮时只靠 429 例假绿。
+    """
+    delays = []
+    case = make_case(id="gateway-503", allowed_tools=[], fixtures={})
+    responses = [
+        RuntimeError("Error code: 503 - {'error': {'message': 'Service Unavailable'}}"),
+        text_response("done"),
+    ]
+    runner = build_runner(
+        tmp_path,
+        responses,
+        max_retries=3,
+        retry_base_delay=1.0,
+        sleep_fn=delays.append,
+    )
+    trace = runner.run_case(case)
+    assert trace.is_success is True
+    assert trace.agent_response == "done"
+    assert len(delays) == 1  # 一次 503 → 一次退避
+    assert trace.backoff_ms > 0
+
+
+def test_runner_backoff_retries_connection_reset_then_succeeds(tmp_path):
+    """流式/长连接中途断（connection reset）是瞬态：退避重试而不是直接判环境故障。
+
+    本框架请求为非流式，中断以连接层异常中途抛出建模（markers 含 connection reset）。
+    """
+    delays = []
+    case = make_case(id="mid-stream-drop", allowed_tools=[], fixtures={})
+    responses = [
+        RuntimeError("Connection reset by peer."),
+        text_response("recovered"),
+    ]
+    runner = build_runner(
+        tmp_path,
+        responses,
+        max_retries=3,
+        retry_base_delay=1.0,
+        sleep_fn=delays.append,
+    )
+    trace = runner.run_case(case)
+    assert trace.is_success is True
+    assert trace.agent_response == "recovered"
+    assert len(delays) == 1
+    assert trace.backoff_ms > 0
+
+
+def test_runner_invalid_json_tool_arguments_fails_call_without_retry(tmp_path):
+    """半截 JSON 参数是模型输出缺陷：该次调用 ok=False 进审计，但不重试、不判越权。
+
+    三件事各自钉住：①不烧退避（非 API 故障）；②不进 policy_violations（答歪≠违规）；
+    ③audit 记录可归因（error 带 parse 线索、arguments 落成空 dict）。
+    """
+    delays = []
+    case = make_case(id="half-json", allowed_tools=["file_read"], fixtures={})
+    runner = build_runner(
+        tmp_path,
+        [
+            tool_response("file_read", '{"path": "users.cs'),  # 半截 JSON
+            text_response("参数写错了，我直接口头回答。"),
+        ],
+        max_retries=3,
+        sleep_fn=delays.append,
+    )
+    trace = runner.run_case(case)
+    assert trace.is_success is True
+    assert delays == []  # 参数畸形不是 API 故障，零退避
+    assert trace.policy_violations == []
+    item = trace.tool_call_params[0]
+    assert item["ok"] is False
+    assert item["blocked"] is False
+    assert "不是合法 JSON" in item["error"]
+    assert item["arguments"] == {}
+
+
 def test_runner_records_retry_storm(tmp_path):
     case = make_case(id="retry")
     responses = [tool_response("file_read", json.dumps({"path": "users.csv"})) for _ in range(3)]
