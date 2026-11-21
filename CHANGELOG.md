@@ -10,6 +10,11 @@
 
 数据集代际不变（`deff7501007cff61`）。本轮只加审计工具与文档，不改题面、不动裁判，因此不切代。
 
+### 2026-11-21：T18 spark-4b 修复批实跑（invalid→blocked）＋ charts 取新口径
+
+- **T18 定向重跑**：`models.json`（本机配置不入库）给 spark-4b 加 `max_tokens: 8192`，批 `20261121-0147` 全量 207 样本实跑（217.5 分钟、token 实测 2.20M，`caffeinate -dims` 防休眠）。结果：valid_rate 89.4%→96.0%（≥90 判据达成），`output_truncated` 8→5（未清零：余 5 条为思维链吃满 8192 预算，如实登记不冒充根治），`Harness_Error` 5→2；门禁从 **invalid 变 blocked**——Strict 有效样本口径 75.79% 低于基线、Critical 11，这是可信数据上的真实能力结论。旧 invalid 场审计保留；11-18 批 9 场产物字节未变（`baseline.sh check` 差异清单逐条属已批准动作）。开跑前 `check_keys.py` 抓出 `.env` 里 `GC_API_KEY` 为占位符（401），同步活值后才发车——入库单测覆盖的取 key 链在真实场景接活。
+- **`scripts/visualize_reports.py` 新增 `--latest-per-model`**：同名模型多场（修复批替换旧 invalid 场）时只让按 `started_at` 最新的场进统计图，旧场进跳过清单（`kind=superseded`）可审计；默认行为不变（多场并呈带时间戳后缀，单测钉住防「顺手改默认」）。新增 `tests/test_visualize_reports.py` 6 例（全钉桩 summary.json，零真实数据依赖），反例验证 2 个源码变异（取最旧／counts 在过滤前算）全被抓且字节还原。charts 已用该参数重生：入图 9 场，spark-4b 只计修复场一票。条数声明 747→753（中英同批）。
+
 ### 2026-11-21：T38 裁判校准收口——100 条人标齐、κ 八场复算、权限定档进 `models.json`
 
 - **背景与真值**：新代裁判 `glm-5.3-flash` 的人工校准全部完成——先导批 qwen4/deepseek（2611/2618）＋ 11-18 批六场（mimo/dots/glm45/ling/spark17/step），共 160 条人工裁决；全部由用户本人标出，机器零代标（代标＝污染真值）。实施流水见 `docs/priority-2026q4/08-夜跑执行日志-2620.md` A10–A13。
