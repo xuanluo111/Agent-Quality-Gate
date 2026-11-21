@@ -62,3 +62,40 @@ jobs:
         # 阻断式的供应链门禁由上面的 lock 完整性校验承担（可离线、可单测、口径稳定）。
         continue-on-error: true
         run: pip-audit -r requirements.lock --progress-spinner off
+
+  pr-comment:
+    # T22（RM-06）：PR 上自动贴批次门禁摘要＋逐场阻断原因。
+    # 渲染与投递分离：pr_comment.py 只产 Markdown（纯标准库、零 token、不调模型），
+    # 投递用 Actions 自带 token——不需要任何额外 secret。数字只来自随仓库分发的
+    # reports/batch-*/summary.json（白名单件），外部可复核；报告正文刻意不进评论。
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Render gate summary from committed batch
+        # 找不到入库批次（退出码 3）不是退化：投不了评论就优雅跳过，不卡流水线。
+        run: |
+          set +e
+          python scripts/pr_comment.py --out pr-comment.md
+          rc=$?
+          set -e
+          if [ "$rc" = "0" ]; then
+            echo "has_comment=true" >> "$GITHUB_OUTPUT"
+          elif [ "$rc" = "3" ]; then
+            echo "::notice::仓库内没有批次 summary.json，跳过 PR 评论"
+          else
+            exit "$rc"
+          fi
+        id: render
+      - name: Post comment to PR
+        if: steps.render.outputs.has_comment == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file pr-comment.md
