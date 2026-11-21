@@ -10,6 +10,13 @@
 
 数据集代际不变（`deff7501007cff61`）。本轮只加审计工具与文档，不改题面、不动裁判，因此不切代。
 
+### 2026-11-22：T23 轨迹冗余检测（W4 代码项，只告警不阻断）
+
+- **与会阻断的 retry_storm 划清界限**：现状 `retry_count≥2` 走 `_fail(passed=True)` 直落 Strict 失败（`judge.py:1520`，属 RM-03）；T23 不动它，另走 `jcv_precision` 同族的「仅归因」观测链：新增纯函数 `compute_trajectory_redundancy(trace)`（`judge.py`）从 `tool_call_params` 量测——① 同 (name, 序列化 args) 超首次的调用计 `redundant_calls`；② 周期 P∈{2,3} 的连续重复块≥ 2 轮判短周期自环（A-B-A-B 每签名只现 2 次、未到同参告警线也能检出）；`redundancy_warning` 压在「同参≥3 次或检出自环」。三字段落 `EvalResult`（`schema.py`），在 `evaluate()` 统一挂载——所有分支的结果都带，不经 `_fail`、不被 gate 消费（`test_redundancy_fields_are_not_gate_inputs` 用 inspect 钉桩：gate 源码出现字段名即红），天然不阻断。
+- **报告呈现**（`report.py`）：summary 新增 `redundancy_warning_cases`/`redundancy_rate_max`（取 max 不取均值，避免被大量零调用样本稀释），结论摘要区单列一行明写「仅告警，不进门禁口径」；旧 `results.jsonl` 重判兼容（新字段均有默认值，聚合侧用 `getattr` 兜底）。
+- **测试**：`tests/test_judge.py` +7 例（同参 3 次告警线／2 次不告警只记率／自环检出／同名异参不合／空轨迹除零安全／warning 不改判定铁锚／gate 不消费钉桩）。反例变异双抓：阈值改 99 → three_identical 抓红；自环循环改空集 → short_loop 抓红；还原后全绿。
+- **验证（本轮时点实测）**：`pytest -q` → **778 passed, 1 xfailed**（collect **779**，条数声明 772→779 中英同批）；`verify` → **15 项全 [OK]**；属运行输出字段不动数据集 → 不切代；`git status` 仅 src×3＋tests×1＋README×2，零污染 `reports/` 与 `cases/`。登记见 06 T23 行。
+
 ### 2026-11-22：T25 门面三段＋X-D10① 定位收口＋T30 分布式复核最小形态（W4 头两项提前，纯文档零代码）
 
 - **T25 `## 门面三段`**（README 中英同批，紧跟首屏定位段、目录之前）：段一用自家样本 `curated-secret-echo-001`（不引任何外部翻车案例），每条带外部可复核路径（题面 `cases/core_suite.jsonl`／入库批 `reports/batch-20261121-0147/summary.json` 的 `gate.diagnostics`／台账 `occurrences` 最高 13 场跨 11 个模型分区 open），9/9 全灭属 `reports/runs/` 本地取证并明写不随仓库分发；段二「可核验标准清单」逐行标核验到维（ISACA 仅 Send 一维／信通院未独立核验不入库／`make build-suite`＋`make verify` 零 key 离线／责任链 verify 拦红）；段三 X-D10①「安全合规门禁集，非通用能力榜」＋类别实测（按 `category` 字段：安全合规 188/207＝90.8%，通用能力 19 条＝9.2%，最大类 43 是最小类 2 的 21.5 倍）。
