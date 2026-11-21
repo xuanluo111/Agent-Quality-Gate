@@ -10,6 +10,14 @@
 
 数据集代际不变（`deff7501007cff61`）。本轮只加审计工具与文档，不改题面、不动裁判，因此不切代。
 
+### 2026-11-21：T29 证据分级 evidence_type（W4 代码批收官项，schema＋报告/台账列＋三分法出处补核）
+
+- **出处补核（先于落码，E8 要求）**：逐页扫完本机信通院幻灯片全部 13 页（IMG_3261–3273，含 P7 体系页与 P8 指标总表页）＋五份脑图（E8 已排），均无「实测/第三方认证/自述」对应句；官方证据栏只有四栏（结果/代价/过程/前提）。宣称出处仅见 05 原文 D3「信通院明确：12 项里只有实测能作结论」——**查无官方对应句**，故三分法定性为 **AQG 自定披露口径**：代码注释、报告披露行、README 覆盖句三处均明写「非信通院标准」，不挂官方名义。
+- **schema**（`src/models/schema.py`）：新增 `EvidenceType` 枚举＋`EVIDENCE_TYPE_BY_LAYER` 全层显式映射＋`derive_evidence_type` 纯函数（未知层保守落 self_reported，fail-closed 同族——不给来路不明的结论确定性名义）；`EvalResult.evidence_type` 缺省由 `judge_layer` 经 model_validator 自动派生（rule/trajectory/jcv_audit/harness→measured，llm/local_fallback→self_reported）——旧 results.jsonl 缺键加载即派生无需重判，`third_party` 唯一入口是显式赋值，不会凭空出现在历史批次上。
+- **报告与台账**（`src/engine/report.py`）：结论摘要新增证据档披露行（带 n，只统计可信样本——没测到的样本没有结论可披露；summary 新增 `evidence_type_counts`）；台账 open/regressed 条目新增 `evidence_type` 列：规则判的是 measured，LLM 判的是 self_reported，引用时能不能不带裁判可靠性谈就看这一列。
+- **测试**：`tests/test_schema.py` +5 例（映射全覆盖判定层/未知层保守/自动派生/显式 third_party 保留与序列化/旧行永不 third_party）＋`tests/test_report.py` +3 例（计数排不可信样本/报告披露行/台账列）。反例三抓：llm 层错标 measured → 5 例抓红；摘台账列 → KeyError；披露行数据源掏空（行在但永渲染 0）→ 被抓；均 grep 回读确认还原干净。
+- **验证（本轮时点实测）**：`pytest -q` → **799 passed, 1 xfailed**（collect **800**，条数声明 792→800 中英同批，测试覆盖句同批补 T29 一族）；`verify` → **15 项全 [OK]**；属运行输出字段不动数据集 → 不切代；`git status` 仅 src×2＋tests×2＋README×2，零污染 `reports/` 与 `cases/`。登记见 06 T29 行；W4 队列（T25–T29）至此全部收完。
+
 ### 2026-11-21：T28 信通院 12 项覆盖表 E1 修正版（W4 文档项，纯文档零代码）
 
 - **事实源补齐**：12 项指标全名、主/辅归属与官方证据栏此前只有 6 项有出处（C7 卡只点名相关项），本轮从本机信通院幻灯片 P8「RSI 进化结果的可靠性」总表原件（IMG_3269，不入库已声明）补齐剩余 6 项——不凭记忆编名；AQG 对位取 C7 卡裁片逐句比对。
