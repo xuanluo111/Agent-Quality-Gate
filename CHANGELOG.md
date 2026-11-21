@@ -14,6 +14,7 @@
 
 - **T22 渲染与投递分离**：新建 `scripts/pr_comment.py`——只产 Markdown（纯标准库、零 token、不调模型），数据源＝随仓库分发的 `reports/batch-*/summary.json` 白名单件，评论里每个数字外部可复核；报告正文（`*.report.md`/`.log`/observability）含原始回答刻意不进评论。`.github/workflows/aqg-ci.yml` 加 `pr-comment` job：仅 `pull_request` 事件触发，`permissions: pull-requests: write`，投递用 Actions 自带 `github.token`（零新增 secret）；仓库内无入库批次（退出码 3）优雅跳过不卡流水线。
 - **两个取批缺陷在开发过程中被测试抓住**：① glob `batch-*` 会误匹配干跑副产物 `batch-dryrun-*`，且字典序取末恰好选中它 → 加 `BATCH_DIR_RE` 剔除；② 第一版剔除用严格日期正则，又误剔真实短批号 `batch-20261121-0147`（`run_batch --batch-name` 允许分钟级后缀）→ 最终正则只排 dryrun。`tests/test_pr_comment.py` 12 例（表行/阻断原因/缺字段降级/代际不一致/取最新批/异常退出码）；反例变异：旁路剔除逻辑 → 2 例被抓，还原后全绿；真实批次干跑＋入库件模拟 CI 均检出 `20261121-0147`。原验收「造失败 PR 机器人贴摘要」需真实 PR 事件，待 gh 登录后闭环。
+- **11-21 时点追加：远端验收达成（demo PR #1）**：机器人已在真实 PR 贴上批次 `20261121-0147` 摘要表＋⛔ 阻断原因（run `44854340520`）；反例验证无入库批次时退 3 优雅跳过不卡流水线（run `44854570701`）。首跑实抓真缺陷：`PR_NUMBER` 未定义，gh 在 PR 事件 detached HEAD 下分支推断必挂（run `44854160507`）→ 修复为显式 `env.PR_NUMBER: github.event.number`。demo PR 验收后关闭不合并、分支已删。
 - **T20 远端验收达成**：用户指令 push main（`6558080..f568065`，可快进）；push 后首查 `license` 仍 NOASSERTION（GitHub 检测异步延迟，不盲改文件重试），约 25 秒后 `api.github.com/repos/.../license` → **MIT**。
 - **验证（本轮时点实测）**：`pytest -q` → **771 passed, 1 xfailed**（collect **772**，条数声明 760→772 中英同批）；`scripts/verify.py` → **15 项全 [OK]**；`baseline.sh check` 拦到差异仅 HEAD 推进＋STAGED 清单变化（均属已批准动作），重钉 631 条后 ✅ 零污染。登记见 06 T20/T22 行与 08 A14。
 
