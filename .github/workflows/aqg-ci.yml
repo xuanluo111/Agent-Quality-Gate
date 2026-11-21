@@ -98,4 +98,7 @@ jobs:
         if: steps.render.outputs.has_comment == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          # \u5fc5\u987b\u663e\u5f0f\u4f20\u53f7\uff1aPR \u4e8b\u4ef6\u4e0b checkout \u662f detached HEAD\uff0cgh \u9760\u5206\u652f\u63a8\u65ad\u4f1a\u62a5
+          # "could not determine current branch"\uff08demo PR #1 \u5b9e\u6293\uff09
+          PR_NUMBER: ${{ github.event.number }}
         run: gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file pr-comment.md
