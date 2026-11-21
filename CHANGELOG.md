@@ -10,6 +10,14 @@
 
 数据集代际不变（`deff7501007cff61`）。本轮只加审计工具与文档，不改题面、不动裁判，因此不切代。
 
+### 2026-11-21：T27 实心/空心覆盖图（W4 代码项，复用三色机制＋「无未登记空心」红线进 verify）
+
+- **脚本**：新建 `scripts/build_coverage_graph.py`，沿用 `docs/isaca-securing-ai-agents/build_mindmap.py` 的 covered/partial/gap 三色机制扩展为五态：实心绿（有用例且子点齐）／琥珀（有用例但底下有空心子点，逐个白底红框画出）／空心红（`case_expected_gap` 真缺口）／中性灰（框架自证、明确不做）——中性色专防「设计如此」被误读成漏测；用例侧姿势却零覆盖又不登记在 expected_gap 时保守判空心，不藏进中性。逻辑与渲染分离（分类/校验为纯函数，`render_png` 才碰 matplotlib——`requirements.txt` 已声明，零新依赖），矩阵为确定性产物故不写生成时间戳。
+- **红线机器化**：`validate_hollow_registration` 把验收条款「每个空心节点可反查登记条目」钉成断言——空心（`facet_gaps`∪`case_expected_gap_ids`）必须∈ `controls.FACETS`／`CONTROL_CATALOG` 注册项（00/06 登记的代码事实源）；`render_png` 渲染前再校验，违规拒绝出图。接入 `verify.py` 「控制覆盖矩阵」步：复用同一函数不另写判据，步骤数不变（15），OK 态新增「空心全部已登记」。
+- **产物**：`docs/isaca-securing-ai-agents/aqg_coverage_graph.png`（落 docs 交付区，避开 `reports/`、`cases/` 零污染边界）；首版布局瑕疵（长标签压状态字、斜纹盖子点字）修正后经两轮目测核验，诚实显示当前 0 真缺口。
+- **测试**：`tests/test_build_coverage_graph.py` +8 例（五态分类／保守判空／validate 正反例／真实矩阵诚实边界：空心全已登记且无真缺口／出图与拒出图）。反例双抓：数据层注入 `C99.ghost`+`NOPE` 副本→ CLI 校验与出图均 FAIL exit 1 且无 PNG 落盘；源码变异（validate 永返空）→ 3 例抓红，grep 回读确认还原干净（沿用 T24「变异须落盘回读」教训）。
+- **验证（本轮时点实测）**：`pytest -q` → **791 passed, 1 xfailed**（collect **792**，条数声明 784→792 中英同批，测试覆盖句同批补 T27 一族）；`verify` → **15 项全 [OK]**；`git status` 不碰 `reports/` 与 `cases/`，零污染。登记见 06 T27 行。
+
 ### 2026-11-22：T24 harness 韧性测试（W4 代码项，只加测试零改源码）
 
 - **缺口盘点先行**：RM-04 面已有 429/超时退避、耗尽放弃、403 零退避（`test_runner.py` 退避测试群）与 Output_Truncated→`data_valid=False`→gate `invalid` 链路（`test_judge.py`/`test_gate.py` 已钉住），不重复造例；本次只补四处无钉桩面：① 网关 503（在 `TRANSIENT_STATUS_MARKERS` 名单但历往只靠 429 例假绿）；② 连接中途断（框架为非流式，无 `stream=True` 路径，「流式中断」按连接层异常中途抛出建模，markers 含 connection reset）；③ 半截 JSON 工具参数（`_parse_arguments` 已有处理但零专项）；④ 断点续跑 `--skip-existing` 的判定函数 `already_done`（零测试）。
