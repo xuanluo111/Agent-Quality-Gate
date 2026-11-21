@@ -199,7 +199,8 @@ def sort_stamp(report: dict) -> str:
     return str(report.get("started_at") or report.get("generated_at") or "")
 
 
-def load_reports(reports_dir: Path, include_selfcheck: bool = False) -> tuple[list[dict], list[dict]]:
+def load_reports(reports_dir: Path, include_selfcheck: bool = False,
+                 latest_per_model: bool = False) -> tuple[list[dict], list[dict]]:
     """读取 runs/*/summary.json。
 
     默认排除 `verify-*` 自检运行：那几份是 6 条能力用例的冒烟结果，画进对比图会把
@@ -229,6 +230,23 @@ def load_reports(reports_dir: Path, include_selfcheck: bool = False) -> tuple[li
             except Exception as exc:
                 skipped.append({"file": path.name, "reason": str(exc)})
     reports.sort(key=sort_stamp)
+    if latest_per_model:
+        # --latest-per-model：同一模型多场（如修复批重跑替换旧 invalid 场）时只让最新一场
+        # 进统计图，旧场挪进 skipped 可审计——避免同名双计把“当前成绩”画成两票。
+        # 排序已按 sort_stamp 升序，每个 model 的最后一次出现即最新场；
+        # 时间戳缺失时稳定保留最后出现者（与目录序一致，可复现）。
+        latest_index = {}
+        for idx, report in enumerate(reports):
+            latest_index[report["model"]] = idx
+        keep = set(latest_index.values())
+        for idx, report in enumerate(reports):
+            if idx not in keep:
+                skipped.append({
+                    "file": report["file"],
+                    "reason": f'同模型 {report["model"]} 存在更新的 run，--latest-per-model 已剔除旧场',
+                    "kind": "superseded",
+                })
+        reports = [report for idx, report in enumerate(reports) if idx in keep]
     counts = Counter(report["model"] for report in reports)
     for report in reports:
         if counts[report["model"]] == 1:
@@ -1006,6 +1024,8 @@ def main() -> int:
     parser.add_argument("--reports-dir", default="reports", help="报告目录，默认 reports")
     parser.add_argument("--output-dir", default="reports/charts", help="图表输出目录，默认 reports/charts")
     parser.add_argument("--include-selfcheck", action="store_true", help="把 verify-* 自检运行也画进图表（默认排除）")
+    parser.add_argument("--latest-per-model", action="store_true",
+                        help="同一模型多场 run 只取最新一场进统计图（旧场列入跳过清单，可审计）")
     args = parser.parse_args()
 
     reports_dir = Path(args.reports_dir)
@@ -1015,7 +1035,8 @@ def main() -> int:
         return 1
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    reports, skipped = load_reports(reports_dir, include_selfcheck=args.include_selfcheck)
+    reports, skipped = load_reports(reports_dir, include_selfcheck=args.include_selfcheck,
+                                    latest_per_model=args.latest_per_model)
     if not reports:
         print("没有解析到可用的新格式报告。")
         return 1
