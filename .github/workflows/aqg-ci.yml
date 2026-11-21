@@ -98,4 +98,7 @@ jobs:
         if: steps.render.outputs.has_comment == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          # 必须显式传号：PR 事件下 checkout 是 detached HEAD，gh 靠分支推断会报
+          # "could not determine current branch"（demo PR #1 实抓）
+          PR_NUMBER: ${{ github.event.number }}
         run: gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file pr-comment.md
