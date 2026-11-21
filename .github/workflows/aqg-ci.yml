@@ -74,6 +74,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
+      - uses: actions/checkout@v4
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -81,6 +82,7 @@ jobs:
       - name: Render gate summary from committed batch
         # 找不到入库批次（退出码 3）不是退化：投不了评论就优雅跳过，不卡流水线。
         run: |
+          rm -rf reports
           set +e
           python scripts/pr_comment.py --out pr-comment.md
           rc=$?
