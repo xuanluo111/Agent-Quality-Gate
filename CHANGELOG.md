@@ -10,6 +10,13 @@
 
 数据集代际不变（`deff7501007cff61`）。本轮只加审计工具与文档，不改题面、不动裁判，因此不切代。
 
+### 2026-11-22：T24 harness 韧性测试（W4 代码项，只加测试零改源码）
+
+- **缺口盘点先行**：RM-04 面已有 429/超时退避、耗尽放弃、403 零退避（`test_runner.py` 退避测试群）与 Output_Truncated→`data_valid=False`→gate `invalid` 链路（`test_judge.py`/`test_gate.py` 已钉住），不重复造例；本次只补四处无钉桩面：① 网关 503（在 `TRANSIENT_STATUS_MARKERS` 名单但历往只靠 429 例假绿）；② 连接中途断（框架为非流式，无 `stream=True` 路径，「流式中断」按连接层异常中途抛出建模，markers 含 connection reset）；③ 半截 JSON 工具参数（`_parse_arguments` 已有处理但零专项）；④ 断点续跑 `--skip-existing` 的判定函数 `already_done`（零测试）。
+- **测试**：`tests/test_runner.py` +3 例——503 一次退避后恢复（验 `delays`/`backoff_ms`，不烧成 Harness_Error）；connection reset 退避恢复；半截 JSON 该次调用 `ok=False` 进审计但不重试（`delays==[]`）、不进 `policy_violations`（答歪≠违规）。`tests/test_run_batch.py` +2 例——`already_done` 三易错面（任意批次 ID 前缀命中／未跑过不算完成／有目录无报告（中途崩）必须重跑）；`report.md` 为目录的脏布局不算完成（`is_file()` 非 `exists()` 是有意选择）。零改源码、零新依赖、全 mock 注入不打网。
+- **反例双抓**：瞬态名单摘掉 503 → `test_runner_backoff_retries_gateway_503_then_succeeds` 抓红；`already_done` 的 `is_file()` 改 `exists()` → `test_already_done_rejects_directory_named_report` 抓红；还原后全绿（教训：第一轮 sed 未命中造成假绿，变异必须 grep 回读确认落盘后才算数）。
+- **验证（本轮时点实测）**：`pytest -q` → **783 passed, 1 xfailed**（collect **784**，条数声明 779→784 中英同批，测试覆盖句同批补 T24 一族）；`verify` → **15 项全 [OK]**；`baseline.sh check` 差异仅 HEAD 推进（属已批准 push）重钉后零污染；`git status` 仅 tests×2＋README×2。登记见 06 T24 行。
+
 ### 2026-11-22：T23 轨迹冗余检测（W4 代码项，只告警不阻断）
 
 - **与会阻断的 retry_storm 划清界限**：现状 `retry_count≥2` 走 `_fail(passed=True)` 直落 Strict 失败（`judge.py:1520`，属 RM-03）；T23 不动它，另走 `jcv_precision` 同族的「仅归因」观测链：新增纯函数 `compute_trajectory_redundancy(trace)`（`judge.py`）从 `tool_call_params` 量测——① 同 (name, 序列化 args) 超首次的调用计 `redundant_calls`；② 周期 P∈{2,3} 的连续重复块≥ 2 轮判短周期自环（A-B-A-B 每签名只现 2 次、未到同参告警线也能检出）；`redundancy_warning` 压在「同参≥3 次或检出自环」。三字段落 `EvalResult`（`schema.py`），在 `evaluate()` 统一挂载——所有分支的结果都带，不经 `_fail`、不被 gate 消费（`test_redundancy_fields_are_not_gate_inputs` 用 inspect 钉桩：gate 源码出现字段名即红），天然不阻断。
