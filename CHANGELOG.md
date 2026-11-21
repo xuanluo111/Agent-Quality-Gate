@@ -10,6 +10,13 @@
 
 数据集代际不变（`deff7501007cff61`）。本轮只加审计工具与文档，不改题面、不动裁判，因此不切代。
 
+### 2026-11-21：T22 PR 门禁评论（代码侧）＋ T20 远端验收闭环（main 收口）
+
+- **T22 渲染与投递分离**：新建 `scripts/pr_comment.py`——只产 Markdown（纯标准库、零 token、不调模型），数据源＝随仓库分发的 `reports/batch-*/summary.json` 白名单件，评论里每个数字外部可复核；报告正文（`*.report.md`/`.log`/observability）含原始回答刻意不进评论。`.github/workflows/aqg-ci.yml` 加 `pr-comment` job：仅 `pull_request` 事件触发，`permissions: pull-requests: write`，投递用 Actions 自带 `github.token`（零新增 secret）；仓库内无入库批次（退出码 3）优雅跳过不卡流水线。
+- **两个取批缺陷在开发过程中被测试抓住**：① glob `batch-*` 会误匹配干跑副产物 `batch-dryrun-*`，且字典序取末恰好选中它 → 加 `BATCH_DIR_RE` 剔除；② 第一版剔除用严格日期正则，又误剔真实短批号 `batch-20261121-0147`（`run_batch --batch-name` 允许分钟级后缀）→ 最终正则只排 dryrun。`tests/test_pr_comment.py` 12 例（表行/阻断原因/缺字段降级/代际不一致/取最新批/异常退出码）；反例变异：旁路剔除逻辑 → 2 例被抓，还原后全绿；真实批次干跑＋入库件模拟 CI 均检出 `20261121-0147`。原验收「造失败 PR 机器人贴摘要」需真实 PR 事件，待 gh 登录后闭环。
+- **T20 远端验收达成**：用户指令 push main（`6558080..f568065`，可快进）；push 后首查 `license` 仍 NOASSERTION（GitHub 检测异步延迟，不盲改文件重试），约 25 秒后 `api.github.com/repos/.../license` → **MIT**。
+- **验证（本轮时点实测）**：`pytest -q` → **771 passed, 1 xfailed**（collect **772**，条数声明 760→772 中英同批）；`scripts/verify.py` → **15 项全 [OK]**；`baseline.sh check` 拦到差异仅 HEAD 推进＋STAGED 清单变化（均属已批准动作），重钉 631 条后 ✅ 零污染。登记见 06 T20/T22 行与 08 A14。
+
 ### 2026-11-21：待拍板 #2/#4/#11 落地（report_path 相对化＋batch 白名单入库＋删除族移出跟踪＋外发身份预检）
 
 - **#2 `report_path` 相对化与批次白名单**：`src/engine/report.py` 新增 `relative_report_path()`——`summary.report_path` 一律落自 `reports` 起的相对路径，找不到退回文件名，绝不回吐绝对路径（否则 T19 刚清掉的用户名会从白名单这扇门放回去）；存量两个批次 `summary.json` 只摘绝对前缀（11-18 批 9 处、T18 批 1 处，前缀以外字节不变）；`reports/batch-20261118-131428/` 与 `batch-20261121-0147/` 的 `summary.json`+`summary.md` 四件（9795 行）`git add -f` 入库——只放汇总不放开源产物（`*.report.md`/`.log`/observability 含原始回答与裁判依据引用，不为入库改评测事实）；`.gitignore` 规则不动，防未来批次顺手带出。`tests/test_report.py` 加相对断言＋1 例专项钉桩。
