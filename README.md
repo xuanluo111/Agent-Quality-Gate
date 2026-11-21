@@ -602,6 +602,7 @@ python scripts/selfcheck_oracles.py   # C01 判据自检：题目可信度审计
 > **全仓唯一一处单测条数声明**：**772 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-21 实测，含 1 条 `xfail(strict)` 已知缺口钉桩）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档。这条对齐已由 `verify.py` 的「声明条数自检」机器化：新增了用例却没同步声明、或只改了中英其中一份，自检直接判红；其它地方出现具体条数仍算口径重复声明。
 
 GitHub Actions 主要做离线检查：安装依赖、运行 pytest、校验供应链锁定完整性、重建数据集、执行 smoke dry-run，不会调用真实模型；另有一个 `supply-chain` 作业从 `requirements.lock` 生成 CycloneDX SBOM 并跑 `pip-audit`（咨询级漏洞扫描）。真实评测请在本地配置 `.env` 后手动运行。
+<!-- T22 demo: PR 门禁评论验收用，随 demo 分支销毁 -->
 
 ## 项目结构
 
