@@ -10,6 +10,13 @@
 
 数据集代际不变（`deff7501007cff61`）。本轮只加审计工具与文档，不改题面、不动裁判，因此不切代。
 
+### 2026-11-21：待拍板 #2/#4/#11 落地（report_path 相对化＋batch 白名单入库＋删除族移出跟踪＋外发身份预检）
+
+- **#2 `report_path` 相对化与批次白名单**：`src/engine/report.py` 新增 `relative_report_path()`——`summary.report_path` 一律落自 `reports` 起的相对路径，找不到退回文件名，绝不回吐绝对路径（否则 T19 刚清掉的用户名会从白名单这扇门放回去）；存量两个批次 `summary.json` 只摘绝对前缀（11-18 批 9 处、T18 批 1 处，前缀以外字节不变）；`reports/batch-20261118-131428/` 与 `batch-20261121-0147/` 的 `summary.json`+`summary.md` 四件（9795 行）`git add -f` 入库——只放汇总不放开源产物（`*.report.md`/`.log`/observability 含原始回答与裁判依据引用，不为入库改评测事实）；`.gitignore` 规则不动，防未来批次顺手带出。`tests/test_report.py` 加相对断言＋1 例专项钉桩。
+- **#4 删除族移出跟踪（不物理删）**：`cases/stress_backup*`（3 件 1.5MB）与 `docs/c02-judge-calibration/recalib-2611-{qwen,deepseek}/`（4 件 1424 行）先 `git grep` 核实代码零引用，再 `git rm --cached`＋物理移入 `.private_backup_20261117/`（已被 ignore），随时可回。
+- **#11 外发身份预检**：按建议在 `scripts/pack_originality.py`（外发入口）落地，不塞进 `verify`（提交门禁不为本机缓存负责）——复用 `verify.identity_tokens`/`current_identity_env` 单一定义源；`iter_scan_files` 前 1KiB NUL 嗅探跳二进制＋50MB 上限＋不跟 symlink/socket；`--scan-paths` 可点名本机被忽略归档（`workspace/`、`.reports-archive-*/`、`.private_backup_*/`），`--scan-only` 纯扫描永不成包（0=干净／4=命中）；正常打包路径在成包前拦截命中；CI 通用身份 tokens 为空则放行（no-op）。新增 `tests/test_pack_originality.py` 6 例；反例验证 3 个源码变异（绝对路径回吐／门禁旁路／NUL 嗅探失效）全被抓且字节还原。
+- **验证（均为可复跑命令，本轮时点实测）**：`pytest -q` → **759 passed, 1 xfailed**（collect **760**，条数声明 753→760 中英同批，`verify` 自检接住首轮不同步态）；`scripts/verify.py` → **15 项全 [OK]**（含本机身份 0 命中）；`baseline.sh check` 先精确拦到差异＝两 `summary.json` 哈希＋STAGED 清单（均属批准动作）后重钉 **631 条**→✅，11-18 批 9 场评测产物字节未变。明细登记见 `docs/priority-2026q4/08-夜跑执行日志-2620.md` 待拍板第 2/4/11 行与 06 对应行。
+
 ### 2026-11-21：T18 spark-4b 修复批实跑（invalid→blocked）＋ charts 取新口径
 
 - **T18 定向重跑**：`models.json`（本机配置不入库）给 spark-4b 加 `max_tokens: 8192`，批 `20261121-0147` 全量 207 样本实跑（217.5 分钟、token 实测 2.20M，`caffeinate -dims` 防休眠）。结果：valid_rate 89.4%→96.0%（≥90 判据达成），`output_truncated` 8→5（未清零：余 5 条为思维链吃满 8192 预算，如实登记不冒充根治），`Harness_Error` 5→2；门禁从 **invalid 变 blocked**——Strict 有效样本口径 75.79% 低于基线、Critical 11，这是可信数据上的真实能力结论。旧 invalid 场审计保留；11-18 批 9 场产物字节未变（`baseline.sh check` 差异清单逐条属已批准动作）。开跑前 `check_keys.py` 抓出 `.env` 里 `GC_API_KEY` 为占位符（401），同步活值后才发车——入库单测覆盖的取 key 链在真实场景接活。
