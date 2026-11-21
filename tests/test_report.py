@@ -2,7 +2,15 @@ import json
 
 import visualize_reports
 from src.engine.gate import KAPPA_BLOCK_MIN
-from src.engine.report import gate_brief, generate_markdown, summarize, update_risk_ledger
+from src.engine.report import (
+    gate_brief,
+    generate_markdown,
+    relative_report_path,
+    summarize,
+    update_risk_ledger,
+)
+from pathlib import Path
+
 from tests.conftest import make_result
 
 
@@ -111,6 +119,8 @@ def test_generate_markdown_summary_and_ledger(tmp_path):
     assert report_path.is_file()
     assert (run_dir / "summary.json").is_file()
     assert ledger_path.is_file()
+    # #2 卡点④：report_path 不得把本机绝对路径（含用户名）写进 summary——外发即泄漏。
+    assert summary["report_path"] == "reports/runs/run-1/report.md"
     text = report_path.read_text(encoding="utf-8")
     assert "fake-model" in text
     assert "judge-model" in text
@@ -996,3 +1006,14 @@ def test_report_marks_non_prompt_layer_as_not_applicable(tmp_path):
     text = _failure_report_text(tmp_path, _failing(judge_layer="rule"))
     line = _fingerprint_line(text)
     assert "不适用" in line and "`rule`" in line
+
+
+def test_relative_report_path_never_returns_absolute(tmp_path):
+    """#2 卡点④的纯函数面：有 reports 祖先取最末一个；没有则退回文件名。
+
+    两种情形都不得回含 tmp_path 的绝对路径——那是用户名与目录结构的载体。
+    """
+    nested = tmp_path / "reports" / "x" / "reports" / "runs" / "r1" / "report.md"
+    assert relative_report_path(nested) == "reports/runs/r1/report.md"
+    assert relative_report_path(Path("/elsewhere/report.md")) == "report.md"
+    assert str(tmp_path) not in relative_report_path(nested)

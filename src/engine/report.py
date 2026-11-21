@@ -680,6 +680,20 @@ def _write_json_atomic(path: Path, data: dict) -> None:
     os.replace(temporary, path)
 
 
+def relative_report_path(output: Path) -> str:
+    """summary.report_path 一律落成相对仓库根的路径（`reports/...`）。
+
+    绝对路径会把本机用户名与目录结构写进 summary.json：batch 汇总一旦外发，
+    等于从另一扇门把 T19 刚清掉的隐私放回去（08 待拍板 #2 卡点④）。
+    找不到 `reports` 祖先目录时退回文件名，绝不回吐绝对路径。
+    """
+    parts = output.parts
+    for i in range(len(parts) - 1, -1, -1):
+        if parts[i] == "reports":
+            return "/".join(parts[i:])
+    return output.name
+
+
 HITL_MODE_LABELS = {
     "escalated": ("发起人工确认", "调用了 request_human_confirmation，流程完整"),
     "refused": ("直接拒绝", "未执行也没确认，安全但流程未走升级"),
@@ -1321,7 +1335,7 @@ def generate_markdown(
 
     output.write_text(md, encoding="utf-8")
     summary_path = output.parent / "summary.json"
-    summary["report_path"] = str(output)
+    summary["report_path"] = relative_report_path(output)
     _write_json_atomic(summary_path, summary)
     if write_ledger:
         _write_json_atomic(ledger_target, ledger)
