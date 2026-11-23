@@ -10,6 +10,17 @@
 
 数据集代际不变（`deff7501007cff61`）。本轮只加审计工具与文档，不改题面、不动裁判，因此不切代。
 
+### 2026-11-24：T31 AgentAdapter 协议 + 轨迹重放参考实现（W5a 十二月主线第一批）
+
+- **协议**（新 `src/engine/adapter.py`）：`AgentAdapter` 为 `@runtime_checkable Protocol`，唯一必需方法 `run_case(case, attempt) -> AgentTrace`——正是 T31 规划时核过的既有接缝（`run_single_case` 只消费这一个方法＋`getattr(runner, "journal_path", None)`）。`AgentRunner` 结构上天然满足，不加继承、不带 OpenAI 客户端耦合进协议。
+- **共用推导只留一份**（`runner.py` 提取模块级纯函数：`workspace_for`/`journal_path_for`/`build_audit_item`/`retry_count_for`/`abstraction_skipped_for`/`precondition_failure_trace`/`policy_block_trace`/`finalize_trace`）：同一串工具调用，无论来自端点循环还是重放，终态证据（state_diff/断言/completion/retry_count/审计条目）必须同码产出；提取属重构不改语义，既有 58 条 runner/cancel/K08/journal 测试全绿为钉。
+- **判定层零改动**：`judge.py`/`gate.py`/`failure_class.py` 一行未动（`git diff` 空），由测试钉住「重放 trace 直喂规则层出 EvalResult，消费路径不区分来源」。
+- **参考实现 `TraceReplayAdapter`**：读外部 agent 导出的工具调用轨迹 JSONL（每行 `{case_id, attempt, tool_calls, final_response}`），在同一套 Sandbox/fixture/快照/断言链里重放。语义与 runner 逐段对齐：S3 一律 Harness 阻断（外部轨迹无法证明执行在本地，fail-closed，即使配了 local 路由）；S2 走 `mask_sensitive_data`；fixture 预检/Sandbox 初始化失败记 `precondition_failed`；未暴露工具拦截；formalize 走声明路径；WAL journal begin/finish 照写；首个执行调用失败沿用 `is_precondition_error`。给不了的字段如实缺省（token/seed/finish_reason/backoff 恒 0/None/空，`latency_ms` 为重放耗时，`model` 落 `trace:<文件名>`），全部写进 README 双语「已知限制」：重放批次不得与端点批次混算成本与稳定性。
+- **加载器 fail-closed**（与数据集加载同口径）：畸形行/字段校验失败/未知 case_id/重复 (case_id, attempt) 一律报错中止，绝不静默丢行；缺某次尝试的轨迹在 `run_case` 当场 `KeyError`。
+- **接线**：`run_eval.py` 新增 `--agent-trace PATH`；`config.py` 加 `agent_trace` 字段与 `is_trace_mode`：trace 文件不存在直接 `FileNotFoundError`（dry-run 也校），trace 模式豁免被测端点三元组但**不豁免裁判配置**；`run_single_case` 形参注解放宽为 `Union[AgentRunner, AgentAdapter]`；横幅打印 `replay=trace:<name>`。`run_batch.py`/`models.json` 本批不动（RM-07 接其后）。
+- **测试与反例**：新增 `tests/test_adapter.py` 17 例（全离线零调用），含重放等价性主锚——假 client 钉桩的端点 runner 与重放适配器对同一串调用产出的 `tool_call_params/state_diff/assertion_results/completion/retry_count/extracted_variables` 逐字段相等；源码变异四抓全部被抓（删重复键检查/删未知 case 检查/S3 阻断改恒假/删 trace 配置豁免）。collect 800→817，README 双语条数同批改齐；`verify` 全 OK，不碰 `cases/` 不切代，`git status` 无对外产物。
+- 真实演示跑（样例轨迹＋裁判）会产生费用，未跑；需要时另行授权（同「不要在没有明确指令的情况下跑真实批次」纪律）。
+
 ### 2026-11-23：T26 录屏闭环（W4 展示窗口项收口，成片 171.8s ≤ 180s）
 
 - 用户本机手动录制原片 `AQG-2026-11-23.mov`（199.8s，5 镜头一遍过，全程未现场调模型）；录前将镜头 1/2 的 `python3 -c` 命令逐字复跑，`blocked 1` 与四条大白话 reasons、`gate.diagnostics` 36 条中 `curated-secret-echo-001` 均逐字命中分镜表预期。

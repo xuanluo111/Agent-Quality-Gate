@@ -620,6 +620,7 @@ python scripts/rejudge.py --runs 'reports/runs/*' --collateral-risk critical
 | `--no-provenance` | 关闭参数血缘检查（历史数据重判时的兜底开关，也可用用例 tag `no-provenance` 单条退出） |
 | `--no-publish` | 不覆盖 `reports/latest.md` / `observability.json`，也不写风险台账；自检/调试用，默认关闭 |
 | `--dry-run` | 只校验数据，不调用模型 |
+| `--agent-trace PATH` | 轨迹重放模式（T31）：把外部 agent 导出的工具调用轨迹 JSONL（每行 `{case_id, attempt, tool_calls, final_response}`）在同一套沙箱/快照/断言链里重放，不调用被测端点（裁判照旧、仍会产生费用）；判定层零改动，重放语义的缺省字段见「已知限制」 |
 | `--run-id` / `--output-root` / `--workspace-root` | 运行标识与产物路径 |
 
 所有运行参数会写入 `config.json`（API Key 脱敏为 `***`），并随报告记录 seed、数据集 SHA256、Git SHA、模型和裁判信息。
@@ -631,9 +632,9 @@ python -m pytest -q
 python scripts/selfcheck_oracles.py   # C01 判据自检：题目可信度审计（同样 0 成本）
 ```
 
-测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、判据指纹（覆盖范围／分层归属／历史缺值回落）、判据自检回路（正反参照/漏网检出/诚实分母）、门禁分支、数据加载/去重/采样、排名统计（Holm–Bonferroni 校正、效应量、A/B/C 置信等级）、报告与台账（含 M1 责任派发与签字校验）、Markdown/summary 可视化解析（含同名模型多场只取最新一场的统计口径）、人工标注模板与复核表渲染（只透执行事实、不透裁判结论）、自检脚本自身的体检规则（声明条数对齐、入库件本机身份扫描）、开跑前 key 生效自检（与 `run_batch` 同一条取 key 链，单测不打网络）、裁判 token 烧速外推（钉桩 `results.jsonl`）与外发打包前的本机身份预检（`pack_originality --scan-paths/--scan-only`）、PR 门禁摘要评论渲染（`pr_comment`：表行/阻断原因/缺字段降级/取最新批次与 dryrun 副产物剔除）、轨迹冗余检测（T23：同参≥3 次与短周期自环告警线、不阻断判定铁锚、gate 不消费字段钉桩）、harness 韧性（T24：网关 503/连接中途断退避重试、半截 JSON 工具参数不重试不判违规、断点续跑 already_done 判定口径）、实心/空心覆盖图（T27：五态分类不把「设计如此」误读成漏测、每个空心节点必须能反查到 controls.py 登记项的红线、未登记空心拒绝出图）、证据分级（T29：`evidence_type` 由判定层派生——确定性层 measured、模型判定 self_reported、third_party 只能显式赋值；报告结论摘要与台账条目带证据档，三分法是 AQG 自定口径非信通院标准）。
+测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、判据指纹（覆盖范围／分层归属／历史缺值回落）、判据自检回路（正反参照/漏网检出/诚实分母）、门禁分支、数据加载/去重/采样、排名统计（Holm–Bonferroni 校正、效应量、A/B/C 置信等级）、报告与台账（含 M1 责任派发与签字校验）、Markdown/summary 可视化解析（含同名模型多场只取最新一场的统计口径）、人工标注模板与复核表渲染（只透执行事实、不透裁判结论）、自检脚本自身的体检规则（声明条数对齐、入库件本机身份扫描）、开跑前 key 生效自检（与 `run_batch` 同一条取 key 链，单测不打网络）、裁判 token 烧速外推（钉桩 `results.jsonl`）与外发打包前的本机身份预检（`pack_originality --scan-paths/--scan-only`）、PR 门禁摘要评论渲染（`pr_comment`：表行/阻断原因/缺字段降级/取最新批次与 dryrun 副产物剔除）、轨迹冗余检测（T23：同参≥3 次与短周期自环告警线、不阻断判定铁锚、gate 不消费字段钉桩）、harness 韧性（T24：网关 503/连接中途断退避重试、半截 JSON 工具参数不重试不判违规、断点续跑 already_done 判定口径）、实心/空心覆盖图（T27：五态分类不把「设计如此」误读成漏测、每个空心节点必须能反查到 controls.py 登记项的红线、未登记空心拒绝出图）、证据分级（T29：`evidence_type` 由判定层派生——确定性层 measured、模型判定 self_reported、third_party 只能显式赋值；报告结论摘要与台账条目带证据档，三分法是 AQG 自定口径非信通院标准）、AgentAdapter 协议与轨迹重放（T31：端点 runner 与重放适配器同为协议形状、同一串调用产出的终态证据逐字段相等、加载器对畸形行/未知 case/重复键 fail-closed、重放 trace 直喂规则层不动判定层、trace 模式配置豁免被测端点但不豁免裁判）。
 
-> **全仓唯一一处单测条数声明**：**800 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-21 实测，含 1 条 `xfail(strict)` 已知缺口钉桩）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档。这条对齐已由 `verify.py` 的「声明条数自检」机器化：新增了用例却没同步声明、或只改了中英其中一份，自检直接判红；其它地方出现具体条数仍算口径重复声明。
+> **全仓唯一一处单测条数声明**：**817 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-24 实测，含 1 条 `xfail(strict)` 已知缺口钉桩）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档。这条对齐已由 `verify.py` 的「声明条数自检」机器化：新增了用例却没同步声明、或只改了中英其中一份，自检直接判红；其它地方出现具体条数仍算口径重复声明。
 
 GitHub Actions 主要做离线检查：安装依赖、运行 pytest、校验供应链锁定完整性、重建数据集、执行 smoke dry-run，不会调用真实模型；另有一个 `supply-chain` 作业从 `requirements.lock` 生成 CycloneDX SBOM 并跑 `pip-audit`（咨询级漏洞扫描）。真实评测请在本地配置 `.env` 后手动运行。
 
@@ -706,6 +707,7 @@ docs/                       # 索引见 docs/README.md：机器输入（K13 豁�
 - `evidence_span` 是 LLM 裁判的硬契约：自建裁判 prompt 或模型若不返回该字段，结果一律降为 `Judge_Unavailable` 并计入无效样本，需同步升级 prompt 或先用规则层。
 - 凭证外泄只比对 `fixtures` / `initial_state` 里的原样值：模型把密钥 base64/拆分拼接、或从工具输出临时拿到的凭证不在此列；S2 路由会在审计前脱敏参数，这类用例在 trace 里也看不到明文。真正的输出侧拦截要靠 DLP。
 - 工具参数 Schema 校验只覆盖 `TOOL_SCHEMAS` 声明的关键字子集（`required` / 基本类型 / `enum` / `additionalProperties=False`），不是完整 JSON Schema Draft（无 `$ref`、无嵌套 `items`/组合子）；只对已登记工具生效，未登记工具名的越权由 allowlist 侧处理。校验在裁判规则层独立复校模型产出的参数，与沙箱是否实际执行无关；排在其前面的语义类发现（污染/终态/血缘）会优先归因。
+- **轨迹重放模式（`--agent-trace`，T31）不是实时交互**：只重放外部 agent 导出的调用序列，不复现它与环境的双向决策。外部轨迹给不了的字段如实缺省：`token_cost`/`input_tokens`/`output_tokens` 恒 0、`seed` 恒 `None`、`finish_reason`/`backoff_ms` 恒空/0——**重放批次不得与端点批次混算成本与稳定性**；`latency_ms` 是重放耗时而非外部 agent 的真实耗时；`model` 落 `trace:<文件名>` 便于事后区分来源；S3 用例一律 Harness 阻断（外部轨迹无法证明执行发生在本地端点，fail-closed）。
 
 ## 发行说明
 
