@@ -9,10 +9,67 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from pydantic import ValidationError
 
+from src.engine.lineage import EPOCH_PREFIX_LEN
 from src.engine.tools import resolve_case_tools
 from src.models.schema import TestCase
 
 SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+
+# 语料本体：所有派生视图（smoke / 探针集 / curated 切片）都由它生成，
+# 代际锚点只认它的指纹。声明视图所属代际时以此为准。
+CORPUS_PATH = "cases/core_suite.jsonl"
+
+
+def case_ids(path: str | Path) -> set:
+    """原始行里的 case id 集合（轻量读取，不做 schema 校验、不去重）。
+
+    只用于「这个文件是不是语料的子集」这一件事，所以宁可读得粗：任何一行解析失败
+    就丢掉那一行，由调用方通过空集/子集判定退回「不声明」。
+    """
+    ids = set()
+    try:
+        records, _ = read_jsonl(path)
+    except OSError:
+        return ids
+    for record in records:
+        case_id = record.get("id") or record.get("case_id")
+        if case_id:
+            ids.add(str(case_id))
+    return ids
+
+
+def declared_generation_for_view(
+    view_path: str | Path, corpus_path: str | Path = CORPUS_PATH
+) -> str:
+    """子集视图所属的语料代际；判定不成立时返回空串（绝不猜）。
+
+    为什么需要：`cases/smoke.jsonl` 这类视图是语料的派生产物，文件指纹与语料不同。
+    带 publish 跑一次，台账就把顶层 `dataset_epoch` 钉成视图指纹，伪造一次代际切换；
+    下一次语料全量批再切回来时，跨代劣化护栏（同一代内 `resolved -> open` 才算劣化）
+    被整体冲掉，真实劣化会伪装成「新一轮基线」。
+
+    判定口径（三条都满足才声明）：
+    1. 视图不是语料本身（是本身则自身指纹即代际，无需声明）；
+    2. 语料文件存在且能算出指纹；
+    3. 视图的 case id **非空且全量落在语料 case id 内**。第 3 条是硬门槛：
+       `cases/regression.jsonl` 里有语料之外的历史用例（如 `PB-INT-099`），
+       它不属于当代语料视图，必须由调用方显式声明或不声明，自动逻辑不能替它背书。
+    """
+    view = Path(view_path)
+    corpus = Path(corpus_path)
+    if not corpus.is_file():
+        return ""
+    try:
+        if view.resolve() == corpus.resolve():
+            return ""
+    except OSError:
+        return ""
+    view_ids = case_ids(view)
+    if not view_ids:
+        return ""
+    if not view_ids <= case_ids(corpus):
+        return ""
+    return dataset_sha256(corpus)[:EPOCH_PREFIX_LEN]
 
 
 def read_jsonl(path: str | Path) -> Tuple[List[dict], List[dict]]:

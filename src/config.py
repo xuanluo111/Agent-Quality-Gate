@@ -9,6 +9,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 
+from src.engine.dataset import declared_generation_for_view
 from src.engine.lineage import is_valid_epoch, normalize_epoch
 
 load_dotenv()
@@ -389,6 +390,12 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
             f"--dataset-generation 必须是 16 位十六进制代际指纹，收到: {generation}"
         )
     config.dataset_generation = generation
+    # 未显式声明代际时，为「经子集校验的视图」自动补齐：smoke 这类视图的文件指纹
+    # 与语料不同，不补齐就会在台账里伪造一次代际切换（冲掉跨代劣化护栏）。
+    # 只有子集校验通过才补；校验不通过（如含语料外历史用例的 regression）仍旧留空，
+    # 宁可让报告喊一次真断点，也不替不属于本代的文件背书。
+    if not generation:
+        config.dataset_generation = declared_generation_for_view(config.dataset)
     # agent_trace 是带默认值的字符串旗标：照 model/base_url 的姿势只在显式传入时才覆盖。
     if getattr(args, "agent_trace", None):
         config.agent_trace = args.agent_trace

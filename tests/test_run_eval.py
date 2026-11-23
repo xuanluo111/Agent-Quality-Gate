@@ -10,6 +10,7 @@ import pytest
 from run_eval import _attempts_payload, _skipped_result, _trip_reason
 
 from src.config import RunConfig, add_run_args, config_from_args
+from src.engine.dataset import dataset_sha256
 from src.engine.stability import merge_attempts
 from tests.conftest import make_result, make_trace
 
@@ -62,6 +63,33 @@ def test_publish_is_on_by_default():
 def test_no_publish_keeps_selfcheck_runs_out_of_shared_artifacts():
     """自检跑 6 条冒烟，不能把对外报告和台账改成自检结果。"""
     assert _config("--no-publish").publish is False
+
+
+def test_smoke_view_auto_declares_corpus_epoch():
+    """跑 smoke 不必手传 --dataset-generation：子集视图自动归属语料代际。
+
+    这一条来自 2026-11-23 的真实事故：一次 `--suite smoke` 带 publish 的跑批
+    把台账 `dataset_epoch` 钉成了 smoke 自己的指纹，伪造一次换代，下一次语料全量批
+    就会把上一代 resolved 的条目重新基线成 open，劣化信号全部失效。
+    """
+    corpus_epoch = dataset_sha256("cases/core_suite.jsonl")[:16]
+    config = _config()
+    assert config.dataset == "cases/smoke.jsonl"
+    assert config.dataset_generation == corpus_epoch
+    # 视图指纹与语料代际必须不同，否则这条钉桩是纸上的。
+    assert dataset_sha256(config.dataset)[:16] != corpus_epoch
+
+
+def test_explicit_generation_takes_precedence_over_auto():
+    """显式声明永远优先：自动推算不能替调用方改主意（探针矩阵就依赖这个口径）。"""
+    assert _config("--dataset-generation", "0123456789abcdef").dataset_generation == "0123456789abcdef"
+
+
+def test_core_suite_needs_no_auto_declaration():
+    """跑语料本体时不声明：它自己的指纹就是代际，声明了反而遮住真实换代。"""
+    parser = argparse.ArgumentParser()
+    add_run_args(parser)
+    assert config_from_args(parser.parse_args(["--suite", "core"])).dataset_generation == ""
 
 
 def test_regression_only_takes_real_model_failures():

@@ -9,8 +9,10 @@ from src.engine.dataset import (
     GRADE_C,
     audit_cases,
     build_suite,
+    declared_generation_for_view,
     dedupe_cases,
     dedupe_cases_detailed,
+    dataset_sha256,
     duplicate_id_report,
     holm_adjust,
     load_cases,
@@ -504,3 +506,58 @@ def test_dedupe_file_keeps_first_line_verbatim(tmp_path):
     # 保留的行逐字原样写回（不重新序列化），顺序不变。
     assert path.read_text(encoding="utf-8").splitlines() == [first, second]
     assert duplicate_id_report(path)["duplicates"] == 0
+
+
+# ---------- 子集视图的代际自动声明（防“假换代”） ----------
+# 背景：smoke 这类派生视图的文件指纹与语料不同。带 publish 跑一次，台账顶层
+# `dataset_epoch` 就被钉成视图指纹，等于伪造一次代际切换；下一次语料全量批
+# 会把跨代劣化护栏整体冲掉（真实劣化伪装成“新一轮基线”）。
+
+
+def _view_row(case_id: str) -> str:
+    return json.dumps(
+        {"id": case_id, "category": "工具与行动安全", "severity": "low", "input": "x"},
+        ensure_ascii=False,
+    )
+
+
+def _write_cases(tmp_path, name: str, ids) -> Path:
+    path = tmp_path / name
+    lines = [_view_row(cid) for cid in ids]
+    path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    return path
+
+
+def test_subset_view_declares_corpus_epoch(tmp_path):
+    """视图全量落在语料里 → 代际按语料算，而不是按视图文件自己的指纹算。"""
+    corpus = _write_cases(tmp_path, "core.jsonl", ["a", "b", "c"])
+    view = _write_cases(tmp_path, "smoke.jsonl", ["a", "c"])
+    assert declared_generation_for_view(view, corpus) == dataset_sha256(corpus)[:16]
+    # 声明的是语料代际，不是视图指纹——两者必须不同，否则这条断言是空的。
+    assert dataset_sha256(view)[:16] != dataset_sha256(corpus)[:16]
+
+
+def test_view_holding_foreign_case_is_never_endorsed(tmp_path):
+    """视图里有语料之外的 case id（如 regression 的历史编号）→ 不声明。
+
+    替它背书等于把不属于本代的失败也算进本代的劣化基线，比假换代更糟。
+    """
+    corpus = _write_cases(tmp_path, "core.jsonl", ["a", "b"])
+    view = _write_cases(tmp_path, "regression.jsonl", ["a", "legacy-001"])
+    assert declared_generation_for_view(view, corpus) == ""
+
+
+def test_corpus_itself_needs_no_declaration(tmp_path):
+    """语料本体不必声明：它自己的指纹就是代际，多此一举会把基准指向自己。"""
+    corpus = _write_cases(tmp_path, "core.jsonl", ["a", "b"])
+    assert declared_generation_for_view(corpus, corpus) == ""
+
+
+def test_unreadable_empty_or_missing_corpus_declares_nothing(tmp_path):
+    """空视图、缺文件、语料缺失——全部退回不声明：宁可喊一次真断点也不猜。"""
+    corpus = _write_cases(tmp_path, "core.jsonl", ["a"])
+    empty = _write_cases(tmp_path, "empty.jsonl", [])
+    view = _write_cases(tmp_path, "smoke.jsonl", ["a"])
+    assert declared_generation_for_view(empty, corpus) == ""
+    assert declared_generation_for_view(tmp_path / "不存在.jsonl", corpus) == ""
+    assert declared_generation_for_view(view, tmp_path / "没有语料.jsonl") == ""
