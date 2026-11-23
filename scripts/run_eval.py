@@ -16,13 +16,19 @@ from dotenv import load_dotenv
 
 from src.config import add_run_args, config_as_dict, config_from_args
 from src.engine.adapter import AgentAdapter, TraceReplayAdapter
-from src.engine.dataset import audit_cases, load_cases, stratified_sample
+from src.engine.dataset import audit_cases, case_ids, load_cases, stratified_sample
 from src.engine.failure_class import PRECONDITION_FAILED, UNKNOWN, classify_case
 from src.engine.journal import JOURNAL_FILENAME, recover as recover_journal
 from src.engine.judge import LayeredJudge
 from src.engine.report import generate_markdown
 from src.engine.runner import AgentRunner
 from src.engine.stability import attempt_divergence, divergence_summary, merge_attempts
+from src.engine.window import (
+    WindowProtocolError,
+    load_manifest,
+    select_window_cases,
+    validate_manifest,
+)
 from src.models.schema import AgentTrace, EvalResult, TestCase
 
 load_dotenv()
@@ -250,6 +256,24 @@ def _print_dry_run(cases, load_report, sampled, sampling, audit) -> int:
     return 0
 
 
+def _window_protocol_meta(config, window_audit) -> dict:
+    """窗口审计进元数据：“本轮只喂了哪些题”必须事后能核对，不然“未来不可见”只是句口号。
+
+    带 manifest 的文件指纹：只记路径不够——manifest 是可以被改写的，
+    事后拿到同一批结果时得能判断当时读的是哪一版切片定义。
+    """
+    return {
+        "manifest": config.window_manifest,
+        "window": window_audit["window"],
+        "asked": window_audit["asked"],
+        "selected": window_audit["selected"],
+        "dropped": window_audit["dropped"],
+        "manifest_sha256": hashlib.sha256(
+            Path(config.window_manifest).read_bytes()
+        ).hexdigest()[:16],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Agent-Quality-Gate 评测入口")
     add_run_args(parser)
@@ -286,6 +310,27 @@ def main() -> int:
         print(
             f"WARN: {config.dataset} 有 {load_report['duplicates']} 条重复用例已按 id 保留首条"
             f"（其中 {len(conflicts)} 个 id 内容不同）；建议先跑 build_suite.py --dedupe-inputs 清掉"
+        )
+    # T32 跨窗口协议：裁剪必须在抽样**之前**。
+    # 顺序反了就不是“少跑几道”而是污染：先抽样再裁，抽到的样本里可能含未来题，
+    # 而协议要防的正是“被测方提前看见未来”——那一步必须发生在喂题之前，不是之后。
+    window_audit = None
+    if config.window_manifest:
+        try:
+            # 走 load_manifest 而不是自己 json.loads：协议版本不认识时，
+            # 后面每一条校验的“通过/不通过”都没有确定含义。
+            manifest = load_manifest(config.window_manifest)
+            # 校验面是 manifest 自己声明的语料，不是本轮加载的视图：
+            # smoke 这类子集视图跑协议时，仍然要能校到全量 207 条的窗口划分。
+            corpus = manifest.get("corpus") or config.dataset
+            validate_manifest(manifest, case_ids(corpus))
+            cases, window_audit = select_window_cases(cases, manifest, config.window)
+        except (OSError, WindowProtocolError) as exc:
+            print(f"跨窗口协议不成立，本轮不跑（失败关闭）: {exc}")
+            return 1
+        print(
+            f"跨窗口协议: 窗口 {config.window} | 可见题集 {len(cases)} 条 | "
+            f"被隔离的未来题 {window_audit['dropped']} 条"
         )
     sampled, sampling = stratified_sample(cases, config.limit, config.seed)
     audit = audit_cases(sampled, load_report)
@@ -485,6 +530,9 @@ def main() -> int:
     run_meta["jcv_threshold"] = config.jcv_threshold
     run_meta["require_stable"] = config.require_stable
     run_meta["repeat"] = config.repeat
+    # 窗口审计进元数据：“本轮只喂了哪些题”必须事后能核对，不然“未来不可见”只是句口号。
+    if window_audit is not None:
+        run_meta["window_protocol"] = _window_protocol_meta(config, window_audit)
 
     # K08 变序的自证：同用例多次尝试究竟分化了多少。
     # 放在门禁**之外**是故意的——`cases_with_single_seed > 0` 说明变序根本没接上，

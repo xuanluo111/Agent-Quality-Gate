@@ -69,6 +69,11 @@ class RunConfig:
     # 数据集视图声明自己属于哪一代语料（如探针集是 core 语料的子集视图）。
     # 空串 = 不声明，按本数据集文件自身的指纹算代际。
     dataset_generation: str = ""
+    # T32 跨窗口协议：窗口 manifest 路径与本轮窗口号；window < 0 = 未启用协议。
+    # 刻意不把窗口题目落盘成新的 jsonl：窗口视图由 manifest 在运行时裁剪得到，
+    # 这样切片永远不会改动 dataset_sha256，也就永远不会误触切代（AGENTS.md 纪律 2）。
+    window_manifest: str = ""
+    window: int = -1
     limit: int = 120
     workers: int = 5
     mode: str = "enforce"
@@ -195,6 +200,8 @@ class RunConfig:
             "seed": self.seed,
             "dataset": self.dataset,
             "dataset_generation": self.dataset_generation,
+            "window_manifest": self.window_manifest,
+            "window": self.window,
             "agent_trace": self.agent_trace,
             "limit": self.limit,
             "workers": self.workers,
@@ -341,6 +348,21 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
 
+    parser.add_argument(
+        "--window-manifest",
+        default="",
+        help=(
+            "T32 跨窗口协议 manifest 路径：按时间切片只允许看到本窗口及以前的用例，"
+            "未来窗口的题一律不喂。不填则不启用跨窗口协议"
+        ),
+    )
+    parser.add_argument(
+        "--window",
+        type=int,
+        default=-1,
+        help="本轮所处的窗口序号（从 0 起）。与 --window-manifest 同时使用",
+    )
+
 
 def config_from_args(args: argparse.Namespace) -> RunConfig:
     if args.suite and args.dataset:
@@ -396,6 +418,19 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
     # 宁可让报告喊一次真断点，也不替不属于本代的文件背书。
     if not generation:
         config.dataset_generation = declared_generation_for_view(config.dataset)
+    # 跨窗口协议：只校“给了一半配置”这种自相矛盾；manifest 内容校验留给 run_eval
+    # （那里才有用例可校），config 层不去读文件，避免把配置构造和磁盘依赖绑死。
+    config.window_manifest = getattr(args, "window_manifest", "") or ""
+    config.window = getattr(args, "window", -1)
+    if config.window >= 0 and not config.window_manifest:
+        raise SystemExit(
+            f"--window {config.window} 需要同时给出 --window-manifest："
+            "没有 manifest 就无从知道哪些题属于未来窗口"
+        )
+    if config.window_manifest and config.window < 0:
+        raise SystemExit(
+            "给了 --window-manifest 但没给 --window：协议必须知道本轮处在哪个窗口才能裁剪可见集"
+        )
     # agent_trace 是带默认值的字符串旗标：照 model/base_url 的姿势只在显式传入时才覆盖。
     if getattr(args, "agent_trace", None):
         config.agent_trace = args.agent_trace
