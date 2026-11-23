@@ -12,6 +12,15 @@
 
 > **时点说明（仅适用下一条 11-23 条目）**：该条日期取自机器时钟，与它记录的 run_id `20261123-*` 一致；上一条 T31 标的是 11-24，两者按标注日期不呈倒序。既成记录不重写，引用时点请以 run_id / 台账 `updated_at` 为准。
 
+### 2026-11-23：被测切 `qwen3.8-flash`（三层探通）+ 双池额度重算→选定档 3，并插掉一处资产污染
+
+- **换模型不能只探“能不能回”**：本 harness 每一轮都带 `tools`，网关不支持 function calling 的话，一整夜只会收到空轨迹。所以探通分三层：端点/模型名→**带 tools 的真实调用（`finish_reason=tool_calls`、参数为合法 JSON）**→端到端 8 题 smoke（`7/8` 题真产生工具调用）。三条未通过全为能力/预算类（`State_Pollution` critical / `Step_Budget_Exceeded` / `Failed_Reasoning`），`output_truncated=False`、零 harness 错误——失败得“像模型问题而不是配置问题”才算测通。两次探跑均 `--no-publish`。
+- **一个自己踩出来的坑（本批唯一代码库变更）**：我以为 `--no-publish` 能保住评测资产，实际探跑完 `git status` 里躺着 `M cases/regression.jsonl`——追加回归用例由**另一条开关** `config.update_regression`（默认 `True`）控制，`--no-publish` 管不到它。真跑 207 题会批量往 `cases/` 里写。已把污染行备份到 `workspace/t32_night/pollution-20261123/` 后回滚，README 双语的 `--no-publish` 行就地补上这句排除（`verify --live` 本来就在强制 `--no-regression`，口径早就存在，只是没写进参数表）。
+- **“1M 够不够”有两个相反答案，先问清是哪个 1M**：作为上下文窗口——峰值 `input 4,766`、全 207 题语料共 14,632 字符，1M 过剩；作为账户额度——它是**唯一瓶颈**。拿到双池（被测 1M / 裁判 26M）后拆开实测每题 3,626 + 4,100 → 被测 276 exec 硬顶、裁判可撑 6,341 exec（宽 23 倍）；我上一轮按**同池**算的“981 exec / 7.6M”作废。**推论**：把 `--judge-samples` 2→3 只花宽裕池、不碰瓶颈，是额度内少数免费强化；反过来 `max_tokens` **不提** 16384——上下文大小≠额度预算，截断只丢单题、打穿则整个计划停歇。
+- **档 3 的隐藏空洞**：按“W0 全 120 题 + W1 只跑新增 87 题”排，W1 没重跑任何 W0 见过的题 → `delta_retained`（唯一可归因字段）为 0，只剩 README 禁止引用为增益的 `delta_total`。改为 **W0 60 题 + W1 147 题（同 60 复测 + 87 新增）= 207 exec**，题数与 token 完全相同，白拿 retained 60 条。
+- **工具**（均在 `workspace/`，不入库、零 API）：`make_subset_view.py` 关键面必选 + 类别轮转，只从对应窗口视图按字节搬行、越界即拒——选题的必选覆盖数与 dry-run 报的窗口 0 事实**逐项对上**（S2=3+S3=1=4、HITL=8、JCV=2），207/207 行与父视图逐字节相同；`plan3_fullcover.sh` 带**被测额度守卫**（每 60s 累加 `attempts[].token_cost`，超 880k 即 `touch ABORT`）与**分阶段决策**（W0 跑完用真实 per-exec 重算 W1 需求，撞线就停在窗口之间等人拍板，不自动缩题集——那是偷偷改实验设计）。
+- **口径诚实**：`qwen3.8-flash` 名下裁判 κ 未标定 → **不传** `--judge-kappa`，让门禁如实落 `unverified`（README「κ 是被测模型的函数，跨模型沿用等于用甲的答卷改乙的卷」；上一轮 flash 的 κ=1.0 不可沿用）。档 3 与“拿到可宣布噪声带”在 1M 被测额度下**互斥**（repeat 1 无配对）→ 本场交付是全量基线 + 跨窗口两轮流程跑通 + ΔJ 只报数不判定，**不是结论**。真跑仍未启动（等用户 caffeinate 起跑）。
+
 ### 2026-11-23：T49 子集视图代际自动声明（T31 跟进缺陷）+ deepseek-chat smoke 全量批
 
 - **缺陷由一次真实跑批暴露**：`--suite smoke` 带 publish 跑完，台账 `dataset_epoch` 被写成 smoke 自己的文件指纹 `4582db1db66f9499`（语料代际是 `deff7501007cff61`），`switched_this_run=True` 且 `latest.md` 多出一条假「数据集换代」横幅。危害不在当场，而在下一场：core 全量批会再触发一次假换代，把上一代 `resolved` 整体重基线为 `open`，`regressed`（真劣化）信号全部失效——正是 `report.py` 注释点名要防的那件事。`--dataset-generation` 机制早就存在，但只有探针矩阵在用，smoke 这条路径没人传。

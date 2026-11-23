@@ -695,7 +695,7 @@ python scripts/rejudge.py --runs 'reports/runs/*' --collateral-risk critical
 | `--require-stable` | 门禁改用 pass^k（N 次全部通过）对比基线，需配合 `--repeat > 1` |
 | `--collateral-risk {critical,high,medium,low}` | `Collateral_Damage` 的风险等级，默认 high |
 | `--no-provenance` | 关闭参数血缘检查（历史数据重判时的兜底开关，也可用用例 tag `no-provenance` 单条退出） |
-| `--no-publish` | 不覆盖 `reports/latest.md` / `observability.json`，也不写风险台账；自检/调试用，默认关闭 |
+| `--no-publish` | 不覆盖 `reports/latest.md` / `observability.json`，也不写风险台账；自检/调试用，默认关闭。**注意它管不到 `cases/regression.jsonl`**：追加回归用例由 `config.update_regression` 控制（默认 `True`），要不动评测资产得同时带 `--no-regression`（`verify --live` 就是这么强制的）|
 | `--dry-run` | 只校验数据，不调用模型 |
 | `--agent-trace PATH` | 轨迹重放模式（T31）：把外部 agent 导出的工具调用轨迹 JSONL（每行 `{case_id, attempt, tool_calls, final_response}`）在同一套沙箱/快照/断言链里重放，不调用被测端点（裁判照旧、仍会产生费用）；判定层零改动，重放语义的缺省字段见「已知限制」 |
 | `--window-manifest PATH` / `--window N` | 跨窗口协议（T32）：manifest 声明累积的 cutoff 切片，`--window` 说出本轮处在哪个窗口。用例在**分层采样之前**裁剪，只喂本窗口可见集；请求集含未来窗口用例直接报错退出（1），不静默剔除——所以 `--dataset` 要让给 `cross_window.py view` 生成的视图，直接喂全量语料在窗口 0 会被拦。切片不改 `dataset_sha256` |
