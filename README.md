@@ -46,6 +46,7 @@
 - [裁判语义：Standard vs Strict](#裁判语义standard-vs-strict)
 - [发布门禁](#发布门禁)
 - [排名与显著性](#排名与显著性)
+- [跨窗口评测与噪声带](#跨窗口评测与噪声带)
 - [运行产物](#运行产物)
 - [可视化](#可视化)
 - [重判已有结果](#重判已有结果)
@@ -96,6 +97,8 @@
 | 风险台账 | `reports/risk_ledger.json` 跨运行维护 `open/resolved/regressed`；`occurrences` 目前只是**计数与展示**（报告台账第「次数」列），没有任何判据消费它——重复失败的处置纪律是人工环节，见 [`docs/quality/02-台账消费与SDD迭代纪律.md`](docs/quality/02-台账消费与SDD迭代纪律.md) |
 | 数据集代际指纹 | 数据集文件 SHA256 前 16 位即 `dataset_epoch`；台账只在**同一 epoch 内**判定 `resolved→open` 为劣化（regressed），跨代重新基线为 open 并记 `rebaselined_from_epoch`——不拿数据集变更冒充模型退化；代际切换在报告与台账顶层显式标注 |
 | 统计 | 类别/严重度分层采样 + Wilson 95% 置信区间 |
+| 跨窗口评测协议（T32） | `src/engine/window.py` + `scripts/cross_window.py`：语料按 cutoff 切成累积序列，窗口 N 的可见题集 = 0..N 并集；`run_eval --window-manifest/--window` 在**抽样之前**裁剪，请求集含未来窗口用例即**失败关闭**（不静默少跑）。切片不改 `dataset_sha256`、不触切代。ΔJ 强制三拆：`delta_retained`（同题复测，唯一可归因）／`delta_novel`（新增题绝对分）／`delta_total`（含构成变化，禁止当能力增益），归因边界随产物落盘（`attributable_field`） |
+| 噪声带实测标定（T32） | `src/engine/noise_calibration.py` + `scripts/calibrate_noise_band.py`（零 API、零写入）：从历史 `repeat>1` 批次的 `result.attempts[]` 量出「同配置重跑一次会差多少 pp」的真实抖动。按 16 项抖动相关配置指纹分组（预算/裁判采样/模型不同不合池），单场只能出配对时用翻转率解析式（σ_D=√(q/n)）。与 T14 的 Wilson 代理带**并列而非替换**：代理带答「换题集的抽样误差」（两模型横比用），实测带答「运行抖动」（跨窗口 ΔJ 用） |
 | 报告 | Markdown 报告（结论摘要 + 数据有效性 + HITL 专项 + 风险台账 + 失败环节归因）、`summary.json`、ECharts 交互仪表盘、matplotlib PNG |
 | 终态断言 | 用例可声明 `initial_state` / `expected_final_state` / `state_assertions` / `allowed_changes`；Runner 在用例开始与结束把工作区拍成 `路径 -> sha256`，断言不符记 `State_Mismatch`，声明外变更记 `Collateral_Damage` |
 | pass^k 稳定性 | `--repeat N` 让同一用例在独立工作区重复执行 N 次，汇总给出 pass@k / pass^k / stability_rate / flaky；`--require-stable` 时门禁改用 pass^k。**重复轮之间逐次派生采样种子**（第 1 次保持 `--seed` 原值，之后按质数步长偏移）：否则 N 次尝试同一个 seed，输出几乎逐字重合，稳定性数字虚高。分化度由 `attempt_divergence` 量化（种子唯一数 / 工具 Jaccard / 回复 Jaccard）；`cases_with_single_seed > 0` 即意味着本轮稳定性不可引用 |
@@ -478,7 +481,7 @@ python scripts/run_eval.py --suite core --min-valid-rate 70
 - 以可信样本中的第一名作为基准，做双比例 z 检验（双侧）。**这 m 次「各模型 vs 基准」的比较按 Holm–Bonferroni 逐步降阶校正**（`dataset.holm_adjust`，α=0.05，默认开启、无关闭开关）：不校正的话，6 次比较全为真零假设时至少一次误报的概率≈26%，所以「显著」只出现在校正后的 p 上。原始 p 与校正后 p **同时列出**（这就是校正前后对照表），被校正翻转的场次（原始 p<0.05、校正后≥0.05）在脚注逐场点名。
 - 判定使用与展示相同的三位小数，避免出现 `p=0.050` 却写“显著”的自相矛盾（校正在未舍入的 p 上算，算完再按展示口径舍入）。
 - 每行同时给出**效应量**：相对基准的百分点差与 Cohen's h。p 只回答“差异能不能从抽样噪声里区分出来”，不回答“差多少”——样本够大时 0.5 个百分点也能拿到 `p<0.001`。h 的常用参照：0.2/0.5/0.8 依次为小/中/大效应。
-- 结论按 **A/B/C 分档**（强度，不是能力分档）：**A** 校正后显著 **且** 差距超出噪声带 → 可作结论；**B** 两个轴只满足一个（含“原始显著却被校正吃掉”）→ 只当线索，不进对外结论；**C** 两个轴都不满足 → 差异未证实。**噪声带**取两组各自 Wilson 95% 区间半宽的平均，是同一口径下的**代理值、非实测抖动**（实测标定需同配置重复跑，见 T32）。
+- 结论按 **A/B/C 分档**（强度，不是能力分档）：**A** 校正后显著 **且** 差距超出噪声带 → 可作结论；**B** 两个轴只满足一个（含“原始显著却被校正吃掉”）→ 只当线索，不进对外结论；**C** 两个轴都不满足 → 差异未证实。**噪声带**取两组各自 Wilson 95% 区间半宽的平均，是同一口径下的**代理值、非实测抖动**（实测口径见「跨窗口评测与噪声带」；T32 已量到实测抖动下界 3.14~10.00pp，但两者语义不同，本分档**不改用实测值**——换成更窄的带等于让门禁对横比结论更宽松，违反「新增判据只能更严或持平」）。
 - `p≥0.05` 的准确含义是“这批样本不足以证明有差异”，不是“两个模型一样好”。报告措辞统一为“**差异未证实**”，不再用“统计上不可区分”（后者会被读成“两者一样”）。
 - 数据有效率不足的场次标 `*`，仍列出分数，但不参与排名结论。
 - **区间、效应量与分档都只用于排序与抽检，不参与准出**：`wilson_interval` 只出现在 `report.py`（展示）与 `drift_check.py`（批量漂移），`gate.py` 全文不引用——这是刻意的。任何“置信度／区间下界／A・B・C 等级”类数值都不得作为放行条件：放宽等于用统计噪声买通过，收紧会让小样本批次无故变红。要拦发布只能用确定性判据（Critical、Strict 基线、pass^k、有效率、κ 授权），见「发布门禁」。
@@ -491,6 +494,69 @@ python scripts/run_eval.py --suite core --min-valid-rate 70
 - **κ 也要给样本量与不确定度。** 本仓库的 κ 全部来自 ≤ 40 条人工双标，是小样本点估计；`calibration.json` 只落 `matched` 与 `observed_agreement`，**没落不确定度**——会场材料里的「±0.15」在本仓库无法复算，不得当实测值引用。能公开复算的是同一算法下的**一致率 Wilson 95% 区间**（由 `matched` 与 `observed_agreement` 直接得出）：旧锚 `glm-4-flash × spark-4b` 35/38 = 92.11%（79.20~97.28）；新代 `glm-5.3-flash` × qwen4 18/18（82.41~100）、× deepseek 20/20（83.89~100）、× mimo 19/20 = 95%（76.39~99.11）。**四条区间高度重叠**，“换裁判后 κ 从 0.84 升到 1.0”不能作为结论；κ=1.0 正好落在边界上，标准误的正态近似失效，只能退回一致率区间来读。
 - **κ 是被测模型的函数，不是裁判的固有属性。** 上面四个数分别来自四条不同模型的轨迹，跨模型沿用同一个 κ 等于用甲的答卷改乙的卷（推理见 [`docs/c02-judge-calibration/01-换裁判模型后的复核与修正口径.md`](docs/c02-judge-calibration/01-换裁判模型后的复核与修正口径.md)）。因此 `--judge-kappa` 只能逐模型传；没传的场次就是 `unverified`，能力判据只报告不阻断（`gate.REPORT_ONLY_AUTHORITIES`）。
 - **平台期不得当作趋势结论。** 同一代际内多次评测若都落在同一水平带（区间重叠、未过显著性判定），只能报“持平”，不得写成“持续改进／退化曲线”。自进化的分数变化是**阶梯**而不是斜坡——换判据、换数据集、修一次环境都会让它跳一级，跳变不是能力增长；跨代相减一律禁止（见「数据集」节）。
+
+## 跨窗口评测与噪声带
+
+上一节回答的是“这一场多少分、两个模型之间差可信吗”；本节回答的是另一个问题：**时间推进后，被测方还保得住它已有的能力吗**。两个机制都只读本地落盘产物，零 API：
+
+### 跨窗口协议（`src/engine/window.py`、`scripts/cross_window.py`）
+
+三条约束都是**可被违反**的，否则它只是一句注释：
+
+- **时间切片**：语料按 cutoff 切成累积序列，窗口 N 的可见题集 = 窗口 0..N 的并集；序号必须从 0 连续、cutoff 必须单调不减、每窗口新增集非空。
+- **未来不可见**：`run_eval --window-manifest PATH --window N` 在**分层采样之前**裁剪。顺序反了就不是“少跑几道”而是污染：先抽样再裁，抽到的样本里可能含未来题。请求集含未来窗口用例 → 直接报错退出（1），**不静默剔除**：静默会让“本轮究竟喂了多少题”失真，也掩盖污染已经发生这件事。
+- **增量喂入**：每窗口的 `declared` 就是本轮新增集，两两必须不相交——同一题重复声明能把“重排旧题”算成新增增益。
+
+**切片不切代**：manifest 只能引用语料子集（复用子集视图校验口径），且窗口视图**不落盘成新的 jsonl**、运行时才裁剪，所以 `dataset_sha256` 永不变，不会误触切代。
+
+**ΔJ 的口径纪律**（这条比代码重要）：跨窗口分数变化里混着两种完全不同的东西——同题复测的真变化，和题目覆盖扩张带来的构成变化。所以 `delta_j` 强制拆三项，且把边界写进产物：
+
+| 字段 | 含义 | 能不能当增益引用 |
+| --- | --- | --- |
+| `delta_retained` | 同题复测的分数差 | **能**——唯一可归因于“能力保持”的项 |
+| `delta_novel` | 新增题的绝对分 | 不能——没有基线可比 |
+| `delta_total` | 全量口径差 | **禁止**——分母构成在两期之间变了，是“构成变化 + 真变化”的混合体 |
+
+窗口 0 是基线轮，不产生 ΔJ；基线只允许来自上一窗口（跨一期去比会把“退化又恢复”的过程读成增益）。
+
+**cutoff 的证据来源（诚实边界）**：207 条存量语料**没有任何时间字段**，git 历史仅 8 次且经 11-17 私料清除重写——没有任何可靠依据能自动确定每题的入库时点。所以 `cross_window.py propose` 用每题**首次被真实评测的批次日期**（从 `reports/runs` 与归档目录名日期复算，本机 39 场可重跑）作为**入库时点的下界，不是准点**；从未在任何历史批次出现过的题一律 `unassigned`、不进任何窗口——没有证据就不替它编时间。当前生成结果：2 个窗口（0: cutoff `2026-10-22` / 120 条，1: cutoff `2026-11-06` / 87 条），合计恰为 207。
+
+```bash
+python scripts/cross_window.py propose   --out cases/windows/manifest.json   # 从落盘证据生成
+python scripts/cross_window.py validate  --manifest cases/windows/manifest.json
+python scripts/cross_window.py plan      --manifest cases/windows/manifest.json --window 1 --ids
+python scripts/cross_window.py delta     --manifest cases/windows/manifest.json --window 1 \
+    --baseline-run reports/runs/<窗口0的run> --current-run reports/runs/<窗口1的run>
+# 真跑某一轮：
+python scripts/run_eval.py --window-manifest cases/windows/manifest.json --window 1 --repeat 2
+```
+
+### 噪声带的两种语义，不可互换
+
+| | Wilson 代理带（T14） | 实测抖动带（T32） |
+| --- | --- | --- |
+| 回答的问题 | 换一个题集估计，通过率会差多少 | 同一批题同一配置重跑一次会差多少 |
+| 误差源 | 抽样误差 | 服务端非确定性 + 裁判采样 + 工具时序 |
+| 适用面 | 两模型横比（A/B/C 分档） | 跨窗口 ΔJ 是否“超出抖动” |
+
+标定方法：扫 `reports/runs/*` 与归档目录（只读），按 16 项抖动相关配置指纹分组（不同预算/不同裁判采样不是同一个噪声源，不合池），同配置多场合并期数后逐对算差；配对凑不齐时（单场 `repeat=2` 只有 1 个配对）退回翻转率解析式：翻转率 q、σ_D = √(q/n)、95% 带 = 1.96·σ_D。
+
+**本机实测结果（零成本，只读 55 个 run）**：24 个同配置组，22 组 n≥30 参与汇总；实测带宽 **下界 3.14pp / 中位 5.53pp / 跨度 3.14~10.00pp**；同批 Wilson 代理带跨度 3.58~15.71pp，**实测窄于代理的有 19/22 组**。
+
+三条不得省略的结论：
+
+1. 这组数是**保守下界，不是已标定值**：这些批次早于 K08 变序落地，`result.attempts[]` 里 0 场有 seed（24 组全部如此），即同种子重复；同种子方差 ≤ 变序后方差，所以它只能回答“至少有多大”。要拿到可宣布的标定值，需要一次带变序采样的 `repeat` 批（须授权）。
+2. **A/B/C 分档带宽不替换**：实测带普遍窄于代理带，拿它去换会让跨模型横比更容易拿 A——这违反“新增判据只能让门禁更严或持平”。两者语义也不同，实测带只用于新增的跨窗口 ΔJ 判据面。
+3. 参与汇总要求 n ≥ 30：5~18 条的自检批偶然 0 翻转会得到 0.00pp 的下界，那是“没测到”而不是“噪声小”；汇总取最小组带宽而不是均值，因为下界只能说“至少这么大”。
+
+### 仅增预算对照组（`scripts/budget_ab.py`）
+
+预算不足会把“没答完”直接记成不合规，所以同一个模型在不同 `token_budget` 下可以名正言顺地拿到两个分数——跨窗口比较一旦同时动了预算，ΔJ 里就混进了脚手架效应。本工具只做两件事（都是零成本）：
+
+- `plan`：**唯一变量自检**。两档配置除预算项外还有任何一项不同，直接拒绝出计划（“只增预算”是一个可以被违反的承诺，不是一个形容词）；默认只放大 `token_budget`/`max_tokens`，`max_rounds` 需显式列入——放开步数上限会同时放宽行为空间，两种效应混在一个 Δ 里说不清。
+- `analyze`：把分数差拆成**输出截断率／样本无效率／环境故障率 + 净差**，只有净差允许往“能力”上解释；反向迁移（低档过→高档败）逐条列出，不允许只报净差把它混掉。
+
+真实两档跑批需明确授权（都会产生费用），本轮只交付设计、命令生成与分析器。
 
 ## 运行产物
 
@@ -621,6 +687,7 @@ python scripts/rejudge.py --runs 'reports/runs/*' --collateral-risk critical
 | `--no-publish` | 不覆盖 `reports/latest.md` / `observability.json`，也不写风险台账；自检/调试用，默认关闭 |
 | `--dry-run` | 只校验数据，不调用模型 |
 | `--agent-trace PATH` | 轨迹重放模式（T31）：把外部 agent 导出的工具调用轨迹 JSONL（每行 `{case_id, attempt, tool_calls, final_response}`）在同一套沙箱/快照/断言链里重放，不调用被测端点（裁判照旧、仍会产生费用）；判定层零改动，重放语义的缺省字段见「已知限制」 |
+| `--window-manifest PATH` / `--window N` | 跨窗口协议（T32）：manifest 声明累积的 cutoff 切片，`--window` 说出本轮处在哪个窗口。用例在**分层采样之前**裁，只喂本窗口可见集；请求集含未来窗口用例直接报错退出（1），不静默剔除。切片不改 `dataset_sha256` |
 | `--run-id` / `--output-root` / `--workspace-root` | 运行标识与产物路径 |
 
 所有运行参数会写入 `config.json`（API Key 脱敏为 `***`），并随报告记录 seed、数据集 SHA256、Git SHA、模型和裁判信息。
@@ -632,9 +699,9 @@ python -m pytest -q
 python scripts/selfcheck_oracles.py   # C01 判据自检：题目可信度审计（同样 0 成本）
 ```
 
-测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、判据指纹（覆盖范围／分层归属／历史缺值回落）、判据自检回路（正反参照/漏网检出/诚实分母）、门禁分支、数据加载/去重/采样、排名统计（Holm–Bonferroni 校正、效应量、A/B/C 置信等级）、报告与台账（含 M1 责任派发与签字校验）、Markdown/summary 可视化解析（含同名模型多场只取最新一场的统计口径）、人工标注模板与复核表渲染（只透执行事实、不透裁判结论）、自检脚本自身的体检规则（声明条数对齐、入库件本机身份扫描）、开跑前 key 生效自检（与 `run_batch` 同一条取 key 链，单测不打网络）、裁判 token 烧速外推（钉桩 `results.jsonl`）与外发打包前的本机身份预检（`pack_originality --scan-paths/--scan-only`）、PR 门禁摘要评论渲染（`pr_comment`：表行/阻断原因/缺字段降级/取最新批次与 dryrun 副产物剔除）、轨迹冗余检测（T23：同参≥3 次与短周期自环告警线、不阻断判定铁锚、gate 不消费字段钉桩）、harness 韧性（T24：网关 503/连接中途断退避重试、半截 JSON 工具参数不重试不判违规、断点续跑 already_done 判定口径）、实心/空心覆盖图（T27：五态分类不把「设计如此」误读成漏测、每个空心节点必须能反查到 controls.py 登记项的红线、未登记空心拒绝出图）、证据分级（T29：`evidence_type` 由判定层派生——确定性层 measured、模型判定 self_reported、third_party 只能显式赋值；报告结论摘要与台账条目带证据档，三分法是 AQG 自定口径非信通院标准）、AgentAdapter 协议与轨迹重放（T31：端点 runner 与重放适配器同为协议形状、同一串调用产出的终态证据逐字段相等、加载器对畸形行/未知 case/重复键 fail-closed、重放 trace 直喂规则层不动判定层、trace 模式配置豁免被测端点但不豁免裁判）、子集视图代际自动声明（T31 跟进缺陷：smoke 这类派生视图的自身指纹不得钉上台账代际锚点，否则伪造一次换代并冲掉跨代劣化护栏；含语料外 case id 的视图拒绝背书、显式声明永远优先）。
+测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、判据指纹（覆盖范围／分层归属／历史缺值回落）、判据自检回路（正反参照/漏网检出/诚实分母）、门禁分支、数据加载/去重/采样、排名统计（Holm–Bonferroni 校正、效应量、A/B/C 置信等级）、报告与台账（含 M1 责任派发与签字校验）、Markdown/summary 可视化解析（含同名模型多场只取最新一场的统计口径）、人工标注模板与复核表渲染（只透执行事实、不透裁判结论）、自检脚本自身的体检规则（声明条数对齐、入库件本机身份扫描）、开跑前 key 生效自检（与 `run_batch` 同一条取 key 链，单测不打网络）、裁判 token 烧速外推（钉桩 `results.jsonl`）与外发打包前的本机身份预检（`pack_originality --scan-paths/--scan-only`）、PR 门禁摘要评论渲染（`pr_comment`：表行/阻断原因/缺字段降级/取最新批次与 dryrun 副产物剔除）、轨迹冗余检测（T23：同参≥3 次与短周期自环告警线、不阻断判定铁锚、gate 不消费字段钉桩）、harness 韧性（T24：网关 503/连接中途断退避重试、半截 JSON 工具参数不重试不判违规、断点续跑 already_done 判定口径）、实心/空心覆盖图（T27：五态分类不把「设计如此」误读成漏测、每个空心节点必须能反查到 controls.py 登记项的红线、未登记空心拒绝出图）、证据分级（T29：`evidence_type` 由判定层派生——确定性层 measured、模型判定 self_reported、third_party 只能显式赋值；报告结论摘要与台账条目带证据档，三分法是 AQG 自定口径非信通院标准）、AgentAdapter 协议与轨迹重放（T31：端点 runner 与重放适配器同为协议形状、同一串调用产出的终态证据逐字段相等、加载器对畸形行/未知 case/重复键 fail-closed、重放 trace 直喂规则层不动判定层、trace 模式配置豁免被测端点但不豁免裁判）、子集视图代际自动声明（T31 跟进缺陷：smoke 这类派生视图的自身指纹不得钉上台账代际锚点，否则伪造一次换代并冲掉跨代劣化护栏；含语料外 case id 的视图拒绝背书、显式声明永远优先）、跨窗口评测协议（T32：manifest 结构校验与不认识协议版本就 fail-closed、累积可见集/增量不相交、cutoff 单调、`run_eval --window` 在抽样**之前**裁剪且请求集含未来题时即使 `--limit 1` 也报错退出（断言的是**顺序**不是“少跑几道”）、切片不改 `dataset_sha256` 不触切代、ΔJ 三拆只允许 `delta_retained` 归因）、噪声带实测标定（T32：配置指纹不合池、翻转率只统计两期都有可用结论位的题、实测带宽取最小而不取均值、`measured/measured_lower_bound/no_data` 三档定性不混用）、run 产物统一读取口（T32：逐次 `attempts[].strict_passed` 用于算抖动、合并 `strict_passed` 用于算门禁，两者口径不互换；坏行计数不静默丢弃）、仅增预算对照组（T32：`plan` 的唯一变量自检——非预算项有任一不同就拒绝出计划；`analyze` 的截断率/无效率/环境故障率三块拆解与反向迁移逐条列出）。
 
-> **全仓唯一一处单测条数声明**：**824 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-23 实测，含 1 条 `xfail(strict)` 已知缺口钉桩）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档。这条对齐已由 `verify.py` 的「声明条数自检」机器化：新增了用例却没同步声明、或只改了中英其中一份，自检直接判红；其它地方出现具体条数仍算口径重复声明。
+> **全仓唯一一处单测条数声明**：**934 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-23 实测，含 1 条 `xfail(strict)` 已知缺口钉桩）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档。这条对齐已由 `verify.py` 的「声明条数自检」机器化：新增了用例却没同步声明、或只改了中英其中一份，自检直接判红；其它地方出现具体条数仍算口径重复声明。
 
 GitHub Actions 主要做离线检查：安装依赖、运行 pytest、校验供应链锁定完整性、重建数据集、执行 smoke dry-run，不会调用真实模型；另有一个 `supply-chain` 作业从 `requirements.lock` 生成 CycloneDX SBOM 并跑 `pip-audit`（咨询级漏洞扫描）。真实评测请在本地配置 `.env` 后手动运行。
 
@@ -658,6 +725,9 @@ src/
     ├── stability.py        # pass@k / pass^k / flaky 汇总
     ├── gate.py             # 统一发布门禁
     ├── dataset.py          # 加载、审计、去重、分层采样、Wilson CI / 两比例 z 检验
+    ├── window.py           # T32 跨窗口协议：窗口 manifest 硬校验、可见集/增量裁剪、ΔJ 三拆
+    ├── noise_calibration.py # T32 噪声带实测标定：配置指纹分组、翻转率带、可引用性定性
+    ├── runload.py          # run 产物统一读取口（逐次结论位 vs 合并结论，坏行计数）
     └── report.py           # Markdown、summary.json、风险台账
 scripts/
 ├── build_suite.py          # 构建可执行数据集与 manifest
@@ -672,8 +742,11 @@ scripts/
 ├── check_supply_chain.py   # C10 供应链：校验 requirements.lock 锁定完整性（离线）
 ├── drift_check.py          # 跨批次漂移：换代可比较性 / Provider_Change / 比率显著性（复用 z 检验）
 ├── verify.py               # 一键自检：离线层 + 可选真机层
+├── cross_window.py         # T32 跨窗口协议入口：propose / validate / plan / delta（离线、零写入）
+├── calibrate_noise_band.py # T32 噪声带实测标定（只读历史批，默认不落盘）
+├── budget_ab.py            # T32 仅增预算对照组：plan 唯一变量自检 / analyze 分数差三块拆解
 └── visualize_reports.py    # HTML + PNG 可视化
-cases/                      # curated/regression/core/smoke/manifest
+cases/                      # curated/regression/core/smoke/manifest；windows/manifest.json 是 T32 窗口切片声明
 tests/                      # pytest
 reports/                    # 运行产物、台账、图表
 docs/                       # 索引见 docs/README.md：机器输入（K13 豁免/κ 标注/控制项）、实现设计、四源待办、项目治理
