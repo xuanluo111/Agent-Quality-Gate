@@ -536,6 +536,7 @@ python scripts/run_eval.py --dataset workspace/windows/window-0.jsonl \
 ```
 
 这里必须用 `--limit 0`：默认配置带 `limit: 120`，喂全量语料会被抽样，retained 同题样本会缩到只剩交集。视图已裁到位时 `--limit 0` 恰好全量。
+`--repeat` 不能低于 3：噪声标定把“第 k 次尝试”当作一期，配对数 = C(P,2)；`repeat 2` 只有 1 个配对，而经验抖动带宽在配对数 <2 时直接算不出、<3 时只算低功效（`low_power`），所以 `repeat 2` 只能退回翻转率解析式拿一个下界；`repeat 3` 刚好凑到 3 个配对。另外两个窗口若要同配置合池标定，需给不同的 `--seed` 或分别单场标定：窗口 0（120 题）与窗口 1（207 题）题目数不同，同指纹下第二场会被 `shape_mismatch` 整场剔出组。
 
 ### 噪声带的两种语义，不可互换
 

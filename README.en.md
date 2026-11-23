@@ -533,6 +533,7 @@ python scripts/run_eval.py --dataset workspace/windows/window-0.jsonl \
 ```
 
 `--limit 0` is mandatory here: the default configuration carries `limit: 120`, so feeding the full corpus samples it and the retained same-case sample shrinks to the intersection. Once the view is already trimmed, `--limit 0` is exactly the whole set.
+`--repeat` must not be below 3: the calibration treats "attempt k" as one period and the pair count is C(P,2); `repeat 2` yields a single pair, while the empirical jitter band is unavailable outright below 2 pairs and merely `low_power` below 3 — so `repeat 2` can only fall back to the flip-rate analytic and report a lower bound, whereas `repeat 3` lands on exactly 3 pairs. Also, if the two windows are to be pooled into one calibration group they need different `--seed` values (or separate per-run calibration): window 0 has 120 cases and window 1 has 207, so under an identical fingerprint the second run is dropped from the group wholesale by `shape_mismatch`.
 
 ### Two semantics of "noise band", not interchangeable
 
