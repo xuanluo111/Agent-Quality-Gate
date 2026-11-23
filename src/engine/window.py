@@ -209,6 +209,76 @@ def select_window_cases(cases: Sequence, manifest: dict, window: int, enforce: b
     return selected, audit
 
 
+def build_window_view(
+    corpus_path: Path | str, manifest: dict, window: int
+) -> tuple[List[str], dict]:
+    """把语料的**原始行**裁成某窗口的喂题视图，返回 (行列表, 审计)。
+
+    为什么需要这一步：`select_window_cases(enforce=True)` 的语义是“喂进来的题集
+    必须 ⊆ 可见集”，而 `run_eval` 默认拿的是全量语料。两者直接相遇时，窗口 0 必然
+    撞上“请求到未来题”而 fail-closed——协议本身没错，缺的是“从全量语料安全裁到本窗口”
+    这个入口。视图就是那个入口的产物。
+
+    三条硬约束（都可被违反，违反即抛错，不静默出半成品视图）：
+
+    1. **字节保真**：视图里的每一行都是语料同一行的原文。重写 JSON（改键序、改转义、
+       改空白）会让被测方看到的题面与存档题面不是同一个东西，而 ΔJ 比的正是同一道题；
+    2. **不越界**：只输出可见集内的行。裁多了（含未来题）就是污染，裁少了（分母悄悄
+       变小）会让 ΔJ 的 retained 样本缩水——两边都不允许；
+    3. **先过协议校验**：子集/序号/不相交/单调不成立就不出视图，避免给一个违规的
+       manifest 生成“看着合理”的喂题集（纵深防御：调用方忘了 validate 也不会漏）。
+
+    “裁少了”不需要在这里重查：`validate_manifest` 已要求每题 declared ⊆ 语料且非空，
+    所以 visible 必然全量命中语料——在这里再加一道同义自检只会留下不可达分支，
+    而下一次改动的读者会误以为还有人在看门。真正可达的风险只有语料本身 malformed。
+
+    视图只引用语料子集，所以它的 `dataset_sha256` 与语料不同但 id 全部落在语料内——
+    正好满足 T49 代际自动声明的三条硬校验，跑批时会把代际锚回语料 epoch，不误触切代。
+    """
+    path = Path(corpus_path)
+    if not path.is_file():
+        raise WindowProtocolError(f"语料不存在，无法生成窗口视图: {path}")
+
+    lines: List[str] = []
+    ids_in_order: List[str] = []
+    for line_number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(True), 1):
+        if not raw.strip():
+            continue
+        if not raw.lstrip().startswith("{"):
+            raise WindowProtocolError(f"语料第 {line_number} 行不是 JSON 对象，拒裁视图")
+        try:
+            record = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise WindowProtocolError(f"语料第 {line_number} 行解析失败，拒裁视图: {exc}") from exc
+        case_id = str(_case_id(record))
+        if not case_id:
+            raise WindowProtocolError(f"语料第 {line_number} 行没有 id 字段，拒裁视图")
+        lines.append(raw)
+        ids_in_order.append(case_id)
+
+    duplicates = sorted({cid for cid in ids_in_order if ids_in_order.count(cid) > 1})
+    if duplicates:
+        # 同 id 两行内容不同时，“保留哪一行”会改变题面；视图不替调用方做这个决定。
+        raise WindowProtocolError(f"语料存在重复 id {duplicates[:5]}，无法定义逐字节保真的视图")
+
+    audit_manifest = validate_manifest(manifest, ids_in_order)
+    visible = set(visible_ids(manifest, window))
+
+    selected = [raw for raw, cid in zip(lines, ids_in_order) if cid in visible]
+    blocked = sorted(cid for cid in ids_in_order if cid not in visible)
+
+    audit = {
+        "window": window,
+        "corpus_lines": len(lines),
+        "protocol": audit_manifest["protocol"],
+        "visible": len(visible),
+        "emitted": len(selected),
+        "blocked": len(blocked),
+        "blocked_ids": blocked,
+    }
+    return selected, audit
+
+
 def _case_id(case) -> str:
     """兼容 TestCase 对象与原始 dict 两种形态。"""
     if isinstance(case, dict):

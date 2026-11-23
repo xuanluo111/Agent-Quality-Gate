@@ -179,6 +179,113 @@ def test_plan_trims_future_cases_and_exits_zero(tmp_path, capsys):
     assert "+ b1" not in out
 
 
+# --------------------------------------------------------------------------
+# view：把“语料 ∩ 可见集”落成一个真能喂给 run_eval 的文件
+# --------------------------------------------------------------------------
+
+
+def _view_setup(tmp_path, monkeypatch):
+    """造一个最小仓库根，让 cases/ 红线在沙盒里可测（不碰真仓库目录）。"""
+    repo = tmp_path / "repo"
+    (repo / "cases").mkdir(parents=True)
+    monkeypatch.setattr(cross_window, "ROOT", repo)
+    corpus = _corpus(tmp_path, ["a1", "a2", "b1"])
+    manifest = {
+        "protocol": PROTOCOL_ID,
+        "corpus": str(corpus),
+        "windows": [
+            {"window": 0, "cutoff": "2026-10-22", "declared": ["a1", "a2"]},
+            {"window": 1, "cutoff": "2026-11-06", "declared": ["b1"]},
+        ],
+    }
+    manifest_path = repo / "cases" / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return corpus, manifest_path
+
+
+def test_view_writes_only_visible_lines_byte_for_byte(tmp_path, monkeypatch, capsys):
+    """视图必须只含可见题，且每行等于语料原文——run_eval 的 enforce 就靠这个能过。"""
+    corpus, manifest_path = _view_setup(tmp_path, monkeypatch)
+    out = tmp_path / "window-0.jsonl"
+    code = cross_window.cmd_view(
+        Namespace(
+            manifest=str(manifest_path), corpus=str(corpus), window=0,
+            out=str(out), force=False,
+        )
+    )
+    assert code == 0
+    corpus_lines = corpus.read_text(encoding="utf-8").splitlines()
+    view_lines = out.read_text(encoding="utf-8").splitlines()
+    assert view_lines == corpus_lines[:2]
+    assert "b1" not in out.read_text(encoding="utf-8")
+    printed = capsys.readouterr().out
+    assert "写出 2/2 可见题" in printed and "被隔离的未来题 1 条" in printed
+
+
+def test_view_defaults_under_workspace_windows(tmp_path, monkeypatch, capsys):
+    """不填 --out 时落 workspace/windows/window-<N>.jsonl（不入库的产物区）。"""
+    corpus, manifest_path = _view_setup(tmp_path, monkeypatch)
+    code = cross_window.cmd_view(
+        Namespace(manifest=str(manifest_path), corpus=str(corpus), window=1, out="", force=False)
+    )
+    expected = cross_window.ROOT / "workspace" / "windows" / "window-1.jsonl"
+    assert code == 0 and expected.is_file()
+    assert len(expected.read_text(encoding="utf-8").splitlines()) == 3
+    assert "语料" in capsys.readouterr().out
+
+
+def test_view_refuses_to_write_into_cases(tmp_path, monkeypatch, capsys):
+    """视图不是数据集：写进 cases/ 就会多一个可入库的题集文件，下一步用错就是一次换指纹。"""
+    corpus, manifest_path = _view_setup(tmp_path, monkeypatch)
+    out = cross_window.ROOT / "cases" / "window-0.jsonl"
+    code = cross_window.cmd_view(
+        Namespace(
+            manifest=str(manifest_path), corpus=str(corpus), window=0,
+            out=str(out), force=False,
+        )
+    )
+    assert code == 1
+    assert "拒写视图到 cases/" in capsys.readouterr().out
+    assert not out.exists()
+
+
+def test_view_refuses_silent_overwrite_but_honors_force(tmp_path, monkeypatch, capsys):
+    """视图是可复核产物：静默覆盖会让“上一轮喂了什么”失去可比性。"""
+    corpus, manifest_path = _view_setup(tmp_path, monkeypatch)
+    out = tmp_path / "window-0.jsonl"
+    args = Namespace(
+        manifest=str(manifest_path), corpus=str(corpus), window=0, out=str(out), force=False
+    )
+    assert cross_window.cmd_view(args) == 0
+    out.write_text("被人改过了\n", encoding="utf-8")
+
+    assert cross_window.cmd_view(args) == 1
+    assert "已存在，未覆盖" in capsys.readouterr().out
+    assert out.read_text(encoding="utf-8") == "被人改过了\n"
+
+    args.force = True
+    assert cross_window.cmd_view(args) == 0
+    assert out.read_text(encoding="utf-8").splitlines()[0].startswith('{"id": "a1"')
+
+
+def test_view_future_case_in_manifest_still_fails_closed(tmp_path, monkeypatch):
+    """manifest 引用了语料外的题就不出视图，不给“看着合理”的喂题集。"""
+    corpus, manifest_path = _view_setup(tmp_path, monkeypatch)
+    bad = json.loads(manifest_path.read_text(encoding="utf-8"))
+    bad["windows"][1]["declared"] = ["ghost"]
+    manifest_path.write_text(json.dumps(bad), encoding="utf-8")
+    try:
+        cross_window.cmd_view(
+            Namespace(
+                manifest=str(manifest_path), corpus=str(corpus), window=1,
+                out=str(tmp_path / "v.jsonl"), force=False,
+            )
+        )
+    except cross_window.WindowProtocolError:
+        return
+    raise AssertionError("语料外用例必须报错，不能静默生成视图")
+
+
 def test_validate_surfaces_unverified_manifest(tmp_path, capsys):
     corpus = _corpus(tmp_path, ["a1"])
     manifest = {

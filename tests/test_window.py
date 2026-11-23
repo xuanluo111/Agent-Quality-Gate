@@ -18,6 +18,7 @@ from src.engine.window import (
     PROTOCOL_ID,
     WindowProtocolError,
     blocked_ids,
+    build_window_view,
     delta_j,
     increment_ids,
     select_window_cases,
@@ -273,3 +274,95 @@ def test_manifest_round_trips_through_json(tmp_path):
 
     manifest = load_manifest(path)
     assert validate_manifest(manifest, CORPUS)["covered_ids"] == 5
+
+
+# --------------------------------------------------------------------------
+# 视图生成：`--window` 能吃到题集的唯一入口
+# --------------------------------------------------------------------------
+
+
+def _corpus_file(tmp_path, lines):
+    path = tmp_path / "core.jsonl"
+    path.write_text(
+        "".join(line if line.endswith("\n") else line + "\n" for line in lines),
+        encoding="utf-8",
+    )
+    return path
+
+
+# 三个题分别用非规范 JSON 写：双空格、紧凑无空格、带空格分隔的冒号。
+# 只要实现肯回写原文，这三种形状都必须原样活着。
+_ODD_LINES = [
+    '{"input": "a1 原题",  "id": "a1"}',
+    '{"id":"a2","input":"中文 / 斜杠"}',
+    '{ "id" : "c1", "input": "未来题" }',
+]
+
+
+def _view_manifest():
+    return _manifest((0, "2026-10-22", ["a1", "a2"]), (1, "2026-11-06", ["c1"]))
+
+
+def test_view_lines_are_byte_identical_not_reserialized(tmp_path):
+    """视图必须搬原文，不能“重写成规整 JSON”。
+
+    题面一改写，被测方看到的就不是存档里那道题，而 ΔJ 比的正是同题复测；
+    键序/空白/转义都属于题面的一部分，不是可归一化的装饰。
+    """
+    path = _corpus_file(tmp_path, _ODD_LINES)
+    lines, audit = build_window_view(path, _view_manifest(), 0)
+
+    # 逐字节口径含行终止符：视图就是语料那几行的原文，不重排、不重新序列化。
+    assert lines == path.read_text(encoding="utf-8").splitlines(True)[:2]
+    # 反证：若实现改成 json.dumps 回写，这两行就不会等于原文。
+    assert lines[0] != json.dumps(json.loads(lines[0]), ensure_ascii=False) + "\n"
+    assert (audit["emitted"], audit["blocked"]) == (2, 1)
+
+
+def test_view_emitted_count_equals_visible_count(tmp_path):
+    """裁多了和裁少了都要能从审计里看出来：emitted == visible。"""
+    path = _corpus_file(tmp_path, _ODD_LINES)
+    lines, audit = build_window_view(path, _view_manifest(), 1)
+    assert audit["visible"] == 3
+    assert audit["emitted"] == audit["visible"] == len(lines)
+    assert audit["blocked"] == 0
+
+
+def test_view_keeps_corpus_line_order(tmp_path):
+    """视图不能按 id 重排序：题序也是喂题的一部分，重排会改变上下文窗口。"""
+    path = _corpus_file(tmp_path, [_ODD_LINES[1], _ODD_LINES[0], _ODD_LINES[2]])
+    lines, _ = build_window_view(path, _view_manifest(), 1)
+    assert lines == path.read_text(encoding="utf-8").splitlines(True)
+
+
+def test_view_rejects_corpus_with_duplicate_ids(tmp_path):
+    """同 id 两行内容不同时，“留哪一行”会改变题面，视图不替调用方做这个决定。"""
+    path = _corpus_file(tmp_path, ['{"id": "a1", "input": "第一版"}', '{"id": "a1", "input": "第二版"}'])
+    with pytest.raises(WindowProtocolError, match="重复 id"):
+        build_window_view(path, _manifest((0, "2026-10-22", ["a1"])), 0)
+
+
+def test_view_rejects_malformed_corpus_line(tmp_path):
+    """坏行不能静默跳过：跳过就是“本轮少了一道题”而没人知道。"""
+    path = _corpus_file(tmp_path, ['{"id": "a1"}', "not json at all"])
+    with pytest.raises(WindowProtocolError, match="第 2 行"):
+        build_window_view(path, _manifest((0, "2026-10-22", ["a1"])), 0)
+
+
+def test_view_rejects_line_without_id(tmp_path):
+    path = _corpus_file(tmp_path, ['{"id": "a1"}', '{"input": "没有题号"}'])
+    with pytest.raises(WindowProtocolError, match="没有 id"):
+        build_window_view(path, _manifest((0, "2026-10-22", ["a1"])), 0)
+
+
+def test_view_validates_manifest_before_emitting_lines(tmp_path):
+    """纵深防御：违规 manifest 不能产视图，否则“忘了 validate”就能生成脏喂题集。"""
+    path = _corpus_file(tmp_path, _ODD_LINES)
+    overlapping = _manifest((0, "2026-10-22", ["a1", "a2"]), (1, "2026-11-06", ["a2", "c1"]))
+    with pytest.raises(WindowProtocolError, match="相交"):
+        build_window_view(path, overlapping, 1)
+
+
+def test_view_missing_corpus_fails_closed(tmp_path):
+    with pytest.raises(WindowProtocolError, match="语料不存在"):
+        build_window_view(tmp_path / "nope.jsonl", _view_manifest(), 0)

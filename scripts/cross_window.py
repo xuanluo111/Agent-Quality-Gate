@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """T32 跨窗口协议的可执行入口（纯本地、零 API、零写入，除非显式 --out）。
 
-四个子命令：
+五个子命令：
     propose   从历史批次的落盘证据生成窗口 manifest（每题首次被评测的日期）
     validate  硬校验 manifest（子集 / 序号连续 / 新增集不相交 / 时点单调）
     plan      输出某个窗口该喂的题集与增量清单（未来窗口用例一律不出现）
+    view      把语料原文裁成某窗口的喂题视图（默认落 workspace/，字节保真）
     delta     用两场的 results.jsonl 算 ΔJ，并用实测噪声带判"是否超出抖动"
 
 为什么 cutoff 只能来自落盘证据：207 条语料没有任何时间字段，git 历史仅 8 次且经
@@ -17,6 +18,8 @@
     python scripts/cross_window.py propose --out cases/windows/manifest.json
     python scripts/cross_window.py validate --manifest cases/windows/manifest.json
     python scripts/cross_window.py plan     --manifest cases/windows/manifest.json --window 1 --ids
+    python scripts/cross_window.py view     --manifest cases/windows/manifest.json --window 0 \\
+        --out workspace/windows/window-0.jsonl          # 真跑窗口 0 需要它（直接喂全量语料会被拒）
     python scripts/cross_window.py delta    --manifest cases/windows/manifest.json --window 1 \\
         --baseline-run reports/runs/<窗口0的run> --current-run reports/runs/<窗口1的run>
 """
@@ -25,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 import re
 import sys
@@ -40,6 +44,7 @@ from src.engine.window import (
     DEFAULT_METRIC,
     PROTOCOL_ID,
     WindowProtocolError,
+    build_window_view,
     delta_j,
     increment_ids,
     select_window_cases,
@@ -239,6 +244,45 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_view(args: argparse.Namespace) -> int:
+    manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+    rows, audit = build_window_view(args.corpus, manifest, args.window)
+
+    out = Path(args.out) if args.out else ROOT / "workspace" / "windows" / f"window-{args.window}.jsonl"
+    if not out.is_absolute():
+        out = ROOT / out
+    # 视图不是语料：写进 cases/ 就会多出一个可入库的 dataset 文件，下一场用错文件
+    # 就是一次真的换指纹。视图只允许落运行产物区（workspace/），由 .gitignore 隔住。
+    inside_cases = ROOT / "cases" in out.parents
+    if inside_cases:
+        print(f"❌ 拒写视图到 cases/ 下: {out}（视图是喂题工具，不是数据集；落 workspace/）")
+        return 1
+    if out.exists() and not args.force:
+        print(f"❌ {out} 已存在，未覆盖（加 --force 才重生成）")
+        print("   视图是可以被复核的产物：静默覆盖会让“上一轮究竟喂了什么”失去可比性")
+        return 1
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    text = "".join(rows)
+    if not text.endswith("\n"):
+        text += "\n"
+    out.write_text(text, encoding="utf-8")
+
+    corpus_digest = hashlib.sha256(Path(args.corpus).read_bytes()).hexdigest()[:16]
+    view_digest = hashlib.sha256(out.read_bytes()).hexdigest()[:16]
+    print(
+        f"✅ 窗口 {args.window} 视图 | 写出 {audit['emitted']}/{audit['visible']} 可见题 | "
+        f"被隔离的未来题 {audit['blocked']} 条"
+    )
+    print(f"   语料 {corpus_digest}（未动）| 视图 {view_digest} | {out}")
+    print(
+        f"   下一步: python scripts/run_eval.py --dataset {out} "
+        f"--window-manifest {args.manifest} --window {args.window} --limit 0 --repeat 3"
+    )
+    print("   （视图只引用语料子集，代际会自动锚回语料 epoch，不会误触切代）")
+    return 0
+
+
 def cmd_delta(args: argparse.Namespace) -> int:
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     validate_manifest(manifest, case_ids(args.corpus))
@@ -317,6 +361,7 @@ def main() -> int:
     for name, help_text in (
         ("validate", "硬校验 manifest"),
         ("plan", "输出某窗口的喂题计划"),
+        ("view", "生成某窗口的喂题视图（字节保真，默认落 workspace/）"),
         ("delta", "算跨窗口 ΔJ"),
     ):
         item = sub.add_parser(name, help=help_text)
@@ -326,11 +371,21 @@ def main() -> int:
             item.add_argument("--window", type=int, required=True)
         if name == "plan":
             item.add_argument("--ids", action="store_true", help="逐条打印题号，+ 为新增")
+        if name == "view":
+            item.add_argument("--out", default="", help="不填则写 workspace/windows/window-<N>.jsonl")
+            item.add_argument("--force", action="store_true", help="允许覆盖已存在的视图")
         if name == "delta":
             item.add_argument("--baseline-run", required=True, help="上一窗口的 run 目录")
             item.add_argument("--current-run", required=True, help="本窗口的 run 目录")
             item.add_argument("--band-pp", type=float, default=None, help="噪声带（pp）；不填则现推")
-        item.set_defaults(func={"validate": cmd_validate, "plan": cmd_plan, "delta": cmd_delta}[name])
+        item.set_defaults(
+            func={
+                "validate": cmd_validate,
+                "plan": cmd_plan,
+                "view": cmd_view,
+                "delta": cmd_delta,
+            }[name]
+        )
 
     args = parser.parse_args()
     try:
