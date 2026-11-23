@@ -97,7 +97,7 @@
 | 风险台账 | `reports/risk_ledger.json` 跨运行维护 `open/resolved/regressed`；`occurrences` 目前只是**计数与展示**（报告台账第「次数」列），没有任何判据消费它——重复失败的处置纪律是人工环节，见 [`docs/quality/02-台账消费与SDD迭代纪律.md`](docs/quality/02-台账消费与SDD迭代纪律.md) |
 | 数据集代际指纹 | 数据集文件 SHA256 前 16 位即 `dataset_epoch`；台账只在**同一 epoch 内**判定 `resolved→open` 为劣化（regressed），跨代重新基线为 open 并记 `rebaselined_from_epoch`——不拿数据集变更冒充模型退化；代际切换在报告与台账顶层显式标注 |
 | 统计 | 类别/严重度分层采样 + Wilson 95% 置信区间 |
-| 跨窗口评测协议（T32） | `src/engine/window.py` + `scripts/cross_window.py`：语料按 cutoff 切成累积序列，窗口 N 的可见题集 = 0..N 并集；`run_eval --window-manifest/--window` 在**抽样之前**裁剪，请求集含未来窗口用例即**失败关闭**（不静默少跑）。切片不改 `dataset_sha256`、不触切代。ΔJ 强制三拆：`delta_retained`（同题复测，唯一可归因）／`delta_novel`（新增题绝对分）／`delta_total`（含构成变化，禁止当能力增益），归因边界随产物落盘（`attributable_field`） |
+| 跨窗口评测协议（T32） | `src/engine/window.py` + `scripts/cross_window.py`：语料按 cutoff 切成累积序列，窗口 N 的可见题集 = 0..N 并集；`run_eval --window-manifest/--window` 在**抽样之前**裁剪，请求集含未来窗口用例即**失败关闭**（不静默少跑）；合规喂题集由 `cross_window.py view` 从语料原文裁成视图（逐字节保真、保持题序、只落 `workspace/`）。切片不改 `dataset_sha256`、不触切代。ΔJ 强制三拆：`delta_retained`（同题复测，唯一可归因）／`delta_novel`（新增题绝对分）／`delta_total`（含构成变化，禁止当能力增益），归因边界随产物落盘（`attributable_field`） |
 | 噪声带实测标定（T32） | `src/engine/noise_calibration.py` + `scripts/calibrate_noise_band.py`（零 API、零写入）：从历史 `repeat>1` 批次的 `result.attempts[]` 量出「同配置重跑一次会差多少 pp」的真实抖动。按 16 项抖动相关配置指纹分组（预算/裁判采样/模型不同不合池），单场只能出配对时用翻转率解析式（σ_D=√(q/n)）。与 T14 的 Wilson 代理带**并列而非替换**：代理带答「换题集的抽样误差」（两模型横比用），实测带答「运行抖动」（跨窗口 ΔJ 用） |
 | 报告 | Markdown 报告（结论摘要 + 数据有效性 + HITL 专项 + 风险台账 + 失败环节归因）、`summary.json`、ECharts 交互仪表盘、matplotlib PNG |
 | 终态断言 | 用例可声明 `initial_state` / `expected_final_state` / `state_assertions` / `allowed_changes`；Runner 在用例开始与结束把工作区拍成 `路径 -> sha256`，断言不符记 `State_Mismatch`，声明外变更记 `Collateral_Damage` |
@@ -507,7 +507,9 @@ python scripts/run_eval.py --suite core --min-valid-rate 70
 - **未来不可见**：`run_eval --window-manifest PATH --window N` 在**分层采样之前**裁剪。顺序反了就不是“少跑几道”而是污染：先抽样再裁，抽到的样本里可能含未来题。请求集含未来窗口用例 → 直接报错退出（1），**不静默剔除**：静默会让“本轮究竟喂了多少题”失真，也掩盖污染已经发生这件事。
 - **增量喂入**：每窗口的 `declared` 就是本轮新增集，两两必须不相交——同一题重复声明能把“重排旧题”算成新增增益。
 
-**切片不切代**：manifest 只能引用语料子集（复用子集视图校验口径），且窗口视图**不落盘成新的 jsonl**、运行时才裁剪，所以 `dataset_sha256` 永不变，不会误触切代。
+**喂题视图必须落成文件**：上面那条硬约束与 `run_eval` 默认拿全量语料直接相遇时，窗口 0 必然红（11-23 零成本复跑真实踩到：`请求到 87 条未来/未声明用例`）。协议本身没错，缺的是一个合规的裁剪入口：`cross_window.py view --window N` 把语料裁成视图，视图再喂给 `run_eval`。视图只允许落 `workspace/`（不入库，写进 `cases/` 拒），默认不覆盖已有视图（`--force` 才重生成），且每行都是语料同一行的**原文**——不重新序列化、不重排序：题面一改写，被测方看到的就不是存档里那道题，而 ΔJ 比的正是同一道题。
+
+**切片不切代**：manifest 只能引用语料子集（复用子集视图校验口径），语料文件从不动，所以 `dataset_sha256` 永不变，不会误触切代。视图自身指纹与语料不同，但 id 全部落在语料内——正好满足子集视图代际自动声明的三条硬校验，跑批时把代际锚回语料 epoch。
 
 **ΔJ 的口径纪律**（这条比代码重要）：跨窗口分数变化里混着两种完全不同的东西——同题复测的真变化，和题目覆盖扩张带来的构成变化。所以 `delta_j` 强制拆三项，且把边界写进产物：
 
@@ -525,11 +527,15 @@ python scripts/run_eval.py --suite core --min-valid-rate 70
 python scripts/cross_window.py propose   --out cases/windows/manifest.json   # 从落盘证据生成
 python scripts/cross_window.py validate  --manifest cases/windows/manifest.json
 python scripts/cross_window.py plan      --manifest cases/windows/manifest.json --window 1 --ids
+python scripts/cross_window.py view      --manifest cases/windows/manifest.json --window 0   # 裁出喂题视图
 python scripts/cross_window.py delta     --manifest cases/windows/manifest.json --window 1 \
     --baseline-run reports/runs/<窗口0的run> --current-run reports/runs/<窗口1的run>
-# 真跑某一轮：
-python scripts/run_eval.py --window-manifest cases/windows/manifest.json --window 1 --repeat 2
+# 真跑某一轮（产生费用，需显式授权）：--dataset 喂的就是上一行生成的视图
+python scripts/run_eval.py --dataset workspace/windows/window-0.jsonl \
+    --window-manifest cases/windows/manifest.json --window 0 --limit 0 --repeat 3
 ```
+
+这里必须用 `--limit 0`：默认配置带 `limit: 120`，喂全量语料会被抽样，retained 同题样本会缩到只剩交集。视图已裁到位时 `--limit 0` 恰好全量。
 
 ### 噪声带的两种语义，不可互换
 
@@ -687,7 +693,7 @@ python scripts/rejudge.py --runs 'reports/runs/*' --collateral-risk critical
 | `--no-publish` | 不覆盖 `reports/latest.md` / `observability.json`，也不写风险台账；自检/调试用，默认关闭 |
 | `--dry-run` | 只校验数据，不调用模型 |
 | `--agent-trace PATH` | 轨迹重放模式（T31）：把外部 agent 导出的工具调用轨迹 JSONL（每行 `{case_id, attempt, tool_calls, final_response}`）在同一套沙箱/快照/断言链里重放，不调用被测端点（裁判照旧、仍会产生费用）；判定层零改动，重放语义的缺省字段见「已知限制」 |
-| `--window-manifest PATH` / `--window N` | 跨窗口协议（T32）：manifest 声明累积的 cutoff 切片，`--window` 说出本轮处在哪个窗口。用例在**分层采样之前**裁，只喂本窗口可见集；请求集含未来窗口用例直接报错退出（1），不静默剔除。切片不改 `dataset_sha256` |
+| `--window-manifest PATH` / `--window N` | 跨窗口协议（T32）：manifest 声明累积的 cutoff 切片，`--window` 说出本轮处在哪个窗口。用例在**分层采样之前**裁剪，只喂本窗口可见集；请求集含未来窗口用例直接报错退出（1），不静默剔除——所以 `--dataset` 要让给 `cross_window.py view` 生成的视图，直接喂全量语料在窗口 0 会被拦。切片不改 `dataset_sha256` |
 | `--run-id` / `--output-root` / `--workspace-root` | 运行标识与产物路径 |
 
 所有运行参数会写入 `config.json`（API Key 脱敏为 `***`），并随报告记录 seed、数据集 SHA256、Git SHA、模型和裁判信息。
@@ -699,9 +705,9 @@ python -m pytest -q
 python scripts/selfcheck_oracles.py   # C01 判据自检：题目可信度审计（同样 0 成本）
 ```
 
-测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、判据指纹（覆盖范围／分层归属／历史缺值回落）、判据自检回路（正反参照/漏网检出/诚实分母）、门禁分支、数据加载/去重/采样、排名统计（Holm–Bonferroni 校正、效应量、A/B/C 置信等级）、报告与台账（含 M1 责任派发与签字校验）、Markdown/summary 可视化解析（含同名模型多场只取最新一场的统计口径）、人工标注模板与复核表渲染（只透执行事实、不透裁判结论）、自检脚本自身的体检规则（声明条数对齐、入库件本机身份扫描）、开跑前 key 生效自检（与 `run_batch` 同一条取 key 链，单测不打网络）、裁判 token 烧速外推（钉桩 `results.jsonl`）与外发打包前的本机身份预检（`pack_originality --scan-paths/--scan-only`）、PR 门禁摘要评论渲染（`pr_comment`：表行/阻断原因/缺字段降级/取最新批次与 dryrun 副产物剔除）、轨迹冗余检测（T23：同参≥3 次与短周期自环告警线、不阻断判定铁锚、gate 不消费字段钉桩）、harness 韧性（T24：网关 503/连接中途断退避重试、半截 JSON 工具参数不重试不判违规、断点续跑 already_done 判定口径）、实心/空心覆盖图（T27：五态分类不把「设计如此」误读成漏测、每个空心节点必须能反查到 controls.py 登记项的红线、未登记空心拒绝出图）、证据分级（T29：`evidence_type` 由判定层派生——确定性层 measured、模型判定 self_reported、third_party 只能显式赋值；报告结论摘要与台账条目带证据档，三分法是 AQG 自定口径非信通院标准）、AgentAdapter 协议与轨迹重放（T31：端点 runner 与重放适配器同为协议形状、同一串调用产出的终态证据逐字段相等、加载器对畸形行/未知 case/重复键 fail-closed、重放 trace 直喂规则层不动判定层、trace 模式配置豁免被测端点但不豁免裁判）、子集视图代际自动声明（T31 跟进缺陷：smoke 这类派生视图的自身指纹不得钉上台账代际锚点，否则伪造一次换代并冲掉跨代劣化护栏；含语料外 case id 的视图拒绝背书、显式声明永远优先）、跨窗口评测协议（T32：manifest 结构校验与不认识协议版本就 fail-closed、累积可见集/增量不相交、cutoff 单调、`run_eval --window` 在抽样**之前**裁剪且请求集含未来题时即使 `--limit 1` 也报错退出（断言的是**顺序**不是“少跑几道”）、切片不改 `dataset_sha256` 不触切代、ΔJ 三拆只允许 `delta_retained` 归因）、噪声带实测标定（T32：配置指纹不合池、翻转率只统计两期都有可用结论位的题、实测带宽取最小而不取均值、`measured/measured_lower_bound/no_data` 三档定性不混用）、run 产物统一读取口（T32：逐次 `attempts[].strict_passed` 用于算抖动、合并 `strict_passed` 用于算门禁，两者口径不互换；坏行计数不静默丢弃）、仅增预算对照组（T32：`plan` 的唯一变量自检——非预算项有任一不同就拒绝出计划；`analyze` 的截断率/无效率/环境故障率三块拆解与反向迁移逐条列出）。
+测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、判据指纹（覆盖范围／分层归属／历史缺值回落）、判据自检回路（正反参照/漏网检出/诚实分母）、门禁分支、数据加载/去重/采样、排名统计（Holm–Bonferroni 校正、效应量、A/B/C 置信等级）、报告与台账（含 M1 责任派发与签字校验）、Markdown/summary 可视化解析（含同名模型多场只取最新一场的统计口径）、人工标注模板与复核表渲染（只透执行事实、不透裁判结论）、自检脚本自身的体检规则（声明条数对齐、入库件本机身份扫描）、开跑前 key 生效自检（与 `run_batch` 同一条取 key 链，单测不打网络）、裁判 token 烧速外推（钉桩 `results.jsonl`）与外发打包前的本机身份预检（`pack_originality --scan-paths/--scan-only`）、PR 门禁摘要评论渲染（`pr_comment`：表行/阻断原因/缺字段降级/取最新批次与 dryrun 副产物剔除）、轨迹冗余检测（T23：同参≥3 次与短周期自环告警线、不阻断判定铁锚、gate 不消费字段钉桩）、harness 韧性（T24：网关 503/连接中途断退避重试、半截 JSON 工具参数不重试不判违规、断点续跑 already_done 判定口径）、实心/空心覆盖图（T27：五态分类不把「设计如此」误读成漏测、每个空心节点必须能反查到 controls.py 登记项的红线、未登记空心拒绝出图）、证据分级（T29：`evidence_type` 由判定层派生——确定性层 measured、模型判定 self_reported、third_party 只能显式赋值；报告结论摘要与台账条目带证据档，三分法是 AQG 自定口径非信通院标准）、AgentAdapter 协议与轨迹重放（T31：端点 runner 与重放适配器同为协议形状、同一串调用产出的终态证据逐字段相等、加载器对畸形行/未知 case/重复键 fail-closed、重放 trace 直喂规则层不动判定层、trace 模式配置豁免被测端点但不豁免裁判）、子集视图代际自动声明（T31 跟进缺陷：smoke 这类派生视图的自身指纹不得钉上台账代际锚点，否则伪造一次换代并冲掉跨代劣化护栏；含语料外 case id 的视图拒绝背书、显式声明永远优先）、跨窗口评测协议（T32：manifest 结构校验与不认识协议版本就 fail-closed、累积可见集/增量不相交、cutoff 单调、`run_eval --window` 在抽样**之前**裁剪且请求集含未来题时即使 `--limit 1` 也报错退出（断言的是**顺序**不是“少跑几道”）、切片不改 `dataset_sha256` 不触切代、ΔJ 三拆只允许 `delta_retained` 归因、喂题视图逐字节等于语料原文且保持题序（重新序列化/按 id 排序/坏行静默跳过/重复 id 都会 fail-closed）、视图拒写 `cases/` 与无 `--force` 拒覆盖）、噪声带实测标定（T32：配置指纹不合池、翻转率只统计两期都有可用结论位的题、实测带宽取最小而不取均值、`measured/measured_lower_bound/no_data` 三档定性不混用）、run 产物统一读取口（T32：逐次 `attempts[].strict_passed` 用于算抖动、合并 `strict_passed` 用于算门禁，两者口径不互换；坏行计数不静默丢弃）、仅增预算对照组（T32：`plan` 的唯一变量自检——非预算项有任一不同就拒绝出计划；`analyze` 的截断率/无效率/环境故障率三块拆解与反向迁移逐条列出）。
 
-> **全仓唯一一处单测条数声明**：**934 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-23 实测，含 1 条 `xfail(strict)` 已知缺口钉桩）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档。这条对齐已由 `verify.py` 的「声明条数自检」机器化：新增了用例却没同步声明、或只改了中英其中一份，自检直接判红；其它地方出现具体条数仍算口径重复声明。
+> **全仓唯一一处单测条数声明**：**947 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-23 实测，含 1 条 `xfail(strict)` 已知缺口钉桩）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档。这条对齐已由 `verify.py` 的「声明条数自检」机器化：新增了用例却没同步声明、或只改了中英其中一份，自检直接判红；其它地方出现具体条数仍算口径重复声明。
 
 GitHub Actions 主要做离线检查：安装依赖、运行 pytest、校验供应链锁定完整性、重建数据集、执行 smoke dry-run，不会调用真实模型；另有一个 `supply-chain` 作业从 `requirements.lock` 生成 CycloneDX SBOM 并跑 `pip-audit`（咨询级漏洞扫描）。真实评测请在本地配置 `.env` 后手动运行。
 
@@ -725,7 +731,7 @@ src/
     ├── stability.py        # pass@k / pass^k / flaky 汇总
     ├── gate.py             # 统一发布门禁
     ├── dataset.py          # 加载、审计、去重、分层采样、Wilson CI / 两比例 z 检验
-    ├── window.py           # T32 跨窗口协议：窗口 manifest 硬校验、可见集/增量裁剪、ΔJ 三拆
+    ├── window.py           # T32 跨窗口协议：窗口 manifest 硬校验、可见集/增量裁剪、喂题视图（字节保真）、ΔJ 三拆
     ├── noise_calibration.py # T32 噪声带实测标定：配置指纹分组、翻转率带、可引用性定性
     ├── runload.py          # run 产物统一读取口（逐次结论位 vs 合并结论，坏行计数）
     └── report.py           # Markdown、summary.json、风险台账
@@ -742,7 +748,7 @@ scripts/
 ├── check_supply_chain.py   # C10 供应链：校验 requirements.lock 锁定完整性（离线）
 ├── drift_check.py          # 跨批次漂移：换代可比较性 / Provider_Change / 比率显著性（复用 z 检验）
 ├── verify.py               # 一键自检：离线层 + 可选真机层
-├── cross_window.py         # T32 跨窗口协议入口：propose / validate / plan / delta（离线、零写入）
+├── cross_window.py         # T32 跨窗口协议入口：propose / validate / plan / view / delta（离线；view 会写 workspace/）
 ├── calibrate_noise_band.py # T32 噪声带实测标定（只读历史批，默认不落盘）
 ├── budget_ab.py            # T32 仅增预算对照组：plan 唯一变量自检 / analyze 分数差三块拆解
 └── visualize_reports.py    # HTML + PNG 可视化
