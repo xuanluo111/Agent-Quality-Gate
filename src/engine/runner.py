@@ -4,7 +4,7 @@ import time
 import uuid
 from collections import Counter
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from openai import OpenAI
 
@@ -153,6 +153,252 @@ def _apply_initial_state(workspace: Path, initial_state: dict) -> None:
         target.write_text(str(content), encoding="utf-8")
 
 
+# ---- T31：runner 与 TraceReplayAdapter 共用的推导件（模块级纯函数） ----
+# 协议接缝定在 run_case -> AgentTrace；凡是「给一串已发生的工具调用，产出终态
+# 证据」的推导——审计条目、retry_count、抽象时序、快照差、断言、completion、trace
+# 组装——都必须只有唯一一份实现。复制两份 = 外部 agent 与端点模型各用一套判据
+# 原料，06 T31「判定层零改动」的口径当场失效。
+
+
+def workspace_for(workspace_root: Path, run_id: str, case_id: str, attempt: int) -> Path:
+    """attempt>0 用独立工作目录（-aN 后缀），保证 repeat 每次尝试互不污染。"""
+    workspace = Path(workspace_root) / run_id / safe_case_slug(case_id)
+    if attempt:
+        workspace = workspace.with_name(f"{workspace.name}-a{attempt}")
+    return workspace
+
+
+def journal_path_for(workspace_root: Path, run_id: str, journal_path: Optional[str] = None) -> Path:
+    """WAL 落盘位置：整个 run 共用一个 journal 文件（与 AgentRunner 历史行为一致）。"""
+    if journal_path:
+        return Path(journal_path)
+    return Path(workspace_root) / run_id / JOURNAL_FILENAME
+
+
+def build_audit_item(
+    step: int,
+    call_id: str,
+    call_name: str,
+    arguments: dict,
+    result: dict,
+    *,
+    mask: Callable[[Any], Any] = lambda value: value,
+) -> Tuple[dict, dict, str]:
+    """把一次工具调用的结果整理成 (审计条目, tool_results 条目, round_history 行)。
+
+    S2 脱敏由调用方传入 mask（runner 传 _mask_payload，S1 传恒等）：推导形状共享，
+    隐私策略留在各适配器自己手里。
+    """
+    audit_arguments = mask(arguments)
+    audit_result = mask(result.get("result"))
+    audit_error = mask(result.get("error"))
+    audit_item = {
+        "step": step,
+        "id": call_id,
+        "name": call_name,
+        "arguments": audit_arguments,
+        "ok": bool(result.get("ok")),
+        "blocked": bool(result.get("blocked")),
+        "result": audit_result,
+        "error": audit_error,
+    }
+    tool_result = {
+        "tool_call_id": call_id,
+        "name": call_name,
+        "arguments": audit_arguments,
+        "result": audit_result,
+        "error": audit_error,
+        "blocked": bool(result.get("blocked")),
+    }
+    history = (
+        f"[第{step}轮] Tool {call_name}: "
+        f"{_truncate(audit_result if result.get('ok') else audit_error, 400)}"
+    )
+    return audit_item, tool_result, history
+
+
+def retry_count_for(audit_items: Sequence[dict]) -> int:
+    """同一工具同参数重复调用的冗余次数（重复风暴判据的原料，与 runner 历史同式）。"""
+    repeat_counts = Counter(
+        (item["name"], json.dumps(item["arguments"], ensure_ascii=False, sort_keys=True))
+        for item in audit_items
+    )
+    max_repeats = max(repeat_counts.values()) if repeat_counts else 0
+    return max(0, max_repeats - 1)
+
+
+def abstraction_skipped_for(
+    case: TestCase, formalize_step: Optional[int], first_action_step: Optional[int]
+) -> bool:
+    """中间态判定（仅当用例 requires_abstraction 时被裁判消费）：
+    发生了动作但之前没有 formalize → 跳过抽象。"""
+    return bool(
+        case.requires_abstraction
+        and first_action_step is not None
+        and (formalize_step is None or formalize_step > first_action_step)
+    )
+
+
+def precondition_failure_trace(
+    case: TestCase,
+    *,
+    workspace: Path,
+    error_message: str,
+    unsupported_tools: Iterable[str],
+    model: str,
+    run_id: str,
+    attempt: int = 0,
+    latency_ms: float = 0.0,
+) -> AgentTrace:
+    """环境前置不成立的早退 trace：模型一句话都没说，必须剔出分母而不是答错。
+
+    漏了这一条会让 gate 把环境故障算进分母，模型平白背一次失败（纪律 3）。
+    """
+    return AgentTrace(
+        case_id=case.id,
+        agent_response="",
+        is_success=False,
+        error_message=error_message,
+        precondition_failed=True,
+        execution_workspace=str(workspace),
+        unsupported_tools=list(unsupported_tools),
+        model=model,
+        run_id=run_id,
+        attempt=attempt,
+        latency_ms=latency_ms,
+    )
+
+
+def policy_block_trace(
+    case: TestCase,
+    *,
+    workspace: Path,
+    message: str,
+    model: str,
+    run_id: str,
+    privacy_transform: str,
+    history_note: str,
+    latency_ms: float = 0.0,
+) -> AgentTrace:
+    """Harness 层直接阻断的 trace：请求根本没发出去，不是模型行为。"""
+    return AgentTrace(
+        case_id=case.id,
+        agent_response=message,
+        policy_blocked=True,
+        privacy_transform=privacy_transform,
+        execution_workspace=str(workspace),
+        should_escalate_to_human=case.requires_human_confirm,
+        round_history=[history_note],
+        model=model,
+        run_id=run_id,
+        latency_ms=latency_ms,
+    )
+
+
+def finalize_trace(
+    case: TestCase,
+    *,
+    workspace: Path,
+    sandbox,
+    tool_calls_audit: List[dict],
+    tool_results: List[dict],
+    tools_called: List[str],
+    tool_call_sequence: List[str],
+    round_history: List[str],
+    policy_violations: List[str],
+    privacy_notes: List[str],
+    unsupported_tools: Iterable[str],
+    state_before: Dict[str, str],
+    formalize_step: Optional[int],
+    first_action_step: Optional[int],
+    declared_variables: List[dict],
+    did_escalate: bool,
+    is_cheated: bool,
+    is_token_exceeded: bool,
+    is_step_exceeded: bool,
+    is_time_exceeded: bool,
+    precondition_failed: bool,
+    final_response: str,
+    finish_reason: str,
+    saw_content: bool,
+    cancel_requested_at: Optional[str],
+    stopped_at: Optional[str],
+    attempt: int,
+    seed: Optional[int],
+    model: str,
+    run_id: str,
+    input_tokens: int,
+    output_tokens: int,
+    token_cost: int,
+    backoff_ms: float,
+    latency_ms: float,
+    mask_response: Callable[[Any], Any] = lambda value: value,
+) -> AgentTrace:
+    """循环结束后的统一收口：沙箱违规并入、终态快照、断言、completion、trace 组装。
+
+    端点 runner 与轨迹重放适配器共用——同一串调用必须推出同一份终态证据，
+    判定层才能对来源一视同仁（06 T31 验收口径）。
+    """
+    if sandbox.violations:
+        policy_violations.extend(sandbox.violations)
+    sandbox_limitations = list(dict.fromkeys(sandbox.limitations))
+    retry_count = retry_count_for(tool_calls_audit)
+    extracted = extract_variables_from_results(tool_results)
+    abstraction_skipped = abstraction_skipped_for(case, formalize_step, first_action_step)
+    state_after = snapshot_workspace(workspace)
+    # 完成度只看终态断言，不看回复里说自己做完没有。
+    assertion_results = evaluate_assertions(case, state_after, workspace)
+    completion = infer_completion(
+        assertion_results,
+        has_spec=bool(case.state_assertions or case.expected_final_state),
+        stopped=is_token_exceeded or is_step_exceeded or is_time_exceeded or bool(stopped_at),
+    )
+    return AgentTrace(
+        case_id=case.id,
+        agent_response=mask_response(final_response),
+        tools_called=tools_called,
+        tool_call_sequence=tool_call_sequence,
+        tool_call_params=tool_calls_audit,
+        tool_results=tool_results,
+        tool_call_count=len(tool_calls_audit),
+        retry_count=retry_count,
+        should_escalate_to_human=case.requires_human_confirm,
+        did_escalate_to_human=did_escalate,
+        is_cheated=is_cheated,
+        is_token_exceeded=is_token_exceeded,
+        is_step_exceeded=is_step_exceeded,
+        is_time_exceeded=is_time_exceeded,
+        finish_reason=finish_reason,
+        output_truncated=bool(finish_reason == "length" and not saw_content and not tool_calls_audit),
+        precondition_failed=precondition_failed,
+        policy_violations=list(dict.fromkeys(policy_violations)),
+        sandbox_limitations=sandbox_limitations,
+        privacy_transform=", ".join(dict.fromkeys(privacy_notes)),
+        unsupported_tools=list(unsupported_tools),
+        round_history=round_history,
+        execution_workspace=str(workspace),
+        extracted_variables=extracted,
+        declared_variables=declared_variables,
+        abstraction_skipped=abstraction_skipped,
+        state_before=state_before,
+        state_after=state_after,
+        state_diff=diff_states(state_before, state_after),
+        assertion_results=assertion_results,
+        completion=completion,
+        cancel_requested_at=cancel_requested_at,
+        stopped_at=stopped_at,
+        attempt=attempt,
+        seed=seed,
+        model=model,
+        run_id=run_id,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        token_cost=token_cost,
+        backoff_ms=round(backoff_ms, 1),
+        latency_ms=latency_ms,
+    )
+
+
 class AgentRunner:
     def __init__(
         self,
@@ -207,11 +453,7 @@ class AgentRunner:
         self.backoff_ms_total = 0.0
         self.canary_token = canary_token or f"SECRET_{uuid.uuid4().hex[:8]}"
         # WAL：每次工具调用执行前先落盘 intent，崩溃后仍能还原“本来要做什么”。
-        self.journal_path = (
-            Path(journal_path)
-            if journal_path
-            else self.workspace_root / str(run_id) / JOURNAL_FILENAME
-        )
+        self.journal_path = journal_path_for(self.workspace_root, run_id, journal_path)
         # 取消请求：只登记时间，不中断正在进行的模型调用（那属于信号处理，不在本层）。
         self._cancel_requested_at: Optional[str] = None
 
@@ -341,25 +583,21 @@ class AgentRunner:
         cancel_requested_at: Optional[str] = None
         stopped_at: Optional[str] = None
 
-        workspace = self.workspace_root / self.run_id / safe_case_slug(case.id)
-        if attempt:
-            workspace = workspace.with_name(f"{workspace.name}-a{attempt}")
+        workspace = workspace_for(self.workspace_root, self.run_id, case.id, attempt)
 
         if case.data_sensitivity == "S3" and self.local_client is None:
             message = (
                 "[HARNESS_POLICY] 检测到 S3 数据，但未配置本地模型端点。"
                 "为避免敏感数据上云，本次请求已在 Harness 层阻断。"
             )
-            return AgentTrace(
-                case_id=case.id,
-                agent_response=message,
-                policy_blocked=True,
-                privacy_transform="s3_cloud_blocked",
-                execution_workspace=str(workspace),
-                should_escalate_to_human=case.requires_human_confirm,
-                round_history=["[harness] S3 数据未发送到云端"],
+            return policy_block_trace(
+                case,
+                workspace=workspace,
+                message=message,
                 model=self.local_model or self.model,
                 run_id=self.run_id,
+                privacy_transform="s3_cloud_blocked",
+                history_note="[harness] S3 数据未发送到云端",
                 latency_ms=(time.time() - started) * 1000,
             )
 
@@ -388,14 +626,10 @@ class AgentRunner:
         # 链接等静态判据看不到的情况），而不是重复判一遍。
         fixture_issues = check_fixtures(case.fixtures)
         if fixture_issues:
-            return AgentTrace(
-                case_id=case.id,
-                agent_response="",
-                is_success=False,
+            return precondition_failure_trace(
+                case,
+                workspace=workspace,
                 error_message=f"fixture 预检未通过: {render_issues(fixture_issues)}",
-                # 模型一句话都没说：这条必须剔出分母，不能记成答错。
-                precondition_failed=True,
-                execution_workspace=str(workspace),
                 unsupported_tools=unsupported_tools,
                 model=model,
                 run_id=self.run_id,
@@ -406,15 +640,10 @@ class AgentRunner:
         try:
             sandbox = Sandbox(workspace, case.fixtures, egress_allowlist=case.egress_allowlist)
         except Exception as exc:
-            return AgentTrace(
-                case_id=case.id,
-                agent_response="",
-                is_success=False,
+            return precondition_failure_trace(
+                case,
+                workspace=workspace,
                 error_message=f"沙箱初始化失败: {exc}",
-                # 与上面同理：写不进 fixture 不是模型干的，漏了这一条会让 gate 把
-                # 环境故障算进分母，模型平白背一次失败。
-                precondition_failed=True,
-                execution_workspace=str(workspace),
                 unsupported_tools=unsupported_tools,
                 model=model,
                 run_id=self.run_id,
@@ -552,34 +781,17 @@ class AgentRunner:
                         tool_message["content"], applied = mask_sensitive_data(tool_message["content"])
                         privacy_notes.extend(applied)
 
-                    audit_arguments = _mask_payload(arguments) if route == "s2_masked_cloud" else arguments
-                    audit_result = _mask_payload(result.get("result")) if route == "s2_masked_cloud" else result.get("result")
-                    audit_error = _mask_payload(result.get("error")) if route == "s2_masked_cloud" else result.get("error")
-                    audit_item = {
-                        "step": step + 1,
-                        "id": call["id"],
-                        "name": call_name,
-                        "arguments": audit_arguments,
-                        "ok": bool(result.get("ok")),
-                        "blocked": bool(result.get("blocked")),
-                        "result": audit_result,
-                        "error": audit_error,
-                    }
+                    audit_item, tool_result_entry, history_line = build_audit_item(
+                        step + 1,
+                        call["id"],
+                        call_name,
+                        arguments,
+                        result,
+                        mask=_mask_payload if route == "s2_masked_cloud" else (lambda value: value),
+                    )
                     tool_calls_audit.append(audit_item)
-                    tool_results.append(
-                        {
-                            "tool_call_id": call["id"],
-                            "name": call_name,
-                            "arguments": audit_arguments,
-                            "result": audit_result,
-                            "error": audit_error,
-                            "blocked": bool(result.get("blocked")),
-                        }
-                    )
-                    round_history.append(
-                        f"[第{step + 1}轮] Tool {call_name}: "
-                        f"{_truncate(audit_result if result.get('ok') else audit_error, 400)}"
-                    )
+                    tool_results.append(tool_result_entry)
+                    round_history.append(history_line)
                     messages.append(tool_message)
 
                 if token_cost >= self.token_budget:
@@ -594,72 +806,34 @@ class AgentRunner:
             # 这种样本的终止不是模型行为，上层据此归为 unknown 而不是“答错”。
             if self._cancel_requested_at and not cancel_requested_at:
                 cancel_requested_at = self._cancel_requested_at
-
-            # 推理型模型的思维链会先吃满 max_tokens，正文一个字都没输出就被截断；
-            # 这种样本没有测到模型的真实行为，归为配置问题而不是能力失败。
-            output_truncated = bool(finish_reason == "length" and not saw_content and not tool_calls_audit)
             if not final_response:
                 final_response = NO_FINAL_RESPONSE_TEXT
 
-            if sandbox.violations:
-                policy_violations.extend(sandbox.violations)
-            sandbox_limitations = list(dict.fromkeys(sandbox.limitations))
-
-            repeat_counts = Counter(
-                (item["name"], json.dumps(item["arguments"], ensure_ascii=False, sort_keys=True))
-                for item in tool_calls_audit
-            )
-            max_repeats = max(repeat_counts.values()) if repeat_counts else 0
-            retry_count = max(0, max_repeats - 1)
-
-            extracted = extract_variables_from_results(tool_results)
-            # 中间态判定（仅当用例 requires_abstraction 时被裁判消费）：
-            # 发生了动作但之前没有 formalize → 跳过抽象。
-            abstraction_skipped = bool(
-                case.requires_abstraction
-                and first_action_step is not None
-                and (formalize_step is None or formalize_step > first_action_step)
-            )
-            state_after = snapshot_workspace(workspace)
-            # 完成度只看终态断言，不看回复里说自己做完没有。
-            assertion_results = evaluate_assertions(case, state_after, workspace)
-            completion = infer_completion(
-                assertion_results,
-                has_spec=bool(case.state_assertions or case.expected_final_state),
-                stopped=is_token_exceeded or is_step_exceeded or is_time_exceeded or bool(stopped_at),
-            )
-            return AgentTrace(
-                case_id=case.id,
-                agent_response=_mask_payload(final_response) if route == "s2_masked_cloud" else final_response,
+            return finalize_trace(
+                case,
+                workspace=workspace,
+                sandbox=sandbox,
+                tool_calls_audit=tool_calls_audit,
+                tool_results=tool_results,
                 tools_called=tools_called,
                 tool_call_sequence=tool_call_sequence,
-                tool_call_params=tool_calls_audit,
-                tool_results=tool_results,
-                tool_call_count=len(tool_calls_audit),
-                retry_count=retry_count,
-                should_escalate_to_human=case.requires_human_confirm,
-                did_escalate_to_human=did_escalate,
+                round_history=round_history,
+                policy_violations=policy_violations,
+                privacy_notes=privacy_notes,
+                unsupported_tools=unsupported_tools,
+                state_before=state_before,
+                formalize_step=formalize_step,
+                first_action_step=first_action_step,
+                declared_variables=declared_variables,
+                did_escalate=did_escalate,
                 is_cheated=is_cheated,
                 is_token_exceeded=is_token_exceeded,
                 is_step_exceeded=is_step_exceeded,
                 is_time_exceeded=is_time_exceeded,
-                finish_reason=finish_reason,
-                output_truncated=output_truncated,
                 precondition_failed=precondition_failed,
-                policy_violations=list(dict.fromkeys(policy_violations)),
-                sandbox_limitations=sandbox_limitations,
-                privacy_transform=", ".join(dict.fromkeys(privacy_notes)),
-                unsupported_tools=unsupported_tools,
-                round_history=round_history,
-                execution_workspace=str(workspace),
-                extracted_variables=extracted,
-                declared_variables=declared_variables,
-                abstraction_skipped=abstraction_skipped,
-                state_before=state_before,
-                state_after=state_after,
-                state_diff=diff_states(state_before, state_after),
-                assertion_results=assertion_results,
-                completion=completion,
+                final_response=final_response,
+                finish_reason=finish_reason,
+                saw_content=saw_content,
                 cancel_requested_at=cancel_requested_at,
                 stopped_at=stopped_at,
                 attempt=attempt,
@@ -669,8 +843,9 @@ class AgentRunner:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 token_cost=token_cost,
-                backoff_ms=round(self.backoff_ms_total, 1),
+                backoff_ms=self.backoff_ms_total,
                 latency_ms=(time.time() - started) * 1000,
+                mask_response=_mask_payload if route == "s2_masked_cloud" else (lambda value: value),
             )
         except Exception as exc:
             # 异常也要拍终态：已经发生的副作用不能因为抛出异常就看不见。

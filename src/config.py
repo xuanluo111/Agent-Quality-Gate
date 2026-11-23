@@ -63,6 +63,8 @@ class RunConfig:
     local_api_key: str = field(default_factory=lambda: _env("AQG_LOCAL_API_KEY"))
 
     dataset: str = "cases/core_suite.jsonl"
+    # T31 轨迹重放模式：外部 agent 导出的工具调用轨迹 JSONL；空串 = 跑端点模型。
+    agent_trace: str = ""
     # 数据集视图声明自己属于哪一代语料（如探针集是 core 语料的子集视图）。
     # 空串 = 不声明，按本数据集文件自身的指纹算代际。
     dataset_generation: str = ""
@@ -133,6 +135,11 @@ class RunConfig:
     def has_local_route(self) -> bool:
         return bool(self.local_base_url and self.local_model)
 
+    @property
+    def is_trace_mode(self) -> bool:
+        """T31：用外部轨迹重放替代端点调用——被测侧零 API 消费，裁判侧照旧。"""
+        return bool(self.agent_trace)
+
     def validate(self) -> None:
         if self.mode not in {"enforce", "shadow"}:
             raise ValueError(f"未知运行模式: {self.mode}")
@@ -154,9 +161,15 @@ class RunConfig:
             raise ValueError(f"未知 collateral_risk: {self.collateral_risk}")
         if not Path(self.dataset).is_file():
             raise FileNotFoundError(f"数据集不存在: {self.dataset}")
+        # T31：轨迹文件缺失属于配置错误，不是“没测到就跳过”——fail-closed 同口径。
+        # dry_run 也校验：既然显式声明了 --agent-trace，路径写错就该当场报。
+        if self.agent_trace and not Path(self.agent_trace).is_file():
+            raise FileNotFoundError(f"外部轨迹文件不存在: {self.agent_trace}")
         if self.dry_run:
             return
-        if not self.base_url or not self.model or not self.api_key:
+        # 轨迹重放模式不要求被测端点：没有真实调用发生，AQG_BASE_URL/AQG_API_KEY
+        # 派不上用场；裁判配置照旧必需，缺了会把整批判成 Judge_Unavailable。
+        if not self.is_trace_mode and (not self.base_url or not self.model or not self.api_key):
             raise ValueError(
                 "缺少被测模型配置：请设置 AQG_BASE_URL / AQG_MODEL / AQG_API_KEY（兼容 GC_API_KEY），"
                 "或使用 --dry-run 只做数据校验。"
@@ -181,6 +194,7 @@ class RunConfig:
             "seed": self.seed,
             "dataset": self.dataset,
             "dataset_generation": self.dataset_generation,
+            "agent_trace": self.agent_trace,
             "limit": self.limit,
             "workers": self.workers,
             "max_rounds": self.max_rounds,
@@ -210,6 +224,15 @@ class RunConfig:
 def add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--suite", choices=sorted(SUITE_PATHS), help="内置数据集: core/smoke/regression")
     parser.add_argument("--dataset", help="自定义 JSONL 数据集路径")
+    parser.add_argument(
+        "--agent-trace",
+        default="",
+        help=(
+            "T31 轨迹重放模式：外部 agent 导出的工具调用轨迹 JSONL（每行一条 "
+            "{case_id, attempt, tool_calls, final_response}），在同一套沙箱/断言链里重放，"
+            "不调用被测端点（裁判仍会产生费用）"
+        ),
+    )
     parser.add_argument("--limit", type=int, default=120, help="采样条数；0 表示全量")
     parser.add_argument("--workers", type=int, default=5)
     parser.add_argument("--mode", choices=["enforce", "shadow"], default="enforce")
@@ -366,6 +389,9 @@ def config_from_args(args: argparse.Namespace) -> RunConfig:
             f"--dataset-generation 必须是 16 位十六进制代际指纹，收到: {generation}"
         )
     config.dataset_generation = generation
+    # agent_trace 是带默认值的字符串旗标：照 model/base_url 的姿势只在显式传入时才覆盖。
+    if getattr(args, "agent_trace", None):
+        config.agent_trace = args.agent_trace
     for attr in ("base_url", "model", "model_version", "judge_base_url", "judge_model"):
         value = getattr(args, attr, None)
         if value:

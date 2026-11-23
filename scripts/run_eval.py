@@ -8,13 +8,14 @@ import sys
 import time
 from collections import Counter
 from pathlib import Path
-from typing import List
+from typing import List, Union
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
 
 from src.config import add_run_args, config_as_dict, config_from_args
+from src.engine.adapter import AgentAdapter, TraceReplayAdapter
 from src.engine.dataset import audit_cases, load_cases, stratified_sample
 from src.engine.failure_class import PRECONDITION_FAILED, UNKNOWN, classify_case
 from src.engine.journal import JOURNAL_FILENAME, recover as recover_journal
@@ -143,7 +144,7 @@ def _explain_lines(diagnostics: List[dict], selector: str = "*") -> List[str]:
 
 
 def run_single_case(
-    case: TestCase, runner: AgentRunner, judge: LayeredJudge, run_id: str, model: str, repeat: int = 1
+    case: TestCase, runner: Union[AgentRunner, AgentAdapter], judge: LayeredJudge, run_id: str, model: str, repeat: int = 1
 ):
     """跑一条用例。
 
@@ -313,25 +314,36 @@ def main() -> int:
     if orphaned:
         print(f"[journal] 上次中断遗留 {len(orphaned)} 条未完成操作，已标记为 unknown")
 
-    runner = AgentRunner(
-        config.base_url,
-        config.api_key,
-        config.model,
-        local_base=config.local_base_url,
-        local_api_key=config.local_api_key,
-        local_model=config.local_model,
-        workspace_root=config.workspace_root,
-        run_id=config.run_id,
-        max_rounds=config.max_rounds,
-        token_budget=config.token_budget,
-        case_time_budget=config.case_time_budget,
-        max_tokens=config.max_tokens,
-        temperature=config.temperature,
-        timeout=config.request_timeout,
-        max_retries=config.max_retries,
-        retry_base_delay=config.retry_base_delay,
-        seed=config.seed,
-    )
+    # T31：适配器由协议接缝 run_case 决定，重放模式不构造任何模型客户端；
+    # 未知 case_id 已在加载期报错，这里构造的 case_map 就是合法域。
+    target_desc = f"trace:{Path(config.agent_trace).stem}" if config.is_trace_mode else config.model
+    if config.is_trace_mode:
+        runner = TraceReplayAdapter(
+            config.agent_trace,
+            {case.id: case for case in cases},
+            workspace_root=config.workspace_root,
+            run_id=config.run_id,
+        )
+    else:
+        runner = AgentRunner(
+            config.base_url,
+            config.api_key,
+            config.model,
+            local_base=config.local_base_url,
+            local_api_key=config.local_api_key,
+            local_model=config.local_model,
+            workspace_root=config.workspace_root,
+            run_id=config.run_id,
+            max_rounds=config.max_rounds,
+            token_budget=config.token_budget,
+            case_time_budget=config.case_time_budget,
+            max_tokens=config.max_tokens,
+            temperature=config.temperature,
+            timeout=config.request_timeout,
+            max_retries=config.max_retries,
+            retry_base_delay=config.retry_base_delay,
+            seed=config.seed,
+        )
     judge = LayeredJudge(
         base_url=config.judge_base_url,
         api_key=config.judge_api_key,
@@ -357,7 +369,8 @@ def main() -> int:
     start_time = time.time()
 
     print(
-        f"开始评测 | run_id={config.run_id} | mode={config.mode} | model={config.model} | "
+        f"开始评测 | run_id={config.run_id} | mode={config.mode} | "
+        f"{'replay' if config.is_trace_mode else 'model'}={target_desc} | "
         f"judge={config.judge_model} | sample={len(sampled)}/{len(cases)}"
     )
     with open(partial_path, "w", encoding="utf-8") as partial:
