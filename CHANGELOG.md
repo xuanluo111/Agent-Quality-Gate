@@ -73,6 +73,13 @@
 - **验证**：标签 `--check` 40/40；校准器 `matched=40`、无效剔除 0；`calibration.json` 解析通过；全量单测与 `make verify` 见本条目最终回执。
 - **生成证据的 whitespace 口径**：新增 `.gitattributes`，仅对 `docs/c02-judge-calibration/**/review-sheet.md` 关闭 trailing whitespace 检查。复核表保留模型原始输出，不为让 lint 变绿手工删空格；其他代码/文档仍走正常 `git diff --check`。
 
+### 2026-11-25：T32 ΔJ×噪声带合并判定闭环 + T50 双口径拍板 + spark-4b 待标包生成（全部零 token）
+
+- **合并读数**：拿 11-24 的两块新证据（qwen3.8-flash κ=1.0 标定、30 题×repeat 3 变序实测噪声带 `measured` **3.77pp**）对既有档 3 产物做一次只读重算（`cross_window.py delta --band-pp 3.77`，不重跑不重判）：`ΔJ_retained=+3.33pp（n=60）< 3.77pp` → **差异未证实**，不能宣布能力自进化增益；`ΔJ_total=-5.17pp` 含 87 题构成变化，不得引用为能力退化。T32 实验结论就此闭环，复算命令已写进 06 对应行。
+- **T50 口径拍板（用户采纳双口径并列）**：全样本 `strict_pass_rate` 继续作**门禁主口径**（防挑样本放宽），剔除环境类故障后的 Strict（与引擎 `strict_pass_rate_valid_only` 同口径）作**能力归因口径**单独披露，两数同报、不互相替换——同时守住纪律 3 与「不得为结果好看改分母」。此判定下 T32 ΔJ 结论不受口径选择影响（+3.33 与 +0.49 均在带内）。本轮只拍板与登记，`cross_window.py` 双口径字段、README 双语口径表、单测与历史可比性迁移说明仍待窗口同批实现，**零代码、不切代**。
+- **spark-4b 待标包**：`build_label_template.py --run 20261121-0147-tokendance-spark-x2.5-4b --only-valid` 剔除 8 条不可信样本（剩 199）后抽样 40 条（裁判 20 通过 / 20 失败，batch1/2 各 20），落 `docs/c02-judge-calibration/recalib-2625-spark4b/`。这是最后一个 `unverified` 模型；**待人工填写**后才能算该模型专属 κ，不得沿用其它模型标定值。
+- **验证**：全部改动为文档台账与生成待标包，未动 `src/`、未碰 `cases/`（`dataset_sha256` 仍 `deff7501007cff61`）、无真跑无重判无 push；回归与零污染复验见本条目最终回执。
+
 ### 2026-11-23：T26 录屏闭环（W4 展示窗口项收口，成片 171.8s ≤ 180s）
 
 - 用户本机手动录制原片 `AQG-2026-11-23.mov`（199.8s，5 镜头一遍过，全程未现场调模型）；录前将镜头 1/2 的 `python3 -c` 命令逐字复跑，`blocked 1` 与四条大白话 reasons、`gate.diagnostics` 36 条中 `curated-secret-echo-001` 均逐字命中分镜表预期。
