@@ -94,6 +94,17 @@
       "authority": "block",
       "labels_source": "recalib-2619-step/labels.filled.jsonl",
       "detail_file": "docs/c02-judge-calibration/recalib-2619-step/kappa-glm-5.3-flash-x-step.json"
+    },
+    {
+      "sut_model": "qwen3.8-flash",
+      "kappa": 1.0,
+      "n_paired": 40,
+      "agreement_pct": 100.0,
+      "miss_rate_pct": 0.0,
+      "false_alarm_rate_pct": 0.0,
+      "authority": "block",
+      "labels_source": "recalib-2624-qwen38/labels.filled.jsonl",
+      "detail_file": "docs/c02-judge-calibration/recalib-2624-qwen38/kappa-glm-5.3-flash-x-qwen38.json"
     }
   ],
   "unverified_models": [

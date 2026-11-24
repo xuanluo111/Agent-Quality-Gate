@@ -107,6 +107,29 @@ def test_attempts_keep_seed_keys_for_variation_proof():
     assert seeds == [42, 7961]
 
 
+def test_top_level_trace_seeds_merge_into_result_attempts():
+    """新产物把 seed 放顶层 trace、结论放 result.attempts，按 attempt 编号合并。"""
+    row = {
+        "result": {
+            "case_id": "c1",
+            "attempts": [
+                {"attempt": 2, "strict_passed": False},
+                {"attempt": 1, "strict_passed": True},
+                {"attempt": 3, "strict_passed": True},
+            ],
+        },
+        "attempts": [
+            {"attempt": 3, "seed": 15880, "token_cost": 30},
+            {"attempt": 1, "seed": 42, "token_cost": 10},
+            {"attempt": 2, "seed": 7961, "token_cost": 20},
+        ],
+    }
+    ordered = attempts_of(row)
+    assert attempt_bits(row) == [True, False, True]
+    assert [seed_of(item) for item in ordered] == [42, 7961, 15880]
+    assert [item["token_cost"] for item in ordered] == [10, 20, 30]
+
+
 def test_single_shot_rows_fall_back_to_result_body():
     """repeat=1 的历史批没有 attempts 数组：最终结论本身即那一次尝试，不能读成空。"""
     row = {"result": {"case_id": "c1", "strict_passed": True}}

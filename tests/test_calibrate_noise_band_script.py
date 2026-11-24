@@ -31,27 +31,28 @@ BASE = {
 }
 
 
-def _make_run(root: Path, name: str, bits_by_case: dict, config: dict) -> Path:
+def _make_run(root: Path, name: str, bits_by_case: dict, config: dict, seeds=None) -> Path:
     run = root / name
     run.mkdir(parents=True, exist_ok=True)
     (run / "config.json").write_text(json.dumps(config), encoding="utf-8")
     lines = []
     for case_id, bits in bits_by_case.items():
-        lines.append(
-            json.dumps(
-                {
-                    "result": {
-                        "case_id": case_id,
-                        "strict_passed": all(bit is True for bit in bits),
-                        "attempts": [
-                            {"attempt": index + 1, "strict_passed": bit}
-                            for index, bit in enumerate(bits)
-                        ],
-                    }
-                },
-                ensure_ascii=False,
-            )
-        )
+        row = {
+            "result": {
+                "case_id": case_id,
+                "strict_passed": all(bit is True for bit in bits),
+                "attempts": [
+                    {"attempt": index + 1, "strict_passed": bit}
+                    for index, bit in enumerate(bits)
+                ],
+            }
+        }
+        if seeds:
+            row["attempts"] = [
+                {"attempt": index + 1, "seed": seed}
+                for index, seed in enumerate(seeds)
+            ]
+        lines.append(json.dumps(row, ensure_ascii=False))
     (run / "results.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
     return run
 
@@ -117,6 +118,21 @@ def test_lower_bound_wording_is_mandatory_without_seed(tmp_path, monkeypatch, ca
     assert "保守下界" in out
     assert "不替换" in out           # 口径纪律随数一起输出，不让下游顺手换带宽
     assert "（未写任何文件" in out
+
+
+def test_top_level_trace_seeds_allow_measured(tmp_path, monkeypatch, capsys):
+    """真实新产物的 seed 在顶层 trace，读取器合并后必须能宣布 measured。"""
+    monkeypatch.setattr(cli, "DEFAULT_GLOBS", ("runs/*",))
+    _make_run(
+        tmp_path, "runs/20261124-014000-m1",
+        {f"c{i}": [True, i % 7 == 0, True] for i in range(40)},
+        {**BASE, "repeat": 3}, seeds=[42, 7961, 15880],
+    )
+    code = _invoke(monkeypatch, tmp_path, [])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "可宣布已标定: 1" in out
+    assert "变序可证=是" in out
 
 
 def test_json_output_is_opt_in_only(tmp_path, monkeypatch, capsys):

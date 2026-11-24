@@ -64,6 +64,15 @@
 - **测试与反例**：新增 `tests/test_adapter.py` 17 例（全离线零调用），含重放等价性主锚——假 client 钉桩的端点 runner 与重放适配器对同一串调用产出的 `tool_call_params/state_diff/assertion_results/completion/retry_count/extracted_variables` 逐字段相等；源码变异四抓全部被抓（删重复键检查/删未知 case 检查/S3 阻断改恒假/删 trace 配置豁免）。collect 800→817，README 双语条数同批改齐；`verify` 全 OK，不碰 `cases/` 不切代，`git status` 无对外产物。
 - 真实演示跑（样例轨迹＋裁判）会产生费用，未跑；需要时另行授权（同「不要在没有明确指令的情况下跑真实批次」纪律）。
 
+### 2026-11-24：`qwen3.8-flash × glm-5.3-flash` C02 κ 标定完成（零 token，只读既有轨迹）
+
+- **流程**：从 `t32p3-w1-1123-2335` 生成 batch1/2 各 20 条、裁判 20 通过 / 20 失败的平衡待标集；人工完成 40 条真值后复制为 `recalib-2624-qwen38/labels.filled.jsonl`，保留模板原样。`build_label_template.py --check` 结果 40/40 合法，再调用 `calibrate_judge.py --exclude-invalid`，全程只读本地 `results.jsonl`，未重调裁判、未改题面、不切代。
+- **实测**：40/40 配对，`TP=20 / TN=20 / FP=0 / FN=0`，观察一致率 100%、漏判率 0%、误伤率 0%，**κ=1.0**；一致率 Wilson 95% 区间 91.24~100。按 `gate.kappa_authority`，此值达到 `block` 档。
+- **环节一致率**：20 条人工失败样本中 18 条 stage 与规则层一致。两处差异均为人工确认的最终口径：`mut-inject-file-001` 人标 `generation`、规则层 `iteration`；`谄媚攻击-856918309ba8dfa9babf81f85c` 人标 `generation`、规则层 `understanding`。这说明结果权限可阻断，不表示裁判解释文本无需复核。
+- **台账与双语口径**：`calibration.json` 将 `qwen3.8-flash` 从 `unverified_models` 移入 `models.authority=block`，明细落 `kappa-glm-5.3-flash-x-qwen38.json`；`docs/README.md`、`06` 与 README 双语的 κ 样本/区间同步。历史批次不回写、不重判：只有新批次显式传 `--judge-kappa 1.0` 才获得该权限。
+- **验证**：标签 `--check` 40/40；校准器 `matched=40`、无效剔除 0；`calibration.json` 解析通过；全量单测与 `make verify` 见本条目最终回执。
+- **生成证据的 whitespace 口径**：新增 `.gitattributes`，仅对 `docs/c02-judge-calibration/**/review-sheet.md` 关闭 trailing whitespace 检查。复核表保留模型原始输出，不为让 lint 变绿手工删空格；其他代码/文档仍走正常 `git diff --check`。
+
 ### 2026-11-23：T26 录屏闭环（W4 展示窗口项收口，成片 171.8s ≤ 180s）
 
 - 用户本机手动录制原片 `AQG-2026-11-23.mov`（199.8s，5 镜头一遍过，全程未现场调模型）；录前将镜头 1/2 的 `python3 -c` 命令逐字复跑，`blocked 1` 与四条大白话 reasons、`gate.diagnostics` 36 条中 `curated-secret-echo-001` 均逐字命中分镜表预期。

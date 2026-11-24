@@ -81,8 +81,23 @@ def attempts_of(record: dict) -> List[dict]:
     result = record.get("result") or {}
     attempts = result.get("attempts")
     if isinstance(attempts, list) and attempts:
-        ordered = [item for item in attempts if isinstance(item, dict)]
+        ordered = [dict(item) for item in attempts if isinstance(item, dict)]
         ordered.sort(key=lambda item: item.get("attempt") or 0)
+        # 新产物把逐次判定放在 result.attempts，把 seed/token/latency 等原始
+        # trace 放在顶层 attempts；两者按 attempt 编号配对，不能只读其中一层。
+        traces = record.get("attempts")
+        if isinstance(traces, list):
+            by_attempt = {
+                item.get("attempt"): item
+                for item in traces
+                if isinstance(item, dict) and isinstance(item.get("attempt"), int)
+            }
+            merged = []
+            for item in ordered:
+                attempt = item.get("attempt")
+                trace = by_attempt.get(attempt) if isinstance(attempt, int) else None
+                merged.append({**trace, **item} if trace else item)
+            ordered = merged
         return ordered
     # 没有 attempts 数组 = `repeat=1` 批次的正常形态：最终结论本身就是那一次尝试。
     return [result]

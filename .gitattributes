@@ -1,0 +1,2 @@
+# C02 复核表是生成的人类证据，保留模型输出中的原始行尾空格；不得为通过 whitespace lint 手工改迹。
+docs/c02-judge-calibration/**/review-sheet.md -whitespace
