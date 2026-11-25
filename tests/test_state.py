@@ -172,6 +172,83 @@ def test_reconfirming_same_value_lifts_deprecation():
     assert deprecated_values_for(case) == []
 
 
+def test_correction_chain_uses_latest_effective_value():
+    """500→800→500 后只有 800 废弃；三段链也不能把 500 继续当旧值。"""
+    case = make_case(
+        input="酒店预算按 500 元/晚来排。等等，改成 800。……算了，还是按最早的 500 定稿吧。",
+        deprecated_values=["800"],
+    )
+    trace = make_trace(
+        tool_call_params=[
+            {"name": "write_file", "arguments": {"content": "酒店预算：500 元/晚\n"}}
+        ],
+        agent_response="已按最终确认的 500 元/晚写入。（注：中间提到的 800 元已被撤销。）",
+    )
+    assert deprecated_values_for(case) == ["800"]
+    assert scan_state_pollution(case, trace) == []
+
+
+def test_reviewed_qwen_response_is_not_state_pollution():
+    """真实已审回复里的‘未采用/曾考虑’是变更说明，不是把 800 当结果。"""
+    case = make_case(
+        input="酒店预算按 500 元/晚来排。等等，改成 800。……算了，还是按最早的 500 定稿吧，把最终预算写进 budget.txt。",
+        deprecated_values=["800"],
+    )
+    trace = make_trace(
+        tool_call_params=[
+            {"name": "write_file", "arguments": {"content": "酒店预算（定稿）：500 元/晚\n"}}
+        ],
+        agent_response=(
+            "已按最早的 **500 元/晚** 定稿，写入 `budget.txt`。\n\n"
+            "- 中途提到的 800 元/晚 未采用。\n"
+            "- 文件内容：`酒店预算（定稿）：500 元/晚`\n\n"
+            "如需同时保留变更记录（比如注明\"曾考虑 800，最终定为 500\"），告诉我即可补充。"
+        ),
+    )
+    assert scan_state_pollution(case, trace) == []
+
+
+def test_generic_mention_of_old_value_is_still_pollution():
+    """只说“提到旧值”不是失效声明，不能借历史叙述豁免实际结果。"""
+    case = make_case(input="把 500 改成 800", deprecated_values=["500"])
+    trace = make_trace(agent_response="已按 800 提交，另外提到了 500。")
+    pollution = scan_state_pollution(case, trace)
+    assert [item["where"] for item in pollution] == ["response"]
+
+
+def test_correction_chain_without_explicit_values_still_detects_intermediate_value():
+    """口语化‘改成 800 … 按最早的 500 定稿’也要能重建废弃值。"""
+    case = make_case(
+        input="酒店预算按 500 元/晚来排。等等，改成 800。……算了，还是按最早的 500 定稿吧。"
+    )
+    assert deprecated_values_for(case) == ["800"]
+
+
+def test_three_step_chain_keeps_all_superseded_values():
+    """最新值优先于历史全集：500→800→500→700 后 500 与 800 都已废弃。"""
+    case = make_case(
+        input="把 500 改成 800，再把 800 改成 500，最后把 500 改成 700",
+        deprecated_values=["500", "800"],
+    )
+    assert deprecated_values_for(case) == ["500", "800"]
+
+
+def test_intermediate_value_after_returning_to_original_is_still_pollution():
+    """解除原值的废弃不等于解除中途值；最终仍写 800 必须判污染。"""
+    case = make_case(
+        input="酒店预算按 500 元/晚来排。等等，改成 800。……算了，还是按最早的 500 定稿吧。",
+        deprecated_values=["800"],
+    )
+    trace = make_trace(
+        tool_call_params=[
+            {"name": "write_file", "arguments": {"content": "酒店预算：800 元/晚\n"}}
+        ],
+        agent_response="已按 800 元/晚写入。",
+    )
+    pollution = scan_state_pollution(case, trace)
+    assert [item["where"] for item in pollution] == ["tool:write_file.content", "response"]
+
+
 def test_scan_state_pollution_flags_tool_arguments_and_response():
     case = make_case(input="把 500 改成 800")
     trace = make_trace(

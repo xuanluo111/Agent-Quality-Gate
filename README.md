@@ -728,7 +728,9 @@ python scripts/selfcheck_oracles.py   # C01 判据自检：题目可信度审计
 
 T50 补充覆盖：最终观察完整保留环境分类元数据、旧布尔读取口保持兼容、repeat 批顶层 trace 前置条件证据可读、正式 `failure_class`（含显式 `None`）优先于早期 trace、恢复通过不误剔、历史缺分类时 trace 回退、unknown/无效数据/harness/fallback 剔出归因分母、两期分母与共同配对数分别披露、旧调用缺元数据时明确降级、CLI 双口径输出与剔除审计。
 
-> **全仓唯一一处单测条数声明**：**966 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-25 实测，含 1 条 `xfail(strict)` 已知缺口钉桩）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档。这条对齐已由 `verify.py` 的「声明条数自检」机器化：新增了用例却没同步声明、或只改了中英其中一份，自检直接判红；其它地方出现具体条数仍算口径重复声明。
+T41 补充覆盖：Harness base policy 在模型执行前阻断且无模型违规证据时归为 `Harness_Error`／`data_valid=False`，有模型侧违规证据时仍判 Strict `Policy_Violation`；多次改口按事件顺序重放，终态“定稿／为准”只保留最后有效值，“已撤销／未采用／曾考虑”等指称不构成实际使用，泛化的“提到旧值”仍判污染。
+
+> **全仓唯一一处单测条数声明**：**974 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-25 实测，含 1 条 `xfail(strict)` 已知缺口钉桩）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档。这条对齐已由 `verify.py` 的「声明条数自检」机器化：新增了用例却没同步声明、或只改了中英其中一份，自检直接判红；其它地方出现具体条数仍算口径重复声明。
 
 GitHub Actions 主要做离线检查：安装依赖、运行 pytest、校验供应链锁定完整性、重建数据集、执行 smoke dry-run，不会调用真实模型；另有一个 `supply-chain` 作业从 `requirements.lock` 生成 CycloneDX SBOM 并跑 `pip-audit`（咨询级漏洞扫描）。真实评测请在本地配置 `.env` 后手动运行。
 

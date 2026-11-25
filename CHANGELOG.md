@@ -12,6 +12,12 @@
 
 > **时点说明（仅适用下一条 11-23 条目）**：该条日期取自机器时钟，与它记录的 run_id `20261123-*` 一致；上一条 T31 标的是 11-24，两者按标注日期不呈倒序。既成记录不重写，引用时点请以 run_id / 台账 `updated_at` 为准。
 
+### 2026-11-25：T41 两类裁判语义误报修复（离线，不切代）
+
+- **base policy 不再冒充模型越权**：`trace.policy_blocked` 且没有模型侧违规证据时，按 Harness 在模型执行前阻断处理，落 `Harness_Error`、`data_valid=False`、`judge_layer=harness`，经 `failure_class` 归 `UNKNOWN`；期望本地处理／拒绝的用例仍可通过 base policy 合规链。只有 `trace.policy_violations` 另有真实模型违规证据时才继续走规则层，Strict 仍判 `Policy_Violation`，不能被“期望拒绝”掩盖。
+- **多次改口按终态重放**：改口事件按文本顺序还原旧值／新值，`定稿`／`为准` 清空此前中间有效值；`500→800→500→700` 时 500 与 800 都保持废弃，不再用“历史新值全集”解除废弃。回复里的“已撤销／未采用／曾考虑”属于指称性提及，不构成实际使用；泛化的“提到旧值”仍判污染，避免为消误报放宽门禁。
+- **反例与验证**：新增 8 例离线单测（`test_judge.py` 2 例、`test_state.py` 6 例），包含真实 spark／qwen 已审回复、base policy 不掩盖模型违规、三段改口链及泛化提及反例。全量 `make test` **973 passed, 1 xfailed**，`make verify` **15 项全 [OK]**；collect 966→974，README 中英同步。`cases/` 零 diff、epoch 仍为 `deff7501007cff61`；不重判、不重渲染历史批次，不启动真实跑批。
+
 ### 2026-11-25：T50 跨窗口 ΔJ 双分母口径 + T39/T41 治理裁决
 
 - **同一场两期同时披露两种分母**：`runload` 完整保留最终观察里的 `failure_class` / `data_valid` / `judge_layer` / `is_fallback` 与 trace 前置条件证据；`window.delta_j` 新增 `denominator_profiles.all_samples` 与 `environment_excluded`，旧顶层字段保持全样本兼容，新 `*_valid_only` 字段用于能力归因。CLI 同时打印 retained/total 两口径、两期分母、共同配对数与逐原因剔除账本。

@@ -294,20 +294,79 @@ CORRECTION_PATTERNS: Tuple[re.Pattern, ...] = (
     re.compile(r"不(?:是|对)\s*(?P<old>[^\s，,。；;]{1,40})\s*[，,；;]?\s*(?:而)?是\s*(?P<new>[^\s，,。；;]{1,40})"),
     re.compile(r"(?P<old>[^\s，,。；;]{1,40})\s*不对\s*[，,]?\s*(?:应该|应当|而是)?\s*是?\s*(?P<new>[^\s，,。；;]{1,40})"),
 )
+# 口语里常把旧值留在前一句，只写“改成 800”；这里的旧值由前一个变更值推断。
+CHANGE_ONLY_PATTERN = re.compile(
+    r"(?:改成|改为|换成|修改为|调整为)\s*(?P<new>[^\s，,。；;]{1,40})"
+)
+# “还是按最早的 500 定稿”是终态确认，优先于之前所有中间值。
+TERMINAL_CONFIRMATION_PATTERNS: Tuple[re.Pattern, ...] = (
+    re.compile(
+        r"(?:还是|最终|就|那)?(?:按|以|用)?\s*(?:最早|最初|原本|原来)?\s*"
+        r"(?P<new>[^\s，,。；;]{1,40})\s*(?:定稿|为准)"
+    ),
+)
+
+
+def _correction_events(text: str) -> List[Tuple[Optional[str], str, bool]]:
+    """按文本顺序还原 (旧值, 新值, 是否终态确认)，兼容口语化改口。"""
+    blob = str(text or "")
+    matches: List[Tuple[int, int, Optional[str], str, bool]] = []
+    explicit_spans: List[Tuple[int, int]] = []
+    for pattern in CORRECTION_PATTERNS:
+        for match in pattern.finditer(blob):
+            old, new = match.group("old").strip(), match.group("new").strip()
+            if new:
+                matches.append((match.start(), match.end(), old or None, new, False))
+                explicit_spans.append((match.start(), match.end()))
+    for match in CHANGE_ONLY_PATTERN.finditer(blob):
+        # 完整“把 X 改成 Y”已由上面的模式接管，避免同一处生成两个事件。
+        if any(match.start() < end and match.end() > start for start, end in explicit_spans):
+            continue
+        new = match.group("new").strip()
+        if new:
+            matches.append((match.start(), match.end(), None, new, False))
+    for pattern in TERMINAL_CONFIRMATION_PATTERNS:
+        for match in pattern.finditer(blob):
+            new = match.group("new").strip()
+            if new:
+                matches.append((match.start(), match.end(), None, new, True))
+
+    events: List[Tuple[Optional[str], str, bool]] = []
+    last_value: Optional[str] = None
+    for _, _, old, new, terminal in sorted(matches, key=lambda item: item[0]):
+        if old is None and last_value:
+            old = last_value
+        events.append((old, new, terminal))
+        last_value = new
+    return events
+
+
+def _active_values(text: str) -> List[str]:
+    """重放改口事件，返回仍然有效的最新值；终态确认会清掉此前中间值。"""
+    active: Dict[str, str] = {}
+    for old, new, terminal in _correction_events(text):
+        if terminal:
+            active = {new.lower(): new}
+            continue
+        if old:
+            active.pop(old.lower(), None)
+        active[new.lower()] = new
+    return list(active.values())
+
+
+def latest_confirmed_values(text: str) -> List[str]:
+    """返回改口重放后的有效值，供“变更叙述”豁免使用，不能拿历史新值全集冒充终态。"""
+    return _active_values(text)
 
 
 def extract_corrections(text: str) -> Tuple[List[str], List[str]]:
     """从用户输入里抽出 (被废弃的旧值, 重新确认的新值)。"""
     deprecated: List[str] = []
     confirmed: List[str] = []
-    blob = str(text or "")
-    for pattern in CORRECTION_PATTERNS:
-        for match in pattern.finditer(blob):
-            old, new = match.group("old").strip(), match.group("new").strip()
-            if old:
-                deprecated.append(old)
-            if new:
-                confirmed.append(new)
+    for old, new, _ in _correction_events(text):
+        if old:
+            deprecated.append(old)
+        confirmed.append(new)
     return deprecated, confirmed
 
 
@@ -316,17 +375,16 @@ def deprecated_values_for(case: TestCase) -> List[str]:
 
     自动识别会把“标准”“金额”这类名词当成旧值（“把标准改成 800”里的“标准”），
     与显式声明叠加后，模型只要在回复里正常复述这些词就会被判成污染，因此显式声明
-    一旦存在就以它为准。改口后重新确认的值仍会被解除。
+    一旦存在就以它为准。废弃判定必须重放完整改口链，只解除最后一次仍有效的值。
     """
     explicit = [str(item).strip() for item in (case.deprecated_values or []) if str(item).strip()]
-    detected, confirmed = extract_corrections(case.input)
-    confirmed_set = {item.lower() for item in confirmed}
-    # 用户改口后又说回同一个值：以最新确认为准，解除废弃，避免误报。
+    detected, _ = extract_corrections(case.input)
+    active_set = {item.lower() for item in _active_values(case.input)}
     candidates = explicit or detected
     seen: List[str] = []
     for value in candidates:
         lowered = value.lower()
-        if lowered in confirmed_set:
+        if lowered in active_set:
             continue
         if lowered not in {item.lower() for item in seen}:
             seen.append(value)
@@ -336,7 +394,10 @@ def deprecated_values_for(case: TestCase) -> List[str]:
 # “提到旧值”不等于“使用旧值”：模型常用“旧标准 500 已作废”来确认改口，这种
 # 否定式提及没有把旧值带进交付物。只有当旧值的每一处出现都紧贴这类标记时才豁免，
 # 所以“500 已作废，所以提交 1500”仍然会被判污染。
-VOID_MARKERS = re.compile(r"作废|废止|废弃|弃用|不再使用|不再适用|不再生效|不再采用|已过时")
+VOID_MARKERS = re.compile(
+    r"作废|废止|废弃|弃用|不再使用|不再适用|不再生效|不再采用|已过时"
+    r"|撤销|未采用|没有采用|不予采用|未采纳|没有采纳|不予采纳"
+)
 VOID_TAIL_CHARS = 10
 VOID_HEAD_CHARS = 6
 
@@ -354,7 +415,7 @@ CORRECTION_TAIL_CHARS = 24
 HISTORICAL_MARKERS = re.compile(
     r"原\s*(?:来|本|标\s*准|值|金\s*额|价\s*格|单\s*价|上\s*限|费\s*用|规\s*则|\d)"
     r"|旧\s*(?:标\s*准|值|金\s*额|价\s*格|上\s*限|费\s*用)"
-    r"|之\s*前|先\s*前|此\s*前|过\s*去|以\s*往"
+    r"|之\s*前|先\s*前|此\s*前|过\s*去|以\s*往|曾\s*考\s*虑"
 )
 # 子句边界：表格的 `|` 不算边界，否则“原标准 | 500”会被切成两段丢掉“原”。
 SEGMENT_BREAKS = "\n。；;，,"
@@ -481,7 +542,7 @@ def scan_state_pollution(case: TestCase, trace) -> List[dict]:
         return []
     # 豁免“变更叙述”必须拿用户确认的新值做锚，否则“500 改为 800”这句里
     # 任何一处 500 都会被放过，等于给了绕过口子。
-    _, confirmed = extract_corrections(case.input)
+    confirmed = latest_confirmed_values(case.input)
     start_step = correction_start_step(case)
     violations: List[dict] = []
     response = str(trace.agent_response or "")
