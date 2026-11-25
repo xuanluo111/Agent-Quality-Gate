@@ -520,6 +520,19 @@ python scripts/run_eval.py --suite core --min-valid-rate 70
 | `delta_novel` | 新增题的绝对分 | 不能——没有基线可比 |
 | `delta_total` | 全量口径差 | **禁止**——分母构成在两期之间变了，是“构成变化 + 真变化”的混合体 |
 
+**双分母口径（T50）**：同一场两期结果同时按下列两种分母计算，任何归因结论都必须两数同报，不能挑对结论更友好的一边：
+
+| 口径 | 分母与剔除规则 | 产物字段 | 用途 |
+| --- | --- | --- | --- |
+| 跨窗口门禁主口径 `all_samples` | 保留全部可读最终 Strict 结论位，包括最终失败的环境类样本 | 旧顶层字段：`delta_retained` / `delta_total`；新结构 `denominator_profiles.all_samples` | 跨窗口账面的主口径，防止通过剔样本放宽；**不等同于当前发布门禁 `strict_rate`**，后者始终剔除 `precondition_failed` |
+| 能力归因口径 `environment_excluded` | 剔除最终 `precondition_failed`、`unknown`、`data_valid=False`、`judge_layer=harness`、`is_fallback=True`；trace 前置条件标记仅在最终 Strict 失败且历史缺正式 `failure_class` 时作回退，正式分类（含显式 `None`）优先，模型恢复通过仍保留 | `*_valid_only` 字段，如 `delta_retained_valid_only` / `delta_total_valid_only`；新结构 `denominator_profiles.environment_excluded` | 解释能力变化时排除“没测到”的环境样本，不替代门禁 |
+
+两期 retained 分数在各自口径内分别计算；`n_retained_baseline_scored`、`n_retained_current_scored` 是两期各自的可计分数，`n_retained_paired_scored` 才是两期都可计分的共同配对数（顶层兼容别名 `n_retained_valid_only` 亦指该配对数）。`delta_retained_valid_only` 是**两期各自剔后 retained 通过率之差**，不是把共同配对单独重算后的差；引用时必须连同上述三个分母一起披露。T50 固定剔除 `unknown`，而门禁的 `strict_pass_rate_valid_only` 默认仍保留 `unknown`（仅显式 `--exclude-unknown` 时剔除），因此不能声称两种“valid-only”在每个批次都逐字同数。
+
+**T32 真实产物的只读复算（零 API）**：全样本 `ΔJ_retained=+3.33pp`（n=60），剔环境类 `ΔJ_retained_valid_only=+0.49pp`（基线/当期 56/58，共同配对 56）；两者共用实测噪声带 **3.77pp**，均判“差异未证实”。全样本 `ΔJ_total=-5.17pp` 与剔后 `ΔJ_total_valid_only=-4.83pp` 仍都含新增题构成变化，均不得当能力退化。约 85% 的表面 retained 变化来自环境样本在两期的分布差异，这正是两口径必须并列披露的原因。
+
+**历史迁移**：旧顶层字段继续表示全样本，语义不变；新消费者应改读 `denominator_profiles` 与 `*_valid_only`。历史批次不回写、不重渲染；旧产物缺环境分类元数据时不补造分类，而会输出 `note_metadata`，能力归因仅依据已落盘证据，不能声称完整取证。两个 retained 读数共用同一个噪声带，不另造更窄的带。
+
 窗口 0 是基线轮，不产生 ΔJ；基线只允许来自上一窗口（跨一期去比会把“退化又恢复”的过程读成增益）。
 
 **cutoff 的证据来源（诚实边界）**：207 条存量语料**没有任何时间字段**，git 历史仅 8 次且经 11-17 私料清除重写——没有任何可靠依据能自动确定每题的入库时点。所以 `cross_window.py propose` 用每题**首次被真实评测的批次日期**（从 `reports/runs` 与归档目录名日期复算，本机 39 场可重跑）作为**入库时点的下界，不是准点**；从未在任何历史批次出现过的题一律 `unassigned`、不进任何窗口——没有证据就不替它编时间。当前生成结果：2 个窗口（0: cutoff `2026-10-22` / 120 条，1: cutoff `2026-11-06` / 87 条），合计恰为 207。
@@ -713,7 +726,9 @@ python scripts/selfcheck_oracles.py   # C01 判据自检：题目可信度审计
 
 测试覆盖：schema 归一化、沙箱路径与命令限制、变量抽取、S2/S3 路由、HITL、Canary、Token/步数预算、重试风暴、裁判双轨语义与悲观采样、判据指纹（覆盖范围／分层归属／历史缺值回落）、判据自检回路（正反参照/漏网检出/诚实分母）、门禁分支、数据加载/去重/采样、排名统计（Holm–Bonferroni 校正、效应量、A/B/C 置信等级）、报告与台账（含 M1 责任派发与签字校验）、Markdown/summary 可视化解析（含同名模型多场只取最新一场的统计口径）、人工标注模板与复核表渲染（只透执行事实、不透裁判结论）、自检脚本自身的体检规则（声明条数对齐、入库件本机身份扫描）、开跑前 key 生效自检（与 `run_batch` 同一条取 key 链，单测不打网络）、裁判 token 烧速外推（钉桩 `results.jsonl`）与外发打包前的本机身份预检（`pack_originality --scan-paths/--scan-only`）、PR 门禁摘要评论渲染（`pr_comment`：表行/阻断原因/缺字段降级/取最新批次与 dryrun 副产物剔除）、轨迹冗余检测（T23：同参≥3 次与短周期自环告警线、不阻断判定铁锚、gate 不消费字段钉桩）、harness 韧性（T24：网关 503/连接中途断退避重试、半截 JSON 工具参数不重试不判违规、断点续跑 already_done 判定口径）、实心/空心覆盖图（T27：五态分类不把「设计如此」误读成漏测、每个空心节点必须能反查到 controls.py 登记项的红线、未登记空心拒绝出图）、证据分级（T29：`evidence_type` 由判定层派生——确定性层 measured、模型判定 self_reported、third_party 只能显式赋值；报告结论摘要与台账条目带证据档，三分法是 AQG 自定口径非信通院标准）、AgentAdapter 协议与轨迹重放（T31：端点 runner 与重放适配器同为协议形状、同一串调用产出的终态证据逐字段相等、加载器对畸形行/未知 case/重复键 fail-closed、重放 trace 直喂规则层不动判定层、trace 模式配置豁免被测端点但不豁免裁判）、子集视图代际自动声明（T31 跟进缺陷：smoke 这类派生视图的自身指纹不得钉上台账代际锚点，否则伪造一次换代并冲掉跨代劣化护栏；含语料外 case id 的视图拒绝背书、显式声明永远优先）、跨窗口评测协议（T32：manifest 结构校验与不认识协议版本就 fail-closed、累积可见集/增量不相交、cutoff 单调、`run_eval --window` 在抽样**之前**裁剪且请求集含未来题时即使 `--limit 1` 也报错退出（断言的是**顺序**不是“少跑几道”）、切片不改 `dataset_sha256` 不触切代、ΔJ 三拆只允许 `delta_retained` 归因、喂题视图逐字节等于语料原文且保持题序（重新序列化/按 id 排序/坏行静默跳过/重复 id 都会 fail-closed）、视图拒写 `cases/` 与无 `--force` 拒覆盖）、噪声带实测标定（T32：配置指纹不合池、翻转率只统计两期都有可用结论位的题、实测带宽取最小而不取均值、`measured/measured_lower_bound/no_data` 三档定性不混用）、run 产物统一读取口（T32：逐次 `attempts[].strict_passed` 用于算抖动、合并 `strict_passed` 用于算门禁，两者口径不互换；顶层 trace 与 `result.attempts` 按 attempt 编号合并，seed 证据不丢；坏行计数不静默丢弃）、仅增预算对照组（T32：`plan` 的唯一变量自检——非预算项有任一不同就拒绝出计划；`analyze` 的截断率/无效率/环境故障率三块拆解与反向迁移逐条列出）。
 
-> **全仓唯一一处单测条数声明**：**954 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-25 实测，含 1 条 `xfail(strict)` 已知缺口钉桩）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档。这条对齐已由 `verify.py` 的「声明条数自检」机器化：新增了用例却没同步声明、或只改了中英其中一份，自检直接判红；其它地方出现具体条数仍算口径重复声明。
+T50 补充覆盖：最终观察完整保留环境分类元数据、旧布尔读取口保持兼容、repeat 批顶层 trace 前置条件证据可读、正式 `failure_class`（含显式 `None`）优先于早期 trace、恢复通过不误剔、历史缺分类时 trace 回退、unknown/无效数据/harness/fallback 剔出归因分母、两期分母与共同配对数分别披露、旧调用缺元数据时明确降级、CLI 双口径输出与剔除审计。
+
+> **全仓唯一一处单测条数声明**：**966 条（collect 口径，`python -m pytest -q --collect-only` 于 2026-11-25 实测，含 1 条 `xfail(strict)` 已知缺口钉桩）**。它是快照不是契约：每新增一条用例就过期一次，所以不挪进 badges、命令注释与其他文档。这条对齐已由 `verify.py` 的「声明条数自检」机器化：新增了用例却没同步声明、或只改了中英其中一份，自检直接判红；其它地方出现具体条数仍算口径重复声明。
 
 GitHub Actions 主要做离线检查：安装依赖、运行 pytest、校验供应链锁定完整性、重建数据集、执行 smoke dry-run，不会调用真实模型；另有一个 `supply-chain` 作业从 `requirements.lock` 生成 CycloneDX SBOM 并跑 `pip-audit`（咨询级漏洞扫描）。真实评测请在本地配置 `.env` 后手动运行。
 

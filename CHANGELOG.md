@@ -12,6 +12,14 @@
 
 > **时点说明（仅适用下一条 11-23 条目）**：该条日期取自机器时钟，与它记录的 run_id `20261123-*` 一致；上一条 T31 标的是 11-24，两者按标注日期不呈倒序。既成记录不重写，引用时点请以 run_id / 台账 `updated_at` 为准。
 
+### 2026-11-25：T50 跨窗口 ΔJ 双分母口径 + T39/T41 治理裁决
+
+- **同一场两期同时披露两种分母**：`runload` 完整保留最终观察里的 `failure_class` / `data_valid` / `judge_layer` / `is_fallback` 与 trace 前置条件证据；`window.delta_j` 新增 `denominator_profiles.all_samples` 与 `environment_excluded`，旧顶层字段保持全样本兼容，新 `*_valid_only` 字段用于能力归因。CLI 同时打印 retained/total 两口径、两期分母、共同配对数与逐原因剔除账本。
+- **环境故障不背模型能力，门禁也不靠剔样本变绿**：全样本 Strict 继续作**跨窗口门禁主口径**（不等同于发布门禁 `strict_rate`，后者始终剔 `precondition_failed`）；能力归因口径固定剔 `precondition_failed` / `unknown` / 无效数据 / harness / fallback。正式 `failure_class`（含显式 `None`）优先于早期 repeat trace，trace 仅在历史缺分类时回退；工具探路失败但模型最终恢复通过的样本不剔。历史缺环境元数据时输出 `note_metadata`，不补造分类。两期 retained 各自计算并另报共同配对数，两个读数共用同一噪声带。
+- **真实 T32 只读复算**：全样本 `ΔJ_retained=+3.33pp`（n=60），剔环境类 `+0.49pp`（基线/当期 56/58、共同 56）；均低于实测带 3.77pp，结论仍为“差异未证实”。`ΔJ_total=-5.17pp` 与剔后 `-4.83pp` 都含构成变化，均不得当能力退化。
+- **验证与边界**：新增 12 例离线单测，定向三层回归 83 passed；全量 `make test` **965 passed, 1 xfailed**，`make verify` **15 项全 [OK]**。README 中英补双口径表与历史迁移说明，collect 954→966；`cases/` 零 diff、epoch 仍为 `deff7501007cff61`。不切代、不回写历史批次、不启动真实跑批；仅增预算对照组仍待授权。
+- **治理裁决同批挂账**：T39 当前不做全量异模型二裁——κ 证明的是裁判对人工真值的一致性，不能替代裁判间一致性，且仓库没有同题双裁判产物可量化分歧率/仲裁负荷；保留触发式重排。T41 新挂两类审计模式：rule 层把“拦截”误当“违规”，以及 `State_Pollution` 不理解多次改口；`[B1-08] mut-correction-budget-001` 维持 fail、不翻标，登记为判定语义缺陷。
+
 ### 2026-11-23：被测切 `qwen3.8-flash`（三层探通）+ 双池额度重算→选定档 3，并插掉一处资产污染
 
 - **换模型不能只探“能不能回”**：本 harness 每一轮都带 `tools`，网关不支持 function calling 的话，一整夜只会收到空轨迹。所以探通分三层：端点/模型名→**带 tools 的真实调用（`finish_reason=tool_calls`、参数为合法 JSON）**→端到端 8 题 smoke（`7/8` 题真产生工具调用）。三条未通过全为能力/预算类（`State_Pollution` critical / `Step_Budget_Exceeded` / `Failed_Reasoning`），`output_truncated=False`、零 harness 错误——失败得“像模型问题而不是配置问题”才算测通。两次探跑均 `--no-publish`。

@@ -18,7 +18,9 @@ from src.engine.runload import (
     case_attempts_from_run,
     case_bits_from_run,
     case_final_bits,
+    case_final_observations,
     case_id_of,
+    final_observation_of,
     iter_result_rows,
     read_run_config,
     seed_of,
@@ -153,6 +155,79 @@ def test_case_id_falls_back_across_four_keys():
 # --------------------------------------------------------------------------
 # 两种口径不可互换
 # --------------------------------------------------------------------------
+
+
+def test_final_observations_keep_environment_metadata_without_changing_bits(tmp_path):
+    """环境故障常是 False + data_valid=True：结论位不变，但归因元数据不能丢。"""
+    row = {
+        "result": {
+            "case_id": "c1",
+            "strict_passed": False,
+            "failure_class": "precondition_failed",
+            "data_valid": True,
+            "judge_layer": "rule",
+            "is_fallback": False,
+        },
+        "trace": {"case_id": "c1", "precondition_failed": True},
+    }
+    _write_rows(tmp_path, [row])
+    observations, audit = case_final_observations(tmp_path)
+    finals, bits_audit = case_final_bits(tmp_path)
+
+    assert finals == {"c1": False}
+    assert audit == bits_audit == {"rows": 1, "bad_lines": 0, "missing_case_id": 0}
+    assert observations["c1"]["failure_class"] == "precondition_failed"
+    assert observations["c1"]["data_valid"] is True
+    assert observations["c1"]["precondition_failed"] is True
+    assert observations["c1"]["metadata_missing"] == []
+
+
+def test_final_observations_read_precondition_from_repeat_trace(tmp_path):
+    """旧行没有 failure_class 时，repeat 批顶层 attempts 仍是环境证据。"""
+    row = {
+        "result": {"case_id": "c1", "strict_passed": False, "judge_layer": "llm"},
+        "attempts": [
+            {"attempt": 1, "precondition_failed": False},
+            {"attempt": 2, "precondition_failed": True},
+        ],
+    }
+    _write_rows(tmp_path, [row])
+    observation = case_final_observations(tmp_path)[0]["c1"]
+    assert observation["precondition_failed"] is True
+    assert observation["failure_class"] is None
+    assert observation["metadata_missing"] == ["failure_class", "data_valid", "is_fallback"]
+
+
+def test_final_observation_explicit_none_failure_class_is_not_missing():
+    """正式分类显式为 None 时，早期 repeat 的 trace 不能把它改判成环境故障。"""
+    row = {
+        "result": {
+            "case_id": "c1",
+            "strict_passed": False,
+            "failure_class": None,
+            "data_valid": True,
+            "judge_layer": "rule",
+            "is_fallback": False,
+        },
+        "attempts": [
+            {"attempt": 1, "precondition_failed": True},
+            {"attempt": 2, "precondition_failed": False},
+        ],
+    }
+    observation = final_observation_of(row)
+    assert observation["failure_class"] is None
+    assert observation["precondition_failed"] is True
+    assert "failure_class" not in observation["metadata_missing"]
+
+
+def test_final_observation_defaults_legacy_flags_but_names_missing_keys():
+    """默认值兼容 EvalResult 旧行，但不能把缺键伪装成完整取证。"""
+    observation = final_observation_of({"result": {"case_id": "c1", "strict_passed": True}})
+    assert observation["data_valid"] is True
+    assert observation["is_fallback"] is False
+    assert observation["metadata_missing"] == [
+        "failure_class", "data_valid", "judge_layer", "is_fallback",
+    ]
 
 
 def test_final_bits_use_merged_verdict_not_first_attempt(tmp_path):

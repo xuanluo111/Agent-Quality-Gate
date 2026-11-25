@@ -39,9 +39,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.engine.dataset import case_ids, read_jsonl
 from src.engine.noise_calibration import flip_band_pp
-from src.engine.runload import case_bits_from_run, case_final_bits, case_id_of, iter_result_rows
+from src.engine.runload import (
+    case_bits_from_run,
+    case_final_observations,
+    case_id_of,
+    iter_result_rows,
+)
 from src.engine.window import (
+    ALL_SAMPLES,
     DEFAULT_METRIC,
+    ENVIRONMENT_EXCLUDED,
     PROTOCOL_ID,
     WindowProtocolError,
     build_window_view,
@@ -286,13 +293,27 @@ def cmd_view(args: argparse.Namespace) -> int:
 def cmd_delta(args: argparse.Namespace) -> int:
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     validate_manifest(manifest, case_ids(args.corpus))
-    # ΔJ 用合并后的最终结论（与发布门禁同一口径）；逐次 attempts 只服务于噪声标定。
-    baseline_bits, baseline_audit = case_final_bits(Path(args.baseline_run))
-    current_bits, current_audit = case_final_bits(Path(args.current_run))
+    # ΔJ 用合并后的最终结论，判定维度同样取 Strict；逐次 attempts 只服务于噪声标定。
+    # 分母不冒充发布门禁 strict_rate：后者始终剔除 precondition_failed，T50 两口径另列。
+    # 同一份 observation 同时供全样本与剔环境类口径使用，避免两套解析器给出不同结论。
+    baseline_observations, baseline_audit = case_final_observations(Path(args.baseline_run))
+    current_observations, current_audit = case_final_observations(Path(args.current_run))
+    baseline_bits = {
+        case_id: observation["strict_passed"]
+        for case_id, observation in baseline_observations.items()
+    }
+    current_bits = {
+        case_id: observation["strict_passed"]
+        for case_id, observation in current_observations.items()
+    }
     if not baseline_bits or not current_bits:
         print("❌ 任一场没有可读结果，ΔJ 不予计算（失败关闭）")
         return 1
-    result = delta_j(baseline_bits, current_bits, manifest, args.window)
+    result = delta_j(
+        baseline_bits, current_bits, manifest, args.window,
+        baseline_observations=baseline_observations,
+        current_observations=current_observations,
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
     print(f"基线场读取: {baseline_audit} | 当期场读取: {current_audit}")
 
@@ -313,11 +334,29 @@ def cmd_delta(args: argparse.Namespace) -> int:
             return 0
         band = measured["band_pp"]
         print(f"\n（未指定 --band-pp，用当期实测翻转率临时推得带宽 {band:.2f}pp）")
-    verdict = "超出噪声带" if abs(retained) > band else "差异未证实"
+    profiles = result["denominator_profiles"]
+    all_profile = profiles[ALL_SAMPLES]
+    valid_profile = profiles[ENVIRONMENT_EXCLUDED]
+
+    def _verdict(value: float) -> str:
+        return "超出噪声带" if abs(value) > band else "差异未证实"
+
     print(
-        f"\nΔJ_retained = {retained:+.2f}pp（{result['n_retained']} 条同题复测）"
-        f" vs 噪声带 {band:.2f}pp → {verdict}"
+        f"\n跨窗口门禁主口径（全样本）ΔJ_retained = {retained:+.2f}pp"
+        f"（基线/当期可计分 {all_profile['n_retained_baseline_scored']}/"
+        f"{all_profile['n_retained_current_scored']} 条同题复测）"
+        f" vs 噪声带 {band:.2f}pp → {_verdict(retained)}"
     )
+    retained_valid = result["delta_retained_valid_only"]
+    if retained_valid is None or not result["attribution_valid_only"]:
+        print("能力归因口径（剔环境类）ΔJ_retained 不可算：两期没有共同的可信同题样本，不予判定。")
+    else:
+        print(
+            f"能力归因口径（剔环境类）ΔJ_retained = {retained_valid:+.2f}pp"
+            f"（基线/当期可计分 {valid_profile['n_retained_baseline_scored']}/"
+            f"{valid_profile['n_retained_current_scored']} 条，两期共同 {valid_profile['n_retained_paired_scored']} 条）"
+            f" vs 同一噪声带 {band:.2f}pp → {_verdict(retained_valid)}"
+        )
     if result["delta_total"] is None:
         print("ΔJ_total 不可算（任一期无可用结论位），不予报数。")
     else:
@@ -325,6 +364,12 @@ def cmd_delta(args: argparse.Namespace) -> int:
             f"ΔJ_total = {result['delta_total']:+.2f}pp —— 含题目覆盖扩张，"
             "**不得**引用为能力增益（归因字段只有 delta_retained）"
         )
+    if result["delta_total_valid_only"] is not None:
+        print(
+            f"ΔJ_total_valid_only = {result['delta_total_valid_only']:+.2f}pp"
+            " —— 仍含题目覆盖扩张，同样**不得**引用为能力增益"
+        )
+    print("两种分母口径并列披露；全样本用于跨窗口门禁账面，剔环境类只用于能力归因，不互相替换。")
     return 0
 
 

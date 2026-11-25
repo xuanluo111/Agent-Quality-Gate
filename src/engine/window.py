@@ -23,17 +23,22 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence
 
+from src.engine.failure_class import PRECONDITION_FAILED, UNKNOWN
+
 PROTOCOL_ID = "aqg-cross-window/1"
 SUPPORTED_PROTOCOLS = (PROTOCOL_ID,)
-# J 的默认口径：Strict 通过率（百分点）。与发布门禁同口径，避免"门禁看 Strict、
-# 跨窗口结论看 Standard"这种两套数并存。
+# J 的默认判定：Strict 通过率（百分点）。与发布门禁一样不混用 Standard；
+# 分母则由 T50 的 denominator_profiles 单独声明，不能把跨窗口全样本当成 gate.strict_rate。
 DEFAULT_METRIC = "strict_pass_rate"
 SUPPORTED_METRICS = (DEFAULT_METRIC, "standard_pass_rate")
 
 FIRST_WINDOW = 0
+ALL_SAMPLES = "all_samples"
+ENVIRONMENT_EXCLUDED = "environment_excluded"
 
 
 class WindowProtocolError(ValueError):
@@ -294,19 +299,191 @@ def _pass_rate_pp(bits: Sequence[Optional[bool]]) -> Optional[float]:
     return 100.0 * sum(1 for bit in usable if bit) / len(usable)
 
 
+def _observation_bit(observation: object) -> Optional[bool]:
+    """兼容直接传旧布尔映射与 T50 的完整 observation 映射。"""
+    if isinstance(observation, bool) or observation is None:
+        return observation
+    if isinstance(observation, dict):
+        return observation.get("strict_passed")
+    return None
+
+
+def _environment_exclusion_reason(observation: object) -> Optional[str]:
+    """T50 能力归因口径的剔除原因；空字符串表示可计入能力分母。
+
+    顺序与 `failure_class.classify_failure` 一致：前置条件先于 unknown。unknown
+    在发布门禁里由 `--exclude-unknown` 控制，T50 的能力归因口径则明确固定剔除，
+    避免跨窗口读数受两期环境样本分布差异影响。`orphan_effect` /
+    `framework_decision` 不凭分类名额外剔除；若它们同时 data_valid=False、
+    harness 或 fallback，仍会按下面的不可信证据被摘出。
+    """
+    bit = _observation_bit(observation)
+    if bit is None:
+        return "missing_outcome"
+    if not isinstance(observation, dict):
+        return None
+    failure_class = observation.get("failure_class")
+    if failure_class == PRECONDITION_FAILED:
+        return PRECONDITION_FAILED
+    # 正式 failure_class 优先：显式 None 也是合并后的最终分类，不能被早期某次
+    # repeat 的 trace 标记覆盖。只有历史行缺该字段时，trace 才作为回退证据；
+    # 且仍要求最终 Strict 失败，模型探路后恢复通过不能剔题。
+    if (
+        bit is False
+        and observation.get("precondition_failed") is True
+        and "failure_class" in (observation.get("metadata_missing") or [])
+    ):
+        return "trace_precondition_failed"
+    if failure_class == UNKNOWN:
+        return UNKNOWN
+    if observation.get("data_valid") is False:
+        return "invalid_data"
+    if observation.get("judge_layer") == "harness":
+        return "harness"
+    if observation.get("is_fallback") is True:
+        return "fallback"
+    return None
+
+
+def _denominator_profile(
+    baseline_bits: Dict[str, Optional[bool]],
+    current_bits: Dict[str, Optional[bool]],
+    baseline_observations: Optional[Dict[str, dict]],
+    current_observations: Optional[Dict[str, dict]],
+    common_retained: List[str],
+    current_novel: List[str],
+    *,
+    exclude_environment: bool,
+) -> dict:
+    """计算一种分母口径，并留下两期各自的剔除账本。"""
+
+    def _side(bits: Dict[str, Optional[bool]], observations: Optional[Dict[str, dict]], label: str):
+        keys = sorted(bits)
+        reasons: Counter = Counter()
+        excluded_by_reason: Dict[str, List[str]] = {}
+        scored: List[bool] = []
+        metadata_missing: List[str] = []
+        for case_id in keys:
+            observation = observations.get(case_id) if observations is not None else None
+            bit = _observation_bit(observation) if observations is not None else bits[case_id]
+            reason = _environment_exclusion_reason(observation) if exclude_environment else None
+            if reason is None and bit is None:
+                reason = "missing_outcome"
+            if reason:
+                reasons[reason] += 1
+                excluded_by_reason.setdefault(reason, []).append(case_id)
+            else:
+                scored.append(bit)
+            if isinstance(observation, dict) and observation.get("metadata_missing"):
+                metadata_missing.append(case_id)
+        retained_keys = [case_id for case_id in common_retained if case_id in bits]
+        retained_scored = [
+            case_id for case_id in retained_keys
+            if not (
+                exclude_environment
+                and observations is not None
+                and _environment_exclusion_reason(observations.get(case_id))
+            )
+            and bits[case_id] is not None
+        ]
+        novel_keys = [case_id for case_id in current_novel if case_id in bits]
+        novel_scored = [
+            case_id for case_id in novel_keys
+            if not (
+                exclude_environment
+                and observations is not None
+                and _environment_exclusion_reason(observations.get(case_id))
+            )
+            and bits[case_id] is not None
+        ]
+        return {
+            "label": label,
+            "cases": len(keys),
+            "scored_cases": len(scored),
+            "j": _pass_rate_pp(scored),
+            "retained_cases": len(retained_keys),
+            "retained_scored_cases": len(retained_scored),
+            "j_retained": _pass_rate_pp([bits[case_id] for case_id in retained_scored]),
+            "novel_cases": len(novel_keys),
+            "novel_scored_cases": len(novel_scored),
+            "j_novel": _pass_rate_pp([bits[case_id] for case_id in novel_scored]),
+            "excluded_count": sum(reasons.values()),
+            "excluded_by_reason": dict(sorted(reasons.items())),
+            "excluded_case_ids": {
+                reason: sorted(case_ids) for reason, case_ids in sorted(excluded_by_reason.items())
+            },
+            "metadata_available": observations is not None,
+            "metadata_missing_count": len(metadata_missing),
+            "metadata_missing_case_ids_sample": sorted(metadata_missing)[:10],
+        }
+
+    baseline = _side(baseline_bits, baseline_observations, "baseline")
+    current = _side(current_bits, current_observations, "current")
+    paired_scored = [
+        case_id for case_id in common_retained
+        if _case_is_scored(baseline_bits, baseline_observations, case_id, exclude_environment)
+        and _case_is_scored(current_bits, current_observations, case_id, exclude_environment)
+    ]
+    return {
+        "j_baseline": baseline["j"],
+        "j_current": current["j"],
+        "delta_total": _difference(current["j"], baseline["j"]),
+        "j_retained_baseline": baseline["j_retained"],
+        "j_retained_current": current["j_retained"],
+        "delta_retained": _difference(current["j_retained"], baseline["j_retained"]),
+        "delta_novel": current["j_novel"],
+        "n_baseline": baseline["cases"],
+        "n_current": current["cases"],
+        "n_baseline_scored": baseline["scored_cases"],
+        "n_current_scored": current["scored_cases"],
+        "n_retained": len(common_retained),
+        "n_retained_baseline_scored": baseline["retained_scored_cases"],
+        "n_retained_current_scored": current["retained_scored_cases"],
+        "n_retained_paired_scored": len(paired_scored),
+        "n_novel": current["novel_cases"],
+        "n_novel_scored": current["novel_scored_cases"],
+        "exclusions": {"baseline": baseline, "current": current},
+    }
+
+
+def _case_is_scored(
+    bits: Dict[str, Optional[bool]],
+    observations: Optional[Dict[str, dict]],
+    case_id: str,
+    exclude_environment: bool,
+) -> bool:
+    """一个题在指定口径下是否可计分（供 profile 配对审计与测试复用）。"""
+    if case_id not in bits or bits[case_id] is None:
+        return False
+    if exclude_environment and observations is not None:
+        return _environment_exclusion_reason(observations.get(case_id)) is None
+    return True
+
+
+def _difference(current: Optional[float], baseline: Optional[float]) -> Optional[float]:
+    return None if current is None or baseline is None else current - baseline
+
+
 def delta_j(
     baseline_bits: Dict[str, Optional[bool]],
     current_bits: Dict[str, Optional[bool]],
     manifest: dict,
     window: int,
     metric: Optional[str] = None,
+    baseline_observations: Optional[Dict[str, dict]] = None,
+    current_observations: Optional[Dict[str, dict]] = None,
 ) -> dict:
-    """按 ΔJ 口径计算跨窗口增益，强制拆成 retained / novel / total 三项。
+    """按 ΔJ 口径计算跨窗口变化，并列全样本与剔环境类两套分母。
 
     - `delta_retained`：**同题复测**的分数差。只有这一项能归因为"被测方跨窗口保没保住能力"。
     - `delta_novel`：新增题的绝对分，没有基线可比，单独报，不参与任何"增益"表述。
     - `delta_total`：全量口径差。分母构成在两期之间变了，所以它是**构成变化与真变化的
       混合体**，只能作为账面对总数，禁止当成能力增益引用。
+
+    旧顶层字段始终是**全样本口径**，保持历史消费者兼容。新消费者必须读
+    `denominator_profiles`：`all_samples` 是门禁主口径，`environment_excluded`
+    是能力归因口径。后者固定剔除 precondition_failed、unknown、无效数据、harness
+    与 fallback；两期 retained 各自计算可计分数，并另报两期都可计分的配对数。
 
     基线只允许来自上一窗口（`window - 1`）：跳过一期去比，得到的"增益"里会混进
     被测方在中间窗口已经退化又恢复的过程，读者看不出来。
@@ -314,10 +491,6 @@ def delta_j(
     declared_metric = metric or manifest.get("metric") or DEFAULT_METRIC
     if declared_metric not in SUPPORTED_METRICS:
         raise WindowProtocolError(f"未知的 J 口径: {declared_metric}")
-    if declared_metric != DEFAULT_METRIC:
-        # 非 Strict 口径目前没有任何门禁消费它；允许声明但必须落盘标记，
-        # 否则报告里会出现一个和发布门禁不同源的"增益"。
-        pass
 
     sets = _declared_sets(manifest)
     if window not in sets:
@@ -327,48 +500,79 @@ def delta_j(
 
     novel = set(sets[window]) if window > FIRST_WINDOW else set()
     if window == FIRST_WINDOW:
-        # 窗口 0 是基线本身：没有"上一期"，任何 ΔJ 都是无中生有。
         retained: set = set()
     else:
-        visible_now = set(visible_ids(manifest, window))
-        retained = visible_now - novel
+        retained = set(visible_ids(manifest, window)) - novel
 
-    def _keys(bits: Dict[str, Optional[bool]]) -> set:
-        return set(bits)
+    common_retained = sorted(retained & set(baseline_bits) & set(current_bits))
+    current_novel = sorted(novel & set(current_bits))
+    missing_retained = sorted(retained & set(current_bits) - set(baseline_bits))
 
-    common_retained = sorted(retained & _keys(baseline_bits) & _keys(current_bits))
-    current_novel = sorted(novel & _keys(current_bits))
-    missing_retained = sorted(retained & _keys(current_bits) - _keys(baseline_bits))
-
-    j_current_all = _pass_rate_pp([current_bits[key] for key in sorted(current_bits)])
-    j_baseline_all = _pass_rate_pp([baseline_bits[key] for key in sorted(baseline_bits)])
-    j_retained_base = _pass_rate_pp([baseline_bits[key] for key in common_retained])
-    j_retained_curr = _pass_rate_pp([current_bits[key] for key in common_retained])
-    j_novel = _pass_rate_pp([current_bits[key] for key in current_novel])
+    all_profile = _denominator_profile(
+        baseline_bits, current_bits, None, None, common_retained, current_novel,
+        exclude_environment=False,
+    )
+    valid_profile = _denominator_profile(
+        baseline_bits, current_bits, baseline_observations, current_observations,
+        common_retained, current_novel, exclude_environment=True,
+    )
 
     result = {
         "protocol": manifest.get("protocol"),
         "metric": declared_metric,
         "window": window,
-        "j_baseline": j_baseline_all,
-        "j_current": j_current_all,
-        "delta_total": (
-            None if j_current_all is None or j_baseline_all is None else j_current_all - j_baseline_all
-        ),
-        "delta_retained": (
-            None if j_retained_base is None or j_retained_curr is None
-            else j_retained_curr - j_retained_base
-        ),
-        "j_retained_baseline": j_retained_base,
-        "j_retained_current": j_retained_curr,
-        "delta_novel": j_novel,
-        "n_retained": len(common_retained),
-        "n_novel": len(current_novel),
+        # 兼容别名：旧消费者继续读到与改动前一致的全样本字段。
+        "j_baseline": all_profile["j_baseline"],
+        "j_current": all_profile["j_current"],
+        "delta_total": all_profile["delta_total"],
+        "delta_retained": all_profile["delta_retained"],
+        "j_retained_baseline": all_profile["j_retained_baseline"],
+        "j_retained_current": all_profile["j_retained_current"],
+        "delta_novel": all_profile["delta_novel"],
+        "n_retained": all_profile["n_retained"],
+        "n_novel": all_profile["n_novel"],
         "n_missing_baseline": len(missing_retained),
+        "primary_denominator": ALL_SAMPLES,
+        "attribution_denominator": ENVIRONMENT_EXCLUDED,
+        "denominator_profiles": {
+            ALL_SAMPLES: all_profile,
+            ENVIRONMENT_EXCLUDED: valid_profile,
+        },
+        # 能力归因字段单独命名，绝不覆盖上面的门禁主口径。
+        "j_baseline_valid_only": valid_profile["j_baseline"],
+        "j_current_valid_only": valid_profile["j_current"],
+        "delta_total_valid_only": valid_profile["delta_total"],
+        "j_retained_baseline_valid_only": valid_profile["j_retained_baseline"],
+        "j_retained_current_valid_only": valid_profile["j_retained_current"],
+        "delta_retained_valid_only": valid_profile["delta_retained"],
+        "delta_novel_valid_only": valid_profile["delta_novel"],
+        "n_retained_valid_only": valid_profile["n_retained_paired_scored"],
+        "n_novel_valid_only": valid_profile["n_novel_scored"],
         # 归因边界：写进产物，让下游无法只挑 delta_total 说话。
         "attributable_field": "delta_retained",
         "attributable": window > FIRST_WINDOW and bool(common_retained),
+        "attribution_valid_only": (
+            window > FIRST_WINDOW and valid_profile["n_retained_paired_scored"] > 0
+        ),
     }
+    result["note_denominators"] = (
+        "全样本 Strict 是跨窗口门禁主口径；剔环境类 Strict 是能力归因口径，两者并列且不互相替换。"
+        "旧顶层字段保持全样本语义，新消费者应读 denominator_profiles；"
+        "跨窗口全样本不等同于发布门禁 strict_rate（后者始终剔除 precondition_failed）。"
+    )
+    missing_metadata = sum(
+        side["metadata_missing_count"]
+        for side in valid_profile["exclusions"].values()
+    )
+    if (
+        baseline_observations is None
+        or current_observations is None
+        or missing_metadata
+    ):
+        result["note_metadata"] = (
+            "至少一期缺环境分类元数据：未提供的 observation 只能剔除缺失结论位；"
+            "历史缺键按 EvalResult 默认值兼容，能力归因仅依据已落盘证据，不得声称完整取证。"
+        )
     if window == FIRST_WINDOW:
         result["note"] = "窗口 0 是基线轮，不产生 ΔJ；只有 n≥1 的窗口才有增益口径"
     if len(current_bits) != len(baseline_bits):

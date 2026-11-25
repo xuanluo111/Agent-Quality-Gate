@@ -9,6 +9,8 @@ import json
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
+
 import cross_window
 from src.engine.window import PROTOCOL_ID
 
@@ -334,6 +336,63 @@ def test_delta_reports_retained_as_the_only_attributable_number(tmp_path, capsys
     assert "差异未证实" in out           # 带内：不得宣称劣化
     assert "不得**引用为能力增益" in out  # delta_total 的措辞护栏
     assert "归因字段只有 delta_retained" in out
+
+
+def _run_dir_with_environment(root: Path, stamp: str, rows: dict) -> Path:
+    """造带 failure_class / data_valid 等真实形态的最小 run。"""
+    run = root / "reports" / "runs" / f"{stamp}-120000-m1"
+    run.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for case_id, spec in rows.items():
+        result = {
+            "case_id": case_id,
+            "strict_passed": spec["strict_passed"],
+            "failure_class": spec.get("failure_class"),
+            "data_valid": spec.get("data_valid", True),
+            "judge_layer": spec.get("judge_layer", "rule"),
+            "is_fallback": spec.get("is_fallback", False),
+        }
+        lines.append(json.dumps({"result": result}, ensure_ascii=False))
+    (run / "results.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return run
+
+
+def test_delta_prints_both_denominators_and_keeps_environment_false_auditable(tmp_path, capsys):
+    """CLI 必须同时报门禁主口径与能力归因口径，不能只打印一个“好看”的数。"""
+    corpus, manifest_path = _two_window_fixture(tmp_path)
+    baseline = _run_dir_with_environment(
+        tmp_path, "20261022",
+        {
+            "a1": {"strict_passed": True},
+            "a2": {"strict_passed": False, "failure_class": "precondition_failed"},
+        },
+    )
+    current = _run_dir_with_environment(
+        tmp_path, "20261106",
+        {
+            "a1": {"strict_passed": True},
+            "a2": {"strict_passed": False, "failure_class": "precondition_failed"},
+            "b1": {"strict_passed": True},
+        },
+    )
+    code = cross_window.cmd_delta(
+        Namespace(
+            manifest=str(manifest_path), corpus=str(corpus), window=1,
+            baseline_run=str(baseline), current_run=str(current), band_pp=50.0,
+        )
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    payload = json.loads(out.split("\n基线场读取:", 1)[0])
+    assert payload["delta_retained"] == pytest.approx(0.0)
+    assert payload["delta_retained_valid_only"] == pytest.approx(0.0)
+    profile = payload["denominator_profiles"]["environment_excluded"]
+    assert profile["n_retained_baseline_scored"] == 1
+    assert profile["n_retained_current_scored"] == 1
+    assert profile["exclusions"]["current"]["excluded_case_ids"]["precondition_failed"] == ["a2"]
+    assert "门禁主口径（全样本）ΔJ_retained" in out
+    assert "能力归因口径（剔环境类）ΔJ_retained" in out
+    assert "两种分母口径并列披露" in out
 
 
 def test_delta_without_band_or_repeat_declines_to_judge(tmp_path, capsys):

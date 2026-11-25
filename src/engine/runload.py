@@ -159,19 +159,68 @@ def case_bits_from_run(run_dir: Path) -> tuple[Dict[str, List[Optional[bool]]], 
     return bits, audit
 
 
-def case_final_bits(run_dir: Path) -> tuple[Dict[str, Optional[bool]], dict]:
-    """读一个 run 目录，返回 {case_id: 合并后的最终 Strict 结论}。
+def _trace_precondition_failed(record: dict) -> Optional[bool]:
+    """读取 Runner 的前置条件证据，兼容旧 `trace` 与 repeat 批的顶层 `attempts`。
 
-    与 `case_bits_from_run` 的区别是口径而不是 convenience：逐次 attempts 回答
-    「重跑会抖多少」（噪声），`result.strict_passed` 回答「这批合起来合不合格」（门禁）。
-    两个口径不能互换：拿 attempts[0] 当最终结论会把“按最差一次合并”的规则抹掉，
-    算出的 ΔJ 与发布门禁看的不是同一个数。
+    新结果的 `result.failure_class` 已包含这个判断；旧行可能只有 trace 标记。
+    两者要同时保留，否则历史批次里的环境故障会以 False 混进能力归因分母。
+    """
+    trace = record.get("trace") or {}
+    direct = _coerce_bit(trace.get("precondition_failed"))
+    attempts = record.get("attempts")
+    flags = [direct]
+    if isinstance(attempts, list):
+        flags.extend(
+            _coerce_bit(item.get("precondition_failed"))
+            for item in attempts
+            if isinstance(item, dict)
+        )
+    if any(flag is True for flag in flags):
+        return True
+    known = [flag for flag in flags if flag is not None]
+    return False if known and all(flag is False for flag in known) else None
+
+
+def final_observation_of(record: dict) -> dict:
+    """把最终结论与判错因元数据一起取出，供双口径指标共用同一份证据。
+
+    只返回 `strict_passed` 会丢掉 `precondition_failed` / `unknown`：真实环境故障
+    经常是 `strict_passed=False, data_valid=True`，下游无法凭结论位识别。缺失的
+    `data_valid` / `is_fallback` 按 `EvalResult` 的既有默认值补 True / False，
+    但 `metadata_missing` 会原样点名，不把历史缺键伪装成完整取证。
+    """
+    result = record.get("result") or {}
+    failure_class = result.get("failure_class")
+    data_valid = _coerce_bit(result.get("data_valid"))
+    is_fallback = _coerce_bit(result.get("is_fallback"))
+    # 缺键按 EvalResult 默认值兼容；键存在却不是布尔则失败关闭，不能把脏证据当可信。
+    if "data_valid" in result and data_valid is None:
+        data_valid = False
+    if "is_fallback" in result and is_fallback is None:
+        is_fallback = True
+    tracked = ("failure_class", "data_valid", "judge_layer", "is_fallback")
+    return {
+        "strict_passed": _coerce_bit(result.get(_ATTEMPT_OUTCOME_KEY)),
+        "failure_class": str(failure_class).strip() if failure_class else None,
+        "data_valid": True if data_valid is None else data_valid,
+        "judge_layer": str(result.get("judge_layer") or "") or None,
+        "is_fallback": False if is_fallback is None else is_fallback,
+        "precondition_failed": _trace_precondition_failed(record),
+        "metadata_missing": [key for key in tracked if key not in result],
+    }
+
+
+def case_final_observations(run_dir: Path) -> tuple[Dict[str, dict], dict]:
+    """读一个 run 目录，返回 {case_id: 最终结论及环境分类元数据} 与读取审计。
+
+    这是 `case_final_bits` 的完整证据版；前者保持原有三态返回类型，后者服务 T50
+    的「全样本 / 剔环境类」双口径。两者必须同源解析，不能一份读 result、另一份猜 trace。
     """
     path = Path(run_dir) / RESULTS_NAME
-    finals: Dict[str, Optional[bool]] = {}
+    observations: Dict[str, dict] = {}
     audit = {"rows": 0, "bad_lines": 0, "missing_case_id": 0}
     if not path.is_file():
-        return finals, audit
+        return observations, audit
     for record, bad in iter_result_rows(path):
         if bad:
             audit["bad_lines"] += 1
@@ -181,7 +230,23 @@ def case_final_bits(run_dir: Path) -> tuple[Dict[str, Optional[bool]], dict]:
         if not case_id:
             audit["missing_case_id"] += 1
             continue
-        finals[case_id] = _coerce_bit((record.get("result") or {}).get(_ATTEMPT_OUTCOME_KEY))
+        observations[case_id] = final_observation_of(record)
+    return observations, audit
+
+
+def case_final_bits(run_dir: Path) -> tuple[Dict[str, Optional[bool]], dict]:
+    """读一个 run 目录，返回 {case_id: 合并后的最终 Strict 结论}。
+
+    与 `case_bits_from_run` 的区别是口径而不是 convenience：逐次 attempts 回答
+    「重跑会抖多少」（噪声），`result.strict_passed` 回答「这批合起来合不合格」（门禁）。
+    两个口径不能互换：拿 attempts[0] 当最终结论会把“按最差一次合并”的规则抹掉，
+    算出的 ΔJ 与发布门禁看的不是同一个数。
+    """
+    observations, audit = case_final_observations(run_dir)
+    finals = {
+        case_id: observation["strict_passed"]
+        for case_id, observation in observations.items()
+    }
     return finals, audit
 
 

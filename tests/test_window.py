@@ -245,6 +245,194 @@ def test_precondition_failed_bits_leave_the_denominator():
     assert result["delta_retained"] == pytest.approx(0.0)
 
 
+def _observation(bit, **extra):
+    value = {
+        "strict_passed": bit,
+        "failure_class": None,
+        "data_valid": True,
+        "judge_layer": "rule",
+        "is_fallback": False,
+        "precondition_failed": None,
+        "metadata_missing": [],
+    }
+    value.update(extra)
+    return value
+
+
+def test_environment_false_stays_in_primary_but_leaves_attribution_denominator():
+    """T50 的核心反例：False 环境故障不是 None，必须靠分类元数据剔除。"""
+    manifest = _two_window_manifest()
+    baseline = {"a1": True, "a2": False, "a3": True}
+    current = {"a1": False, "a2": False, "a3": True, "b1": False}
+    baseline_obs = {
+        "a1": _observation(True),
+        "a2": _observation(False, failure_class="precondition_failed"),
+        "a3": _observation(True),
+    }
+    current_obs = {
+        "a1": _observation(False),
+        "a2": _observation(False, failure_class="precondition_failed"),
+        "a3": _observation(True),
+        "b1": _observation(False, failure_class="unknown"),
+    }
+    result = delta_j(
+        baseline, current, manifest, 1,
+        baseline_observations=baseline_obs, current_observations=current_obs,
+    )
+
+    assert result["j_baseline"] == pytest.approx(200 / 3)
+    assert result["j_current"] == pytest.approx(25.0)
+    assert result["delta_retained"] == pytest.approx(-100 / 3)
+    assert result["j_retained_baseline_valid_only"] == pytest.approx(100.0)
+    assert result["j_retained_current_valid_only"] == pytest.approx(50.0)
+    assert result["delta_retained_valid_only"] == pytest.approx(-50.0)
+    assert result["delta_total_valid_only"] == pytest.approx(-50.0)
+    assert result["delta_novel_valid_only"] is None
+    profile = result["denominator_profiles"]["environment_excluded"]
+    assert profile["n_retained_baseline_scored"] == 2
+    assert profile["n_retained_current_scored"] == 2
+    assert profile["n_retained_paired_scored"] == 2
+    assert profile["exclusions"]["baseline"]["excluded_case_ids"] == {
+        "precondition_failed": ["a2"],
+    }
+    assert profile["exclusions"]["current"]["excluded_by_reason"] == {
+        "precondition_failed": 1,
+        "unknown": 1,
+    }
+
+
+def test_attribution_excludes_unknown_invalid_harness_and_fallback():
+    """未知、无效数据、harness 与 fallback 都不能用于解释模型能力。"""
+    manifest = _two_window_manifest()
+    baseline = {"a1": True, "a2": True, "a3": True}
+    current = {"a1": True, "a2": False, "a3": False, "b1": False, "b2": False}
+    baseline_obs = {
+        "a1": _observation(True),
+        "a2": _observation(True, failure_class="unknown"),
+        "a3": _observation(True, is_fallback=True),
+    }
+    current_obs = {
+        "a1": _observation(True),
+        "a2": _observation(False, failure_class="unknown"),
+        "a3": _observation(False, is_fallback=True),
+        "b1": _observation(False, data_valid=False),
+        "b2": _observation(False, judge_layer="harness"),
+    }
+    result = delta_j(
+        baseline, current, manifest, 1,
+        baseline_observations=baseline_obs, current_observations=current_obs,
+    )
+    profile = result["denominator_profiles"]["environment_excluded"]
+    assert result["delta_retained"] == pytest.approx(-200 / 3)
+    assert result["delta_retained_valid_only"] == pytest.approx(0.0)
+    assert profile["n_retained_paired_scored"] == 1
+    assert profile["exclusions"]["baseline"]["excluded_by_reason"] == {
+        "fallback": 1,
+        "unknown": 1,
+    }
+    assert profile["exclusions"]["current"]["excluded_by_reason"] == {
+        "fallback": 1,
+        "harness": 1,
+        "invalid_data": 1,
+        "unknown": 1,
+    }
+
+
+def test_trace_precondition_does_not_exclude_a_recovered_pass():
+    """探路失败后模型最终通过，整题仍测到了能力；不能见 trace 标记就剔题。"""
+    manifest = _two_window_manifest()
+    baseline = {"a1": True}
+    current = {"a1": True, "b1": True}
+    observation = _observation(True, precondition_failed=True)
+    result = delta_j(
+        baseline, current, manifest, 1,
+        baseline_observations={"a1": observation},
+        current_observations={"a1": observation, "b1": _observation(True)},
+    )
+    profile = result["denominator_profiles"]["environment_excluded"]
+    assert result["delta_retained_valid_only"] == pytest.approx(0.0)
+    assert profile["exclusions"]["baseline"]["excluded_count"] == 0
+    assert profile["exclusions"]["current"]["excluded_count"] == 0
+
+
+def test_mixed_repeat_trace_does_not_hide_explicit_final_model_failure():
+    """早期环境失败不能覆盖正式最终分类；显式 None 的模型失败必须留在归因分母。"""
+    manifest = _two_window_manifest()
+    baseline = {"a1": True}
+    current = {"a1": False, "b1": True}
+    result = delta_j(
+        baseline, current, manifest, 1,
+        baseline_observations={"a1": _observation(True)},
+        current_observations={
+            "a1": _observation(False, precondition_failed=True),
+            "b1": _observation(True),
+        },
+    )
+    profile = result["denominator_profiles"]["environment_excluded"]
+    assert result["delta_retained_valid_only"] == pytest.approx(-100.0)
+    assert profile["n_retained_current_scored"] == 1
+    assert profile["n_retained_paired_scored"] == 1
+    assert profile["exclusions"]["current"]["excluded_count"] == 0
+
+
+def test_trace_precondition_is_legacy_fallback_when_failure_class_missing():
+    """历史行缺正式分类时仍可用 trace 剔环境失败，但不能把缺键说成完整取证。"""
+    manifest = _two_window_manifest()
+    baseline = {"a1": True}
+    current = {"a1": False, "b1": True}
+    result = delta_j(
+        baseline, current, manifest, 1,
+        baseline_observations={"a1": _observation(True)},
+        current_observations={
+            "a1": _observation(
+                False, precondition_failed=True, metadata_missing=["failure_class"],
+            ),
+            "b1": _observation(True),
+        },
+    )
+    profile = result["denominator_profiles"]["environment_excluded"]
+    assert result["delta_retained_valid_only"] is None
+    assert result["attribution_valid_only"] is False
+    assert profile["exclusions"]["current"]["excluded_by_reason"] == {
+        "trace_precondition_failed": 1,
+    }
+    assert "缺环境分类元数据" in result["note_metadata"]
+
+
+def test_valid_retained_reports_separate_denominators_and_paired_count():
+    """两期环境分布不同时各自报分母，并另报共同配对数，不能把 n 藏起来。"""
+    manifest = _two_window_manifest()
+    baseline = {"a1": True, "a2": False}
+    current = {"a1": True, "a2": False, "b1": True}
+    result = delta_j(
+        baseline, current, manifest, 1,
+        baseline_observations={
+            "a1": _observation(True),
+            "a2": _observation(False, failure_class="precondition_failed"),
+        },
+        current_observations={
+            "a1": _observation(True), "a2": _observation(False), "b1": _observation(True),
+        },
+    )
+    profile = result["denominator_profiles"]["environment_excluded"]
+    assert profile["n_retained_baseline_scored"] == 1
+    assert profile["n_retained_current_scored"] == 2
+    assert profile["n_retained_paired_scored"] == 1
+    assert result["delta_retained_valid_only"] == pytest.approx(-50.0)
+
+
+def test_legacy_delta_call_keeps_profiles_equal_and_flags_missing_metadata():
+    """旧调用不传 observation 仍可运行，但产物必须承认没做环境类剔除。"""
+    manifest = _two_window_manifest()
+    baseline = {"a1": True, "a2": False}
+    current = {"a1": True, "a2": False, "b1": True}
+    result = delta_j(baseline, current, manifest, 1)
+    profile = result["denominator_profiles"]["environment_excluded"]
+    assert result["delta_retained_valid_only"] == result["delta_retained"]
+    assert profile["exclusions"]["baseline"]["metadata_available"] is False
+    assert "缺环境分类元数据" in result["note_metadata"]
+
+
 def test_unknown_metric_is_rejected():
     manifest = _two_window_manifest(metric="f1_score")
     with pytest.raises(WindowProtocolError, match="未知的 J 口径"):
