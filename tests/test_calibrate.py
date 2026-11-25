@@ -210,3 +210,96 @@ def test_main_exclude_invalid_flag_filters_metrics(tmp_path):
     assert payload["matched"] == 1
     assert payload["excluded_invalid"] == ["trunc"]
     assert payload["confusion"] == {"tp": 1, "tn": 0, "fp": 0, "fn": 0}
+
+
+def test_exclude_case_drops_listed_samples_and_keeps_audit_trail():
+    labels = {
+        "ok": {"human_passed": True, "human_stage": None},
+        "env-a": {"human_passed": False, "human_stage": "generation"},
+        "env-b": {"human_passed": True, "human_stage": None},
+    }
+    # 环境故障但 data_valid=True：--exclude-invalid 盖不到，只能显式点名
+    judgements = {
+        "ok": {"judge_passed": True, "judge_stage": None, "data_valid": True},
+        "env-a": {"judge_passed": False, "judge_stage": None, "data_valid": True},
+        "env-b": {"judge_passed": False, "judge_stage": None, "data_valid": True},
+    }
+    kept = calibrate(labels, judgements)
+    assert kept["matched"] == 3
+    assert kept["excluded_cases"] == []
+
+    filtered = calibrate(labels, judgements, exclude_cases=["env-a", "env-b"])
+    assert filtered["matched"] == 1
+    assert filtered["excluded_cases"] == ["env-a", "env-b"]
+    assert filtered["excluded_cases_count"] == 2
+    assert filtered["excluded_cases_missing"] == []
+    # 被剔除的误伤样本不再拉高 false_alarm_rate
+    assert filtered["confusion"] == {"tp": 1, "tn": 0, "fp": 0, "fn": 0}
+    assert filtered["false_alarm_rate"] == 0.0
+
+
+def test_exclude_case_missing_id_is_surfaced_not_silently_ignored():
+    report = calibrate(labels_fixture(), judgements_fixture(), exclude_cases=["pass-ok", "typo-case"])
+    assert report["excluded_cases"] == ["pass-ok"]
+    assert report["excluded_cases_missing"] == ["typo-case"]
+
+
+def test_exclude_case_runs_after_exclude_invalid():
+    labels = {
+        "trunc": {"human_passed": True, "human_stage": None},
+        "env": {"human_passed": True, "human_stage": None},
+    }
+    judgements = {
+        "trunc": {"judge_passed": False, "judge_stage": None, "data_valid": False},
+        "env": {"judge_passed": False, "judge_stage": None, "data_valid": True},
+    }
+    report = calibrate(labels, judgements, exclude_invalid=True, exclude_cases=["trunc", "env"])
+    # trunc 已被 exclude-invalid 先请出，不重复计入 excluded_cases
+    assert report["excluded_invalid"] == ["trunc"]
+    assert report["excluded_cases"] == ["env"]
+    assert report["excluded_cases_missing"] == ["trunc"]
+    assert report["matched"] == 0
+
+
+def test_render_text_lists_excluded_cases():
+    labels = {"env": {"human_passed": False, "human_stage": "generation"}}
+    judgements = {"env": {"judge_passed": False, "judge_stage": None, "data_valid": True}}
+    text = render_text(calibrate(labels, judgements, exclude_cases=["env", "ghost"]))
+    assert "已显式剔除样本: 1 条（--exclude-case）" in text
+    assert "- env" in text
+    assert "未配对到任何样本: ghost" in text
+
+
+def test_main_exclude_case_flag_repeats_and_filters(tmp_path):
+    labels_path = write_jsonl(
+        tmp_path / "labels.jsonl",
+        [
+            {"case_id": "good", "human_passed": True},
+            {"case_id": "env-1", "human_passed": False},
+            {"case_id": "env-2", "human_passed": False},
+        ],
+    )
+    results_path = write_jsonl(
+        tmp_path / "results.jsonl",
+        [
+            {"case_id": "good", "strict_passed": True},
+            {"case_id": "env-1", "strict_passed": False},
+            {"case_id": "env-2", "strict_passed": False},
+        ],
+    )
+    output = tmp_path / "calibration.json"
+    code = main(
+        [
+            "--labels", str(labels_path),
+            "--results", str(results_path),
+            "--output", str(output),
+            "--json",
+            "--exclude-case", "env-1",
+            "--exclude-case", "env-2",
+        ]
+    )
+    assert code == 0
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["matched"] == 1
+    assert payload["excluded_cases"] == ["env-1", "env-2"]
+    assert payload["confusion"] == {"tp": 1, "tn": 0, "fp": 0, "fn": 0}

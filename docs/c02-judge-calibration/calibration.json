@@ -2,9 +2,9 @@
   "schema": "aqg-calibration/v2",
   "judge_model": "glm-5.3-flash",
   "judge_pair_note": "κ 属「裁判 × 被测模型」组合值，不可跨裁判/跨代引用（见 01-换裁判模型后的复核与修正口径.md）",
-  "calibrated_at": "2026-11-21",
-  "source_batch": "20261118-131428（9 场批）＋ 2611/2618 先导批",
-  "method": "scripts/calibrate_judge.py --exclude-invalid；真值=人工 labels.filled.jsonl，零 token 只读 reports/",
+  "calibrated_at": "2026-11-21（八场）＋ 2026-11-24 qwen3.8-flash ＋ 2026-11-25 spark-4b",
+  "source_batch": "20261118-131428（9 场批）＋ 2611/2618 先导批＋ 20261121-0147（spark-4b 修复批）",
+  "method": "scripts/calibrate_judge.py --exclude-invalid；真值=人工 labels.filled.jsonl，零 token 只读 reports/；spark-4b 批另用 --exclude-case 显式剔 3 条环境类（precondition_failed 但 data_valid=True，--exclude-invalid 盖不到），剔除名单落 kappa 明细 JSON 留审计痕迹",
   "authority_rule": "src/engine/gate.py kappa_authority：block κ≥0.80 ／ report 0.60≤κ<0.80 ／ untrusted κ<0.60 ／ unverified 未提供（T13 后能力类判据只报告不阻断）",
   "models": [
     {
@@ -105,15 +105,21 @@
       "authority": "block",
       "labels_source": "recalib-2624-qwen38/labels.filled.jsonl",
       "detail_file": "docs/c02-judge-calibration/recalib-2624-qwen38/kappa-glm-5.3-flash-x-qwen38.json"
-    }
-  ],
-  "unverified_models": [
+    },
     {
       "sut_model": "tokendance-spark-x2.5-4b",
-      "authority": "unverified",
-      "reason": "新代裁判 glm-5.3-flash 下无新代 20 条人标；旧代值仅存 history，禁止跨代引用（06 T45④）"
+      "kappa": 1.0,
+      "n_paired": 37,
+      "agreement_pct": 100.0,
+      "miss_rate_pct": 0.0,
+      "false_alarm_rate_pct": 0.0,
+      "authority": "block",
+      "labels_source": "recalib-2625-spark4b/labels.filled.jsonl",
+      "detail_file": "docs/c02-judge-calibration/recalib-2625-spark4b/kappa-glm-5.3-flash-x-spark4b.json",
+      "note": "双口径均为 κ=1.0：权威口径剔 3 条环境类后 37/37（Wilson 90.59~100）；全样本 40/40 见 kappa-glm-5.3-flash-x-spark4b-full40.json（91.24~100）。spark-4b 跑批须显式传 --judge-kappa 1.0，不回写历史批次"
     }
   ],
+  "unverified_models": [],
   "history": [
     {
       "judge_model": "glm-4-flash",

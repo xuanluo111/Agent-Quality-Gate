@@ -4,7 +4,8 @@
     python scripts/calibrate_judge.py \
         --labels labels.jsonl \
         --results reports/runs/<run_id>/results.jsonl \
-        [--output reports/calibration.json] [--json] [--exclude-invalid]
+        [--output reports/calibration.json] [--json] [--exclude-invalid] \
+        [--exclude-case <case_id> ...]
 
 人工标注 JSONL 每行：
     {"case_id": "...", "human_passed": true, "human_stage": "generation"}
@@ -16,6 +17,11 @@
 
 --exclude-invalid：剔除 results 中 data_valid=False 的截断/无效样本后再算一致性。
 这类样本本身不构成有效判定（输出被截断、无最终答复），计入会虚高一致率。
+
+--exclude-case：按 case_id 显式剔除样本（可重复）。用于 data_valid=True 但环境类故障
+（precondition_failed、网关截断等，纪律 3：环境故障不入能力分母）的条目——这类条目
+--exclude-invalid 盖不到。剔除名单与被剔除的条数写入报告 JSON，留审计痕迹；
+名单里没配对到任何样本的 case_id 会落进 excluded_cases_missing，防止拼错静默失效。
 """
 
 import argparse
@@ -98,13 +104,25 @@ def cohens_kappa(pairs: List[Tuple[bool, bool]]) -> Optional[float]:
     return round((observed - expected) / (1 - expected), 4)
 
 
-def calibrate(labels: Dict[str, dict], judgements: Dict[str, dict], exclude_invalid: bool = False) -> dict:
+def calibrate(
+    labels: Dict[str, dict],
+    judgements: Dict[str, dict],
+    exclude_invalid: bool = False,
+    exclude_cases: Optional[List[str]] = None,
+) -> dict:
     matched = sorted(set(labels) & set(judgements))
     excluded_invalid: List[str] = []
     if exclude_invalid:
         excluded_invalid = [case_id for case_id in matched if not judgements[case_id].get("data_valid", True)]
         excluded = set(excluded_invalid)
         matched = [case_id for case_id in matched if case_id not in excluded]
+    excluded_cases: List[str] = []
+    missing_cases: List[str] = []
+    if exclude_cases:
+        wanted = {str(c).strip() for c in exclude_cases if str(c).strip()}
+        excluded_cases = [case_id for case_id in matched if case_id in wanted]
+        matched = [case_id for case_id in matched if case_id not in wanted]
+        missing_cases = sorted(wanted - set(excluded_cases))
     pairs = [(judgements[case_id]["judge_passed"], labels[case_id]["human_passed"]) for case_id in matched]
     matrix = confusion(pairs)
     # 分母按人工标签分组：人工判失败 = fp + tn，人工判通过 = fn + tp。
@@ -137,6 +155,9 @@ def calibrate(labels: Dict[str, dict], judgements: Dict[str, dict], exclude_inva
         "judgements": len(judgements),
         "excluded_invalid": excluded_invalid,
         "excluded_invalid_count": len(excluded_invalid),
+        "excluded_cases": excluded_cases,
+        "excluded_cases_count": len(excluded_cases),
+        "excluded_cases_missing": missing_cases,
         "unmatched_labels": sorted(set(labels) - set(judgements)),
         "unmatched_results": sorted(set(judgements) - set(labels)),
         "confusion": matrix,
@@ -167,6 +188,12 @@ def render_text(report: dict) -> str:
         lines.append(f"已排除无效样本: {report['excluded_invalid_count']} 条（data_valid=False）")
         for case_id in report["excluded_invalid"]:
             lines.append(f"  - {case_id}")
+    if report.get("excluded_cases"):
+        lines.append(f"已显式剔除样本: {report['excluded_cases_count']} 条（--exclude-case）")
+        for case_id in report["excluded_cases"]:
+            lines.append(f"  - {case_id}")
+    if report.get("excluded_cases_missing"):
+        lines.append(f"--exclude-case 名单未配对到任何样本: {', '.join(report['excluded_cases_missing'])}")
     if report["unmatched_labels"]:
         lines.append(f"缺少机器结果的标注: {len(report['unmatched_labels'])} 条")
     if report["unmatched_results"]:
@@ -192,11 +219,18 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="剔除 results 中 data_valid=False 的截断/无效样本后再算一致性",
     )
+    parser.add_argument(
+        "--exclude-case",
+        action="append",
+        default=None,
+        metavar="CASE_ID",
+        help="按 case_id 显式剔除样本（可重复）；用于环境类故障但 data_valid=True 的条目，名单落进报告 JSON 留痕",
+    )
     args = parser.parse_args(argv)
 
     labels = load_labels(args.labels)
     judgements = load_judgements(args.results)
-    report = calibrate(labels, judgements, exclude_invalid=args.exclude_invalid)
+    report = calibrate(labels, judgements, exclude_invalid=args.exclude_invalid, exclude_cases=args.exclude_case)
     if args.output:
         target = Path(args.output)
         target.parent.mkdir(parents=True, exist_ok=True)

@@ -73,12 +73,25 @@
 - **验证**：标签 `--check` 40/40；校准器 `matched=40`、无效剔除 0；`calibration.json` 解析通过；全量单测与 `make verify` 见本条目最终回执。
 - **生成证据的 whitespace 口径**：新增 `.gitattributes`，仅对 `docs/c02-judge-calibration/**/review-sheet.md` 关闭 trailing whitespace 检查。复核表保留模型原始输出，不为让 lint 变绿手工删空格；其他代码/文档仍走正常 `git diff --check`。
 
+### 2026-11-25：千问云外部审核通过——双语门面新增「外部平台对评测交付的审核」一行
+
+- **事实**：向千问云「Qwen4-Max预览版模型评测」提交的专业评测报告通过平台审核（2026-11-25）。这是本项目**首次拿到外部平台对评测交付的验收**——此前所有门禁都是自设自查（`verify`、κ、判据自检），现在多了一道外人认的凭。
+- **口径（纪律 6）**：README 双语只引结论句「报告通过平台审核」；审核往来与评分细则未归档不入库，当场不可公开复核，与信通院行同类如实标注；奖励面额（代金券）属用户自有账户所见、未经第三方核验，**不写进对外文档**。过审不拿掉「开发集非终审集」的既有限制，新行内显式写明这一点。
+- **落点**：`README.md`／`README.en.md` 门面二段核验表各增一行（同批，纪律 4）；本节即登记。
+
 ### 2026-11-25：T32 ΔJ×噪声带合并判定闭环 + T50 双口径拍板 + spark-4b 待标包生成（全部零 token）
 
 - **合并读数**：拿 11-24 的两块新证据（qwen3.8-flash κ=1.0 标定、30 题×repeat 3 变序实测噪声带 `measured` **3.77pp**）对既有档 3 产物做一次只读重算（`cross_window.py delta --band-pp 3.77`，不重跑不重判）：`ΔJ_retained=+3.33pp（n=60）< 3.77pp` → **差异未证实**，不能宣布能力自进化增益；`ΔJ_total=-5.17pp` 含 87 题构成变化，不得引用为能力退化。T32 实验结论就此闭环，复算命令已写进 06 对应行。
 - **T50 口径拍板（用户采纳双口径并列）**：全样本 `strict_pass_rate` 继续作**门禁主口径**（防挑样本放宽），剔除环境类故障后的 Strict（与引擎 `strict_pass_rate_valid_only` 同口径）作**能力归因口径**单独披露，两数同报、不互相替换——同时守住纪律 3 与「不得为结果好看改分母」。此判定下 T32 ΔJ 结论不受口径选择影响（+3.33 与 +0.49 均在带内）。本轮只拍板与登记，`cross_window.py` 双口径字段、README 双语口径表、单测与历史可比性迁移说明仍待窗口同批实现，**零代码、不切代**。
 - **spark-4b 待标包**：`build_label_template.py --run 20261121-0147-tokendance-spark-x2.5-4b --only-valid` 剔除 8 条不可信样本（剩 199）后抽样 40 条（裁判 20 通过 / 20 失败，batch1/2 各 20），落 `docs/c02-judge-calibration/recalib-2625-spark4b/`。这是最后一个 `unverified` 模型；**待人工填写**后才能算该模型专属 κ，不得沿用其它模型标定值。
 - **验证**：全部改动为文档台账与生成待标包，未动 `src/`、未碰 `cases/`（`dataset_sha256` 仍 `deff7501007cff61`）、无真跑无重判无 push；回归与零污染复验见本条目最终回执。
+
+### 2026-11-25：spark-4b κ 标定闭环——最后一个 unverified 模型定档，配套 `--exclude-case` 工具补丁
+
+- **人工标定与独立审计**：40 条人标与裁判判定 40/40 全一致——全一致本身就是审计理由，故先派独立审计逐条对原始 `results.jsonl` 字段复核。裁决结果（用户拍板「不改、加、改」）：`mut-correction-budget-001` 维持 fail（`State_Pollution` 误报争议不翻标，与 qwen38 批同模式自判先例一致）；3 条环境类（c6-memory-cross-session-002／mut-inject-file-001／mut-inject-voice-001）剔出 κ 分母；谄媚条 stage 维持 generation（与 qwen38 批自判对齐）。审计还登记两个系统性裁判模式备后续窗口评估：`拦截=违规` 的 rule 层误报（本批 9 条命中、3 条结论存疑）与 `State_Pollution` 不识别多次改口（上批已点名、本批复现）。
+- **工具补丁（纪律 3 的执行缺口）**：审计发现 `--exclude-invalid` 只盖 `data_valid=False`，而环境故障条目的 `data_valid` 全是 `True`——现有工具把这类样本留在分母里。给 `calibrate_judge.py` 新增 `--exclude-case`（可重复、显式列 case_id）：剔除名单与被剔条数落进报告 JSON 留审计痕迹，名单里未配对到样本的 id 落 `excluded_cases_missing` 防拼错静默失效；配套 +5 例单测（剔除生效／缺名可检／与 exclude-invalid 的先后序／渲染／CLI 可重复），`tests/test_calibrate.py` 21 passed。
+- **双口径复算（零 token，只读既有轨迹）**：全样本 40/40 与剔 3 条环境类后 37/37 **均 κ=1.0**（一致率 100%、漏判 0%、误伤 0%，环节一致率 18/20）——结论不依赖口径选择。两口径分别落 `recalib-2625-spark4b/kappa-glm-5.3-flash-x-spark4b{,-full40}.json`，权威口径（剔环境类，Wilson 90.59~100）写回 `calibration.json` 第 10 场，`unverified_models` 清零；README 双语不确定度段同步增 spark-4b 区间（五条→六条重叠）。spark-4b 后续跑批需显式传 `--judge-kappa 1.0`，不回写历史批次。
+- **验证**：新增逻辑均带单测；`make test`／`make verify` 全绿见本条目最终回执；未碰 `cases/`、无真跑无重判；`labels.template.jsonl` 的用户填写内容原样拷入 `labels.filled.jsonl` 后参与计算，模板本身未手改。
 
 ### 2026-11-23：T26 录屏闭环（W4 展示窗口项收口，成片 171.8s ≤ 180s）
 
