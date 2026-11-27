@@ -188,7 +188,13 @@ def synthesize_negatives(case: TestCase, files: Dict[str, Optional[str]]) -> Lis
     # 2. 逐条破坏终态：equals/contains 改真文件，expected_final_state/sha256 翻快照摘要
     for assertion in case.state_assertions or []:
         path, op = assertion.path, assertion.op
-        if op in {"equals", "contains", "exists"}:
+        if op == "exists":
+            # 存在性断言只能靠“文件消失”破坏；改正文仍满足 exists，会制造假 LEAKY。
+            patch = {path: None}
+            after = dict(pos.state_after)
+            after.pop(path, None)
+            muts.append((f"neg_state:{path}:{op}", pos.model_copy(update={"state_after": after}), patch))
+        elif op in {"equals", "contains"}:
             patch = {path: "oracle 破坏内容 - 不满足断言\n"}
             after = dict(pos.state_after)
             after[path] = _expected_digest(patch[path])
@@ -369,9 +375,11 @@ def selfcheck_case(judge: LayeredJudge, case: TestCase) -> dict:
             backup = {p: (root / p).read_text(encoding="utf-8", errors="replace") if (root / p).is_file() else None for p in touched}
             try:
                 for path, content in patch.items():
-                    if content is None:
-                        continue
                     target = root / path
+                    if content is None:
+                        if target.is_file():
+                            target.unlink()
+                        continue
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(str(content), encoding="utf-8")
                 verdict, detail = _classify(

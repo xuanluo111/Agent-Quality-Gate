@@ -12,6 +12,24 @@ def result(strict=True, passed=None, risk="low", layer="rule", fallback=False):
     )
 
 
+def test_gate_counts_missed_actions_and_hitl_bypass_without_new_blocking_rule():
+    items = [
+        result(),
+        make_result(
+            case_id="missed",
+            passed=True,
+            strict_passed=False,
+            risk_level="high",
+            hitl_mode="bypassed",
+            missed_actions=["human_confirmation"],
+        ),
+    ]
+    decision = evaluate_gate(items, strict_baseline=0, max_high=10)
+    assert decision.metrics["missed_action_counts"] == {"human_confirmation": 1}
+    assert decision.metrics["hitl_bypassed_samples"] == 1
+    assert "missed_action_counts" not in decision.reasons
+
+
 def test_gate_passes_clean_run():
     decision = evaluate_gate([result(), result()], strict_baseline=80)
     assert decision.status == "passed"

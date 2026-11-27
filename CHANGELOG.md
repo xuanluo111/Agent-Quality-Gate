@@ -12,11 +12,39 @@
 
 > **时点说明（仅适用下一条 11-23 条目）**：该条日期取自机器时钟，与它记录的 run_id `20261123-*` 一致；上一条 T31 标的是 11-24，两者按标注日期不呈倒序。既成记录不重写，引用时点请以 run_id / 台账 `updated_at` 为准。
 
+### 2026-11-26：裁判切换 `glm-5.3` 后的权限收口与隔离重标工具（不切代）
+
+- **先探通再赋权**：`.env` 与本地 `models.json` 的 9 个启用模型统一切换到商汤 `glm-5.3`（`https://token.sensenova.cn/v1/`、`SENSENOVA_HH_API_KEY`）；一次极小端点探针确认 `qwen3.8-max` 与 `glm-5.3` 均可用。
+- **旧 κ 不跨裁判**：撤销 6 个模型携带的 `glm-5.3-flash` κ，9 个启用模型暂时全部保持 `unverified`，能力类判据只报告；历史标定仍留在 `calibration.json`，不把旧证据改写为新裁判证据。
+- **隔离重标**：新增 `scripts/recalibrate_judge.py`，只读取固定 run 轨迹与已填人工标签，在 `workspace/judge-recalib/` 下重判并计算 κ；拒绝写入 `reports/`、拒绝覆盖源 run、拒绝空标签／重复 case／非法 JSON，不重建正式台账、latest 或图表。`spark-4b` 40 条标注轨迹 dry-run 全部配对成功。
+- **验证与边界**：新增 6 例单测；全量 `make test` **1012 passed, 1 xfailed**（collect 1013），`make verify` **16 项全 [OK]**，README 中英同步。随后按用户授权以 `caffeinate -is` 启动 40 条隔离重标，但裁判 Key 返回 `429 rpm exhausted / EndpointTPMExceeded`，前 20 条中 12 条不可用，任务已中止且未生成 κ；这是环境限流，不是模型判定失败。未启动全量评测、未提交或 push。
+
+### 2026-11-26：`glm-5.3` 使用限制适配与 429 退避收口（离线，不切代）
+
+- **请求契约对齐**：`LayeredJudge` 新增 `reasoning_effort`（仅允许 `low`／`high`／`max`）与流式响应开关；流式累计 `delta.content` 和最终 `usage.total_tokens`，空流或 `finish_reason=length` 一律按 `Judge_Unavailable` 失败关闭。纯文本输入、`temperature=0.1`、`response_format=json_object` 保持合法；显式推理强度进入判据指纹，留空保持历史指纹。
+- **限流不再盲等**：裁判异常保留响应头中的 `Retry-After`，重判退避优先遵守服务端秒数，无头信息时才走指数退避；429 继续归环境故障，不进入模型能力分母。隔离重标默认 `workers=1`、`reasoning_effort=low`、`stream=true`，重标配置写入 `calibration.json`／`config.json` 与 run 元数据。
+- **非法配置写盘前拒绝**：`glm-5.3` 的 thinking 始终开启，`rejudge.py` 与 `recalibrate_judge.py` 都在写盘前拒绝 `thinking.type=disabled`；通用重判 Key 解析补充 `SENSENOVA_HH_API_KEY`，隔离重标默认使用该变量。
+- **验证与边界**：定向回归 **151 passed**；全量 `make test` **1025 passed, 1 xfailed**（collect 1026），`make verify` **16 项全 [OK]**，`git diff --check` 通过；新隔离目录 dry-run 配对 **40/40**，未调用裁判、未写盘。未重启真实重标、未生成新 κ、未改正式数据集／台账／latest／历史报告，未提交或 push。
+
 ### 2026-11-25：T41 两类裁判语义误报修复（离线，不切代）
 
 - **base policy 不再冒充模型越权**：`trace.policy_blocked` 且没有模型侧违规证据时，按 Harness 在模型执行前阻断处理，落 `Harness_Error`、`data_valid=False`、`judge_layer=harness`，经 `failure_class` 归 `UNKNOWN`；期望本地处理／拒绝的用例仍可通过 base policy 合规链。只有 `trace.policy_violations` 另有真实模型违规证据时才继续走规则层，Strict 仍判 `Policy_Violation`，不能被“期望拒绝”掩盖。
 - **多次改口按终态重放**：改口事件按文本顺序还原旧值／新值，`定稿`／`为准` 清空此前中间有效值；`500→800→500→700` 时 500 与 800 都保持废弃，不再用“历史新值全集”解除废弃。回复里的“已撤销／未采用／曾考虑”属于指称性提及，不构成实际使用；泛化的“提到旧值”仍判污染，避免为消误报放宽门禁。
 - **反例与验证**：新增 8 例离线单测（`test_judge.py` 2 例、`test_state.py` 6 例），包含真实 spark／qwen 已审回复、base policy 不掩盖模型违规、三段改口链及泛化提及反例。全量 `make test` **973 passed, 1 xfailed**，`make verify` **15 项全 [OK]**；collect 966→974，README 中英同步。`cases/` 零 diff、epoch 仍为 `deff7501007cff61`；不重判、不重渲染历史批次，不启动真实跑批。
+
+### 2026-11-25：X-D10②／T43 通用能力扩展集（用户已授权，离线准备完成，不切代）
+
+- **40 条独立能力题**：新增 `cases/t43_capability_expansion.jsonl`，数据分析与计算、事实可靠性各 20 条，覆盖正常／边界／异常／多轮；只使用封闭 fixture 与 `file_read`／`write_file`，唯一产物 `result.txt` 必须等于精确正文，避免把“调用了工具”当作答案正确。40 题均映射现有 C7，不新增虚构控制项，也不冒充历史窗口证据。
+- **合并投影而非偷换当代 core**：扩展集 SHA256 为 `10b763712d5ee687`；与当前 207 条 core 的合并投影为 247 条、无重复，类别 max/min=43/22≈1.9545≤3。smoke 两个新能力家族各保留一条代表，只替换末尾两条低优先级旧题，其余 16 条旧 smoke 探针保留。当前 core 仍为 207 条、epoch 仍为 `deff7501007cff61`，必须随 T43 同窗合并，不单独切代。
+- **可判性与边界**：新增 16 项只读门禁并接入 `make verify`；扩展集 oracle 无 DEAD／LEAKY，281/281 个声明反面变异被捕获，40 个正面样本仍诚实记为 `NOT_DETERMINISTIC`，需后续 LLM 语义裁决，不能宣称语义已通过。`exists` 反例改为真实删除文件，避免“文件仍在却算破坏”的假闭环。
+- **验证与交付边界**：全量 `make test` **1006 passed, 1 xfailed**（collect 1007），`make verify` **16 项全 [OK]**；当前 207 条正式 oracle 为 `dead=0 leaky=0`、767/767 变异捕获。README 中英、T43 排期与测试覆盖同步；`core_suite.jsonl`／`smoke.jsonl`／`coverage_matrix.json`／`windows/manifest.json` 字节不变。未调用任何模型、未启动真实跑批、未重判或重渲染历史批次、未提交或 push；真实评测模型、题量与 repeat 由用户后续决定。
+
+### 2026-11-25：T42 判定细节包（K11 遗漏动作 + K12 拆账 + K14 流程事故，离线，不切代）
+
+- **K11 遗漏动作与显式安全提示**：`EvalResult.missed_actions` 独立记录 `human_confirmation` / `safety_notice`，不替换 `fail_reason`，也不进入 `failure_class`；HITL 的 `bypassed` / `silent` 推导人工确认遗漏。`TestCase.required_safety_notice` 只在用例显式声明时检查，默认空且不序列化，空白归一化后做字面短语匹配；原结果已失败时只追加遗漏动作、不覆盖更严重根因，repeat 合并取所有尝试的并集。
+- **K12 waived / bypassed 两本账**：`bypassed` 只累计实际观察到的 HITL 绕过；`waived` 只表示当前代际有效的 Critical 风险人工签字豁免。台账新增 `bypassed_occurrences` 与 `disposition`（`waived` / `resolved` / `open`），环境异常、`unassessed`、`unknown` 不推导成任一处置；两者都不进入 `failure_class`。
+- **K14 重复失败流程事故（仅报警）**：纯函数 `escalation_alerts()` 筛选 `status=open`、`occurrences≥3` 且无当前代有效豁免的台账条目，按 `owner` 归集；专业评测报告展示遗漏动作分布、两本账与事故表，`verify` 同步输出按 owner 的报警。K14 **不改变门禁状态、退出码或通过率**，与 API 指数退避重试严格区分。
+- **验证与边界**：新增 22 例离线单测；全量 `make test` **995 passed, 1 xfailed**，`make verify` **15 项全 [OK]**，collect 974→996，README 中英、AGENTS 与质量纪律文档同步。当前台账实测触发 K14 报警 **189 条**（Harness 编排层 100、Harness 自检层 28、模型/工具调用层 34、用例/提示词工程 27），verify 仍成功退出。`cases/` 零 diff、epoch 仍为 `deff7501007cff61`；不切代、不重判、不重渲染历史批次、不启动真实跑批、不提交或 push。
 
 ### 2026-11-25：T50 跨窗口 ΔJ 双分母口径 + T39/T41 治理裁决
 

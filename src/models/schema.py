@@ -40,6 +40,8 @@ def derive_evidence_type(judge_layer: str) -> EvidenceType:
 # 失败环节：用于把“答错”拆成可归属的流水线阶段。
 FailureStage = Literal["understanding", "planning", "generation", "validation", "iteration"]
 StateOp = Literal["exists", "not_exists", "equals", "contains", "sha256"]
+# K11 遗漏动作：与 fail_reason 正交，记录“该做但没做”，不替换既有根因。
+MissedAction = Literal["human_confirmation", "safety_notice"]
 # 断言期望值的同义写法：`absent` 就是 `not_exists`，词表里叫 expect，字段名仍是 op。
 STATE_OP_ALIASES = {"absent": "not_exists", "not-exists": "not_exists", "notexists": "not_exists"}
 
@@ -226,6 +228,12 @@ class TestCase(BaseModel):
 
     data_sensitivity: DataSensitivity = Field(default="S1", description="S1 上云 / S2 脱敏上云 / S3 仅本地")
     requires_human_confirm: bool = Field(default=False, description="高危操作是否必须请求人工确认")
+    # K11：安全提示只在用例显式声明时检查，禁止从 expected_behavior 等自然语言猜测。
+    # 空列表不序列化，保持存量数据集字节与 dataset_sha256 不变。
+    required_safety_notice: List[str] = Field(
+        default_factory=list,
+        description="必须出现在最终回复中的安全提示短语；空表示不检查",
+    )
     fixtures: Dict[str, str] = Field(default_factory=dict, description="运行前注入沙箱的文件")
 
     source: str = Field(default="", description="用例来源，便于追踪生成批次")
@@ -267,6 +275,7 @@ class TestCase(BaseModel):
             "isaca_controls",
             "egress_allowlist",
             "forbidden_literals",
+            "required_safety_notice",
             "expected_variable_roles",
             "attack_strategies",
         ):
@@ -350,7 +359,7 @@ class TestCase(BaseModel):
             raise ValueError("initial_state / expected_final_state 必须是 path -> value 的对象")
         return {str(path): content if isinstance(content, str) else _dump(content) for path, content in value.items()}
 
-    @field_validator("allowed_tools", "forbidden_actions", "expected_variables", "tags", "allowed_changes", "deprecated_values", "egress_allowlist", "forbidden_literals", mode="before")
+    @field_validator("allowed_tools", "forbidden_actions", "expected_variables", "tags", "allowed_changes", "deprecated_values", "egress_allowlist", "forbidden_literals", "required_safety_notice", mode="before")
     @classmethod
     def _coerce_string_list(cls, value: object) -> List[str]:
         if value is None:
@@ -522,6 +531,11 @@ class EvalResult(BaseModel):
     hitl_mode: str = Field(
         default="",
         description="HITL 用例的处置方式：escalated/refused/bypassed/silent/unassessed/not_required",
+    )
+    # K11：遗漏动作独立于 fail_reason；前者回答“该做什么没做”，后者保留最严重根因。
+    missed_actions: List[MissedAction] = Field(
+        default_factory=list,
+        description="该做但未做的动作；独立于 fail_reason",
     )
     judge_model: str = ""
     # T16 判据漂移可追溯：指纹由 `judge.judge_prompt_fingerprint()` 从静态指令文本

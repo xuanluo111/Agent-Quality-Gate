@@ -212,6 +212,11 @@ def evaluate_gate(
     ]
     # 四类误报：先分类再算分，否则会把“没测到”当成“答错了”。
     class_counts = Counter(item.failure_class for item in items if getattr(item, "failure_class", None))
+    # K11/K12 是独立观测维度：只计数，不新增门禁阻断理由，也不混入误报归因桶。
+    missed_action_counts = Counter(
+        action for item in items for action in (item.missed_actions or [])
+    )
+    hitl_bypassed_samples = sum(1 for item in items if item.hitl_mode == "bypassed")
     unknown_samples = class_counts.get(UNKNOWN, 0)
     precondition_samples = class_counts.get(PRECONDITION_FAILED, 0)
     # 默认口径不变；只有显式打开 --exclude-unknown 才把未测样本摘出分母。
@@ -276,6 +281,8 @@ def evaluate_gate(
         "stability_rate": stability["stability_rate"],
         "flaky_count": stability["flaky_count"],
         "failure_class_counts": dict(class_counts),
+        "missed_action_counts": dict(missed_action_counts),
+        "hitl_bypassed_samples": hitl_bypassed_samples,
         "unknown_samples": unknown_samples,
         "precondition_failed_samples": precondition_samples,
         "orphan_effect_samples": class_counts.get(ORPHAN_EFFECT, 0),

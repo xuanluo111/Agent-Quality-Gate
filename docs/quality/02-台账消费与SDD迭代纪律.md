@@ -16,9 +16,9 @@
 
 ## 二、`occurrences` 到底是什么（先纠一处误记）
 
-- `occurrences` = 同一「模型 × 用例」累计**失败**次数，`report.py:842` 累加、`report.py:1221` 在报告的台账表「次数」列展示，`rejudge.py:404` 在重判回退时按重叠 run 扣减。
-- **没有任何判据消费它**：门禁不读，报告结论不读，`verify` 不读。
-- 特别注意：`regressed`（真劣化）**不是**用 `occurrences` 判的，而是用「同代内 `previous_status == "resolved"` ＋ 跨代护栏 `epoch_allows_regression`」判的（`report.py:824-830`）。把二者混为一谈会导致"次数多就报劣化"，那是错的——次数多可能只是很久没修。
+- `occurrences` = 同一「模型 × 用例」累计**失败**次数，由台账更新逻辑累加、在报告台账表「次数」列展示；重判回退按重叠 run 扣减。
+- **消费边界**：门禁不读它，报告通过率不读它；K14 在报告与 `verify` 中消费它，对 `status=open`、`occurrences≥3` 且无当前代有效豁免的条目按 `owner` 报警。该报警**不改变门禁状态、退出码或通过率**。
+- 特别注意：`regressed`（真劣化）**不是**用 `occurrences` 判的，而是用「同代内 `previous_status == "resolved"` ＋ 跨代护栏 `epoch_allows_regression`」判的。把二者混为一谈会导致“次数多就报劣化”，那是错的——次数多可能只是很久没修。
 
 ## 三、三层触发（按 11-16 时点台账实测：547 条 / open 302 / regressed 5）
 
@@ -32,7 +32,7 @@
 
 分布参考：`occurrences` 最高 12；`occurrences == 1` 的 168 条不进任何层（只出现一次不构成"重复"）。
 
-> 阈值为什么是 3 而不是 2：`occurrences == 2` 有 129 条，逐条必答等于把纪律变成台账抄写；而 T1＋T2 合计 **145 条**是"一轮批次内真能处理完"的量级。K14（P2）的 N=3 升级报警用的正是同一个阈值，届时两层口径自动对齐。
+> 阈值为什么是 3 而不是 2：`occurrences == 2` 有 129 条，逐条必答等于把纪律变成台账抄写；而 T1＋T2 合计 **145 条**是“一轮批次内真能处理完”的量级。K14 的 N=3 升级报警已落地，与 T2 共用阈值；K14 额外排除当前代有效 `waived`，且只报警、不阻断。
 
 ## 四、回答只有三个选项（没有第四个）
 
@@ -57,10 +57,19 @@ for k, v in E.items():
 PY
 ```
 
-把 `v.get('status') == 'regressed'` 换成 `v.get('status') == 'open' and int(v.get('occurrences', 0)) >= 3`，再按 `owner` 分组即为 T2 清单。
+T2 的人工复核清单可用 `status == 'open' and int(occurrences) >= 3` 查询；K14 的机器报警清单直接复用同一纯函数，并额外排除有效豁免：
+
+```bash
+python - <<'PY'
+import json
+from src.engine.ownership import escalation_alerts
+ledger = json.load(open('reports/risk_ledger.json'))
+print(json.dumps(escalation_alerts(ledger['entries'].values(), ledger.get('dataset_epoch', '')), ensure_ascii=False, indent=2))
+PY
+```
 
 ## 六、明确不做
 
-1. **不在本轮新增自动判据**。把 T1／T2 做成报警属 K14（P2，随切代窗口），本文只登记纪律，避免"文档写的是规则、代码里没有"的假合规。
+1. **不把 T1／T2 报警升格为自动判据**。K14 已实现 `open` + N≥3 + 无有效豁免的按 owner 报警，但只进报告与 `verify`，不改变门禁；T1／T2 的人工回答义务仍然保留。
 2. **不改用例**。修题会动 `dataset_sha256` → 切代，必须打包进窗口。
 3. **不把 `occurrences` 升格为门禁指标**。它天然偏向"存在很久的老用例"，拿它当准入条件等于惩罚长期未修的风险——真正该拦发布的是 `regressed` 与 Critical。

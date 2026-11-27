@@ -127,7 +127,7 @@ def test_generate_markdown_summary_and_ledger(tmp_path):
     assert "实现边界" in text
     assert "失败关闭" in text
     # M1：风险台账表必须带责任方与签字两列——删列会让“谁负责”重新变成口头承诺。
-    assert "| 用例ID | 类别 | 等级 | 状态 | 责任方 | 签字 |" in text
+    assert "| 用例ID | 类别 | 等级 | 状态 | 责任方 | 处置 | 累计绕过 | 签字 |" in text
     assert "Harness 编排层" in text or "Harness 自检层" in text
 
     parsed = visualize_reports.parse_report(report_path)
@@ -388,6 +388,124 @@ def _critical_fail(case_id="c1", evidence="x"):
         fail_reason="Policy_Violation",
         evidence=evidence,
     )
+
+
+def test_summarize_counts_missed_actions_and_hitl_bypass_separately():
+    item = _critical_fail()
+    item.hitl_mode = "bypassed"
+    item.missed_actions = ["human_confirmation"]
+    summary = summarize([item])
+    assert summary["missed_action_counts"] == {"human_confirmation": 1}
+    assert summary["hitl_bypassed_samples"] == 1
+    assert summary["failure_class_counts"] == {}
+
+
+def test_ledger_tracks_bypassed_occurrences_without_changing_failure_class(tmp_path):
+    ledger_path = tmp_path / "risk_ledger.json"
+    item = _critical_fail()
+    item.hitl_mode = "bypassed"
+    item.missed_actions = ["human_confirmation"]
+    update_risk_ledger(ledger_path, "run-1", [item], "2026-10-20 10:00:00", epoch="e1")
+    ledger = update_risk_ledger(ledger_path, "run-2", [item], "2026-10-20 11:00:00", epoch="e1")
+    entry = ledger["entries"]["c1"]
+    assert entry["occurrences"] == 2
+    assert entry["bypassed_occurrences"] == 2
+    assert entry["last_hitl_mode"] == "bypassed"
+    assert entry["disposition"] == "open"
+    assert item.failure_class is None
+
+
+def test_report_separates_valid_waiver_from_observed_bypass(tmp_path):
+    ledger_path = tmp_path / "risk_ledger.json"
+    item = _critical_fail()
+    item.hitl_mode = "bypassed"
+    item.missed_actions = ["human_confirmation"]
+    update_risk_ledger(ledger_path, "run-1", [item], "2026-10-20 10:00:00", epoch="e1")
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    ledger["entries"]["c1"].update(
+        {
+            "risk_accepted_by": "xuanluo111",
+            "accept_reason": "修复前排期接受该风险",
+            "accepted_epoch": "e1",
+        }
+    )
+    ledger_path.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
+    report_path = tmp_path / "reports" / "runs" / "run-2" / "report.md"
+    summary = generate_markdown(
+        [item],
+        str(report_path),
+        run_meta=run_meta(),
+        stats=stats(),
+        ledger_path=ledger_path,
+        epoch_override="e1",
+    )
+    assert summary["waived_risk_count"] == 1
+    assert summary["hitl_bypassed_samples"] == 1
+    assert summary["ledger"]["bypassed_occurrences_total"] == 2
+    entry = json.loads(ledger_path.read_text(encoding="utf-8"))["entries"]["c1"]
+    assert entry["disposition"] == "waived"
+    text = report_path.read_text(encoding="utf-8")
+    assert "有效 waived Critical" in text
+    assert "实际绕过" in text
+
+
+def test_expired_waiver_is_not_counted_as_waived(tmp_path):
+    ledger_path = tmp_path / "risk_ledger.json"
+    item = _critical_fail()
+    update_risk_ledger(ledger_path, "run-1", [item], "2026-10-20 10:00:00", epoch="e1")
+    ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+    ledger["entries"]["c1"].update(
+        {
+            "risk_accepted_by": "xuanluo111",
+            "accept_reason": "旧代接受",
+            "accepted_epoch": "e1",
+        }
+    )
+    ledger_path.write_text(json.dumps(ledger, ensure_ascii=False), encoding="utf-8")
+    ledger = update_risk_ledger(ledger_path, "run-2", [item], "2026-10-20 11:00:00", epoch="e2")
+    assert ledger["entries"]["c1"]["disposition"] == "open"
+
+
+def test_unassessed_bypass_does_not_create_or_increment_ledger_risk(tmp_path):
+    ledger_path = tmp_path / "risk_ledger.json"
+    item = _critical_fail(case_id="c2")
+    item.hitl_mode = "bypassed"
+    item.data_valid = False
+    item.judge_layer = "harness"
+    item.fail_reason = "Harness_Error"
+    ledger = update_risk_ledger(ledger_path, "run-1", [item], "2026-10-20 10:00:00", epoch="e1")
+    assert "c2" not in ledger["entries"]
+
+
+def test_report_groups_k14_incidents_by_owner_without_changing_gate(tmp_path):
+    ledger_path = tmp_path / "risk_ledger.json"
+    failing = _critical_fail()
+    for index in range(3):
+        update_risk_ledger(
+            ledger_path,
+            f"run-{index + 1}",
+            [failing],
+            f"2026-10-20 1{index}:00:00",
+            epoch="e1",
+        )
+    report_path = tmp_path / "reports" / "runs" / "run-4" / "report.md"
+    summary = generate_markdown(
+        [make_result(case_id="c1")],
+        str(report_path),
+        run_meta=run_meta(),
+        stats=stats(),
+        ledger_path=ledger_path,
+        write_ledger=False,
+        epoch_override="e1",
+    )
+    assert summary["process_incident_count"] == 1
+    assert summary["process_incidents_by_owner"] == {"Harness 编排层": 1}
+    assert summary["gate"]["status"] == "passed"
+    assert summary["gate"]["exit_code"] == 0
+    text = report_path.read_text(encoding="utf-8")
+    assert "K14 重复失败流程事故" in text
+    assert "仅报警" in text
+    assert "Harness 编排层" in text
 
 
 def test_ledger_regressed_within_same_epoch(tmp_path):

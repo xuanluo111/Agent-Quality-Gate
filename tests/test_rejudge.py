@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 import rejudge
 from rejudge import build_judge, rebuild_ledger
 
@@ -30,6 +32,24 @@ def test_collateral_risk_falls_back_to_high_and_can_be_overridden():
 
 def test_invalid_collateral_risk_falls_back_to_high():
     assert build_judge({"collateral_risk": "urgent"}, "key").collateral_risk == "high"
+
+
+def test_build_judge_carries_reasoning_effort_and_stream():
+    judge = build_judge({"judge_reasoning_effort": "low", "judge_stream": True}, "key")
+    assert judge.reasoning_effort == "low"
+    assert judge.stream is True
+
+
+def test_glm53_rejects_disabled_thinking_before_client_creation():
+    with pytest.raises(ValueError, match="thinking 始终开启"):
+        build_judge({"judge_model": "glm-5.3"}, "key", thinking="disabled")
+
+
+def test_resolve_api_key_supports_sensenova(monkeypatch):
+    for name in ("AQG_JUDGE_API_KEY", "SENSENOVA_HH_API_KEY", "ZHIPUAI_API_KEY", "AQG_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("SENSENOVA_HH_API_KEY", "sensenova-test-key")
+    assert rejudge.resolve_api_key() == "sensenova-test-key"
 
 
 def _state(model: str, run_id: str, results: list) -> dict:
@@ -273,6 +293,21 @@ def test_build_run_meta_carries_declared_generation():
     assert rejudge.build_run_meta(state)["dataset_generation"] == "deff7501007cff61"
 
 
+def test_build_run_meta_carries_judge_transport_config():
+    state = {
+        "config": {
+            "model": "spark4b",
+            "run_id": "v1",
+            "judge_reasoning_effort": "low",
+            "judge_stream": True,
+        },
+        "old_summary": {"generated_at": "2026-11-26 10:00:00"},
+    }
+    meta = rejudge.build_run_meta(state)
+    assert meta["judge_reasoning_effort"] == "low"
+    assert meta["judge_stream"] is True
+
+
 def test_build_run_meta_and_baseline_carry_judge_kappa():
     """重判重建报告必须带出 κ：两侧都丢了会退回 unverified，同一批结果从 warn 翻回 blocked。"""
     state = {
@@ -299,6 +334,12 @@ def test_retry_delay_backs_off_exponentially_on_rate_limit():
     assert rejudge.retry_delay(0, evidence) == 10
     assert rejudge.retry_delay(1, evidence) == 20
     assert rejudge.retry_delay(2, evidence) == 40
+
+
+def test_retry_delay_respects_retry_after_header():
+    """服务端明确要求等待时，不用固定指数退避提前再次撞限流。"""
+    assert rejudge.retry_delay(0, "Error code: 429\nretry_after=75") == 75
+    assert rejudge.retry_delay(3, "Error code: 429\nretry_after=12.5") == 12
 
 
 def test_retry_delay_caps_at_ceiling():

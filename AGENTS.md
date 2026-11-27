@@ -60,7 +60,9 @@ make oracle-selfcheck  # C01 判据自检：题目本身可不可信（0 成本�
 |---|---|
 | 代际 / `dataset_epoch` | 数据集文件 SHA256 前 16 位。跨代不判劣化，只重新基线为 `open` 并记 `rebaselined_from_epoch` |
 | `regressed` | **同一代内** `resolved → open`，即真劣化；跨代失败不算 |
-| `occurrences` | 台账里同一模型×用例累计失败次数，目前**只计数与展示**，无判据消费 |
+| `occurrences` | 台账里同一模型×用例累计失败次数；K14 消费它做 `open` + N≥3 + 无有效豁免的按 owner 报警，**不进门禁** |
+| `missed_actions` | “该做但没做”的独立观测维度（`human_confirmation` / `safety_notice`），不替代 `fail_reason` |
+| `waived` / `bypassed` | 前者是当前代有效的 Critical 人工签字豁免，后者是实际观察到的 HITL 绕过；分别记账，都不进 `failure_class` |
 | `pass^k` | 同一用例 N 次独立重复全部通过；`--repeat N` 时门禁可用它替代单次通过率 |
 | 变序采样（K08） | 第 1 次尝试用 `--seed` 原值，之后按质数步长派生新种子；否则 N 次同种子 → 稳定性虚高 |
 | `precondition_failed` | 环境故障标记：不计入模型能力分母 |

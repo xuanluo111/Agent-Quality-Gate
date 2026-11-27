@@ -11,12 +11,6 @@
   },
   "models": [
     {
-      "name": "Qwen4-Max-Preview",
-      "model": "qwen-latest-series-invite-1102",
-      "base_url": "https://qweneval.aliyuncs.com/v1",
-      "api_key_env": "QWEN_API_KEY"
-    },
-    {
       "name": "deepseek-flash",
       "model": "deepseek-flash",
       "base_url": "https://api.deepseek.com/v1",

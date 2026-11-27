@@ -54,6 +54,13 @@ def test_merge_attempts_takes_worst_and_keeps_every_outcome():
     assert (merged.run_id, merged.model) == ("run-1", "fake")
 
 
+def test_merge_attempts_unions_missed_actions():
+    first = (make_trace(), make_result(case_id="c1", missed_actions=["human_confirmation"]))
+    second = (make_trace(), make_result(case_id="c1", missed_actions=["safety_notice"]))
+    _, merged = merge_attempts([first, second])
+    assert merged.missed_actions == ["human_confirmation", "safety_notice"]
+
+
 def test_merge_attempts_all_pass_keeps_original_reason():
     _, merged = merge_attempts([(make_trace(), make_result(case_id="c1")), (make_trace(), make_result(case_id="c1"))])
     assert merged.strict_passed is True

@@ -439,6 +439,7 @@ def select_smoke(
     max_cases: int = 12,
     must_tags: Optional[List[str]] = None,
     per_tag_limit: int = 3,
+    once_tags: Optional[List[str]] = None,
 ) -> List[TestCase]:
     """挑选冒烟集。
 
@@ -446,10 +447,14 @@ def select_smoke(
     高分用例全挤掉，`--limit` 截断后快速回归就永远测不到它们。其余名额仍按特征
     打分与类别多样性补齐。
 
-    per_tag_limit 限制**单个能力家族最多占多少槽位**。没有这个上限时，一个用例数
+    `per_tag_limit` 限制**单个必备能力家族最多占多少槽位**。没有这个上限时，一个用例数
     多的家族（抽象用例扩到 10 条、又新增 3 条攻击策略用例）会把冒烟集整个吃满，
-    静默挤掉分数更高的存量用例（如 score 13 的 HITL+PII 用例）——冒烟集悄悄换了
-    内容却没人察觉。冒烟集是快速回归探针，不是全量样本：家族在 core 里仍然全覆盖。
+    静默挤掉分数更高的存量用例（如 score 13 的 HITL+PII 用例）——冒烟集是快速回归探针，
+    不是全量样本：家族在 core 里仍然全覆盖。
+
+    `once_tags` 只强制**每个 tag 一条代表**，不参与后续补齐。新增 20 条同类能力题时，
+    若把新 tag 当 must_tag，后续补齐会按 per_tag_limit 再吃满 6 个槽位，把旧的高风险
+    冒烟用例挤走；每个新能力留一条探针即可，其余由 core 全量覆盖。
     """
     def score(case: TestCase) -> tuple:
         feature = 0
@@ -468,28 +473,32 @@ def select_smoke(
     ordered = sorted(cases, key=score)
     selected: List[TestCase] = []
     required = {tag for tag in (must_tags or []) if tag}
+    once = {tag for tag in (once_tags or []) if tag} - required
     # 每个能力家族已占用的槽位数
     used: Counter = Counter()
 
     def family_tags(case: TestCase) -> List[str]:
-        return [tag for tag in case.tags if tag in required]
+        return [tag for tag in case.tags if tag in required or tag in once]
 
     def quota_exceeded(case: TestCase) -> bool:
-        """该用例是否会突破任一能力家族的槽位配额（per_tag_limit=0 表示不限）。"""
+        """该用例是否会突破必备家族配额或 once-tag 的单例配额。"""
+        tags = family_tags(case)
+        if any(used[tag] >= 1 for tag in tags if tag in once):
+            return True
         if per_tag_limit <= 0:
             return False
-        return any(used[tag] >= per_tag_limit for tag in family_tags(case))
+        return any(used[tag] >= per_tag_limit for tag in tags if tag in required)
 
     def add(case: TestCase) -> None:
         selected.append(case)
         for tag in family_tags(case):
             used[tag] += 1
 
-    if required:
+    if required or once:
         # 先按 tag 轮转，每个必备 tag 各取一条排在最前：若某类新能力用例数一多
         # （如抽象用例扩容后 10 条），按分排序会把它整个顶到头部，把其他能力
         # 挤出 smoke 前 6 条，快速回归就测不到那些能力了。
-        for tag in sorted(required):
+        for tag in sorted(required | once):
             if len(selected) >= max_cases:
                 break
             for case in ordered:
@@ -543,6 +552,40 @@ def audit_cases(cases: List[TestCase], load_report: dict | None = None) -> dict:
         "duplicates": (load_report or {}).get("duplicates", 0),
         "parse_errors": len((load_report or {}).get("parse_errors", [])),
         "validation_errors": len((load_report or {}).get("validation_errors", [])),
+    }
+
+
+def category_balance(cases: Iterable[TestCase], max_ratio: float = 3.0) -> dict:
+    """类别偏斜门禁：最大类别条数不得超过最小类别的 ``max_ratio`` 倍。
+
+    空集合无法证明平衡，按失败处理；比值保留原始整数分子分母，报告展示时再四舍五入。
+    """
+    counts = Counter(case.category for case in cases)
+    if not counts:
+        return {
+            "total": 0,
+            "by_category": {},
+            "max_category": "",
+            "min_category": "",
+            "max": 0,
+            "min": 0,
+            "ratio": None,
+            "threshold": float(max_ratio),
+            "passed": False,
+        }
+    largest = max(counts.values())
+    smallest = min(counts.values())
+    ratio = largest / smallest
+    return {
+        "total": sum(counts.values()),
+        "by_category": dict(sorted(counts.items())),
+        "max_category": max(counts, key=counts.get),
+        "min_category": min(counts, key=counts.get),
+        "max": largest,
+        "min": smallest,
+        "ratio": ratio,
+        "threshold": float(max_ratio),
+        "passed": ratio <= float(max_ratio),
     }
 
 

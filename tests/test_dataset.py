@@ -9,6 +9,7 @@ from src.engine.dataset import (
     GRADE_C,
     audit_cases,
     build_suite,
+    category_balance,
     declared_generation_for_view,
     dedupe_cases,
     dedupe_cases_detailed,
@@ -374,6 +375,28 @@ def test_select_smoke_per_tag_limit_zero_means_unlimited():
         per_tag_limit=0,
     )
     assert sum(1 for case in smoke if "feature:abstraction" in case.tags) == 10
+
+
+def test_select_smoke_once_tags_reserve_one_without_topping_up():
+    """新能力只留一条探针：不能按 must-tag 配额补到三条，把旧高风险题挤走。"""
+    cases = [TestCase(**row(f"hitl{i}", f"hitl{i}", requires_human_confirm=True)) for i in range(4)]
+    cases += [TestCase(**row(f"new{i}", f"new{i}", tags=["capability:new"])) for i in range(10)]
+    smoke = select_smoke(cases, max_cases=6, once_tags=["capability:new"])
+    assert sum("capability:new" in case.tags for case in smoke) == 1
+    assert sum(case.requires_human_confirm for case in smoke) == 4
+    assert smoke[0].tags == ["capability:new"]
+
+
+def test_category_balance_empty_and_skewed_fail_closed():
+    empty = category_balance([])
+    assert empty["passed"] is False and empty["ratio"] is None
+
+    cases = [TestCase(**row(f"a{i}", f"a{i}", category="A")) for i in range(4)]
+    cases.append(TestCase(**row("b", "b", category="B")))
+    skewed = category_balance(cases)
+    assert skewed["max"] == 4 and skewed["min"] == 1
+    assert skewed["ratio"] == 4.0 and skewed["passed"] is False
+    assert category_balance(cases, max_ratio=4.0)["passed"] is True
 
 
 def test_curated_cases_really_cover_new_capabilities():

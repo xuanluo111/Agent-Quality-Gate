@@ -28,6 +28,9 @@ DEFAULT_MUST_INCLUDE = [
     "feature:abstraction",
     "feature:attack-strategy",
 ]
+# 通用能力扩展集每个家族只留一条快速回归探针，避免 20 条同族题挤掉旧高风险用例。
+# 当前 curated 尚无这两个 tag，因此默认构建的 smoke 字节不变；T43 合并后自动生效。
+DEFAULT_SMOKE_ONCE = ["capability:data-analysis", "capability:fact-reliability"]
 
 
 def dedupe_file(path: Path) -> dict:
@@ -80,6 +83,12 @@ def main() -> int:
         nargs="*",
         default=DEFAULT_MUST_INCLUDE,
         help="这些 tag 的用例强制进 smoke 并排在最前（传空字符串取消）",
+    )
+    parser.add_argument(
+        "--smoke-once",
+        nargs="*",
+        default=DEFAULT_SMOKE_ONCE,
+        help="每个 tag 只在 smoke 中保留一条代表，不参与后续补齐（传空字符串取消）",
     )
     parser.add_argument("--manifest", default="cases/suite_manifest.json")
     parser.add_argument(
@@ -139,6 +148,7 @@ def main() -> int:
             args.max_smoke,
             must_tags=args.must_include,
             per_tag_limit=args.smoke_per_tag_limit,
+            once_tags=args.smoke_once,
         )
         write_jsonl(args.smoke, smoke)
         smoke_audit = audit_cases(smoke)

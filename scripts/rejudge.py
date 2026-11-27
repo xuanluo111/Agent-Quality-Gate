@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -59,13 +60,22 @@ def load_cases(path: Path) -> dict[str, TestCase]:
 
 
 def resolve_api_key(required: bool = True) -> str:
-    for name in ("AQG_JUDGE_API_KEY", "ZHIPUAI_API_KEY", "AQG_API_KEY"):
+    for name in ("AQG_JUDGE_API_KEY", "ZHIPUAI_API_KEY", "SENSENOVA_HH_API_KEY", "AQG_API_KEY"):
         value = (os.getenv(name) or "").strip()
         if value:
             return value
     if required:
-        raise SystemExit("缺少裁判 API Key：AQG_JUDGE_API_KEY / ZHIPUAI_API_KEY / AQG_API_KEY 都为空")
+        raise SystemExit(
+            "缺少裁判 API Key：AQG_JUDGE_API_KEY / ZHIPUAI_API_KEY / "
+            "SENSENOVA_HH_API_KEY / AQG_API_KEY 都为空"
+        )
     return ""
+
+
+def validate_thinking_mode(judge_model: str, thinking: str) -> None:
+    """glm-5.3 的 thinking 始终开启，不能注入 disabled 标记。"""
+    if str(judge_model or "").strip() == "glm-5.3" and thinking == "disabled":
+        raise ValueError("glm-5.3 的 thinking 始终开启，禁止传 thinking.type=disabled")
 
 
 def with_thinking_disabled(extra_body: dict | None) -> dict:
@@ -105,10 +115,12 @@ def build_judge(
         provenance_enabled = provenance_override
     else:
         provenance_enabled = bool(config.get("provenance_enabled", False))
+    judge_model = str(config.get("judge_model") or config.get("model") or "")
+    validate_thinking_mode(judge_model, thinking)
     return LayeredJudge(
         base_url=str(config.get("judge_base_url") or config.get("base_url") or ""),
         api_key=api_key,
-        model=str(config.get("judge_model") or config.get("model") or ""),
+        model=judge_model,
         mode=str(config.get("mode") or "enforce"),
         samples=int(config.get("judge_samples") or 2),
         jcv_threshold=float(config.get("jcv_threshold") or 0.6),
@@ -116,6 +128,8 @@ def build_judge(
         # 侧效风险等级默认 high：旧配置没声明时保持与 run_eval 一致的默认值。
         collateral_risk=str(collateral_risk_override or config.get("collateral_risk") or "high"),
         provenance_enabled=provenance_enabled,
+        reasoning_effort=str(config.get("judge_reasoning_effort") or ""),
+        stream=bool(config.get("judge_stream", False)),
         client=(
             build_thinking_off_client(
                 str(config.get("judge_base_url") or config.get("base_url") or ""), api_key
@@ -238,6 +252,10 @@ CHECKPOINT_EVERY = 20
 
 def retry_delay(attempt: int, evidence: str) -> int:
     """裁判不可用后要等多少秒：环境故障等配额窗口，其余问题等也白等。"""
+    # 服务端明确给出 Retry-After 时以它为准；固定 10/20/40 秒可能仍在同一限流窗口内。
+    match = re.search(r"\bretry_after=(\d+(?:\.\d+)?)", evidence or "", re.IGNORECASE)
+    if match:
+        return max(1, int(float(match.group(1))))
     if is_environment_error(evidence):
         return min(RATE_LIMIT_BACKOFF_CAP, RATE_LIMIT_BACKOFF_BASE * (2**attempt))
     return 1 + attempt
@@ -387,6 +405,8 @@ def build_run_meta(state: dict) -> dict:
         "judge_model": str(config.get("judge_model") or ""),
         # 思考开关会改变裁判行为与 κ，必须在报告里留痕；没传就是 default。
         "judge_thinking": str(config.get("judge_thinking") or "default"),
+        "judge_reasoning_effort": str(config.get("judge_reasoning_effort") or ""),
+        "judge_stream": bool(config.get("judge_stream", False)),
         "judge_same_as_sut": str(config.get("judge_model") or "") == model,
         "dataset": str(config.get("dataset") or ""),
         # 视图声明的代际（子集视图/探针集用它表明自己属于哪一代语料）。
@@ -653,7 +673,27 @@ def main() -> int:
         "--thinking",
         choices=["default", "disabled"],
         default="default",
-        help="裁判思考开关：glm-4.5 系列关掉快 2~3 倍，但属口径变更，必须重测 κ",
+        help="裁判思考开关：glm-4.5 系列关掉快 2~3 倍，但属口径变更，必须重测 κ；glm-5.3 禁止 disabled",
+    )
+    parser.add_argument(
+        "--judge-reasoning-effort",
+        choices=["low", "high", "max"],
+        default=None,
+        help="裁判推理强度；glm-5.3 重标建议 low，空值表示沿用 config.json",
+    )
+    parser.add_argument(
+        "--judge-stream",
+        dest="judge_stream",
+        action="store_true",
+        default=None,
+        help="裁判请求使用流式响应",
+    )
+    parser.add_argument(
+        "--no-judge-stream",
+        dest="judge_stream",
+        action="store_false",
+        default=None,
+        help="裁判请求关闭流式响应",
     )
     args = parser.parse_args()
 
@@ -670,6 +710,17 @@ def main() -> int:
         # 思考开关是口径的一部分（影响 κ），必须落到 config 里，
         # 否则 build_run_meta 写出的报告看不出本轮用的是哪一套裁判配置。
         state["config"]["judge_thinking"] = args.thinking
+        if args.judge_reasoning_effort is not None:
+            state["config"]["judge_reasoning_effort"] = args.judge_reasoning_effort
+        if args.judge_stream is not None:
+            state["config"]["judge_stream"] = args.judge_stream
+        try:
+            validate_thinking_mode(
+                state["config"].get("judge_model") or state["config"].get("model") or "",
+                args.thinking,
+            )
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
         states.append(state)
     if args.dry_run:
         print("dry-run：不调用裁判、不写盘")

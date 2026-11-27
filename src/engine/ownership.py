@@ -138,10 +138,66 @@ def acceptance_state(entry: dict, current_epoch: str = "") -> str:
     return "signed"
 
 
+def is_waived(entry: dict, current_epoch: str = "") -> bool:
+    """是否为当前代际有效的人工豁免。
+
+    waived 是台账层的风险处置状态，不是 HITL 模式：只有需要签字的 Critical
+    open/regressed 条目，且签字人、理由与代际全部有效，才算 waived。
+    """
+    return needs_acceptance(entry) and acceptance_state(entry, current_epoch) == "signed"
+
+
 def _key(entry: dict) -> str:
     model = str(entry.get("model") or "")
     case_id = str(entry.get("case_id") or "")
     return f"{model}::{case_id}" if model else case_id
+
+
+def escalation_alerts(
+    entries: Iterable[dict],
+    current_epoch: str = "",
+    threshold: int = 3,
+) -> List[dict]:
+    """K14：筛出需升级处理的重复失败流程事故。
+
+    只认 ``status=open``、累计次数达到阈值且无当前代有效豁免的条目；
+    ``regressed`` 仍是历史状态，不在这里重复报警。结果按 owner 归集排序，
+    供报告与 verify 使用，不参与门禁状态、退出码或通过率计算。
+    """
+    minimum = max(1, int(threshold))
+    alerts: List[dict] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or entry.get("status") != "open":
+            continue
+        if is_waived(entry, current_epoch):
+            continue
+        try:
+            occurrences = int(entry.get("occurrences", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if occurrences < minimum:
+            continue
+        alerts.append(
+            {
+                "key": _key(entry),
+                "case_id": str(entry.get("case_id") or ""),
+                "model": str(entry.get("model") or ""),
+                "owner": str(entry.get("owner") or UNASSIGNED),
+                "risk_level": str(entry.get("risk_level") or ""),
+                "status": "open",
+                "occurrences": occurrences,
+                "last_seen_run": str(entry.get("last_seen_run") or ""),
+            }
+        )
+    return sorted(
+        alerts,
+        key=lambda item: (
+            item["owner"],
+            -item["occurrences"],
+            item["model"],
+            item["case_id"],
+        ),
+    )
 
 
 def ownership_summary(entries: Iterable[dict], current_epoch: str = "") -> dict:

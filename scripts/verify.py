@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -461,9 +462,15 @@ def step_dataset() -> Step:
         for row in (ROOT / "cases" / "smoke.jsonl").read_text(encoding="utf-8").splitlines()
         if row.strip()
     ]
-    front = {tag for row in smoke_rows[:6] for tag in (row.get("tags") or [])}
-    if missing_capability_tags(front):
-        return Step("数据集重建", False, f"smoke 前 6 条未覆盖新能力: {sorted(front)}")
+    # T43 扩展集为两个通用能力家族各留一条 smoke 探针；前部仍需覆盖旧能力 tag。
+    # 当前扩展题尚未并入 curated，所以这里只要求旧能力 tag，不提前宣称新覆盖。
+    from scripts.build_suite import DEFAULT_MUST_INCLUDE, DEFAULT_SMOKE_ONCE
+
+    front_limit = max(6, len(DEFAULT_MUST_INCLUDE) + len(DEFAULT_SMOKE_ONCE))
+    front = {tag for row in smoke_rows[:front_limit] for tag in (row.get("tags") or [])}
+    missing_front = missing_capability_tags(front)
+    if missing_front:
+        return Step("数据集重建", False, f"smoke 前 {front_limit} 条缺少能力 tag: {missing_front}")
 
     # 重建后仍然重复 id = 去重没生效：`--suite regression` 会把同一条用例再评一遍。
     from src.engine.dataset import duplicate_id_report
@@ -488,7 +495,7 @@ def step_dataset() -> Step:
     return Step(
         "数据集重建",
         True,
-        f"core {manifest['core']['written']} 条 | smoke {manifest['smoke']['written']} 条 | 构建确定 | 新能力在 smoke 前 6 条 | id 唯一",
+        f"core {manifest['core']['written']} 条 | smoke {manifest['smoke']['written']} 条 | 构建确定 | 旧能力 tag 在 smoke 前 {front_limit} 条 | id 唯一",
     )
 
 
@@ -685,6 +692,25 @@ def step_fixture_ready() -> Step:
     return Step("C14′ fixture 预检", True, detail)
 
 
+def step_t43_expansion() -> Step:
+    """X-D10②：40 条能力题作为 T43 待合并扩展集只读验收，不重建当代 core。"""
+    from scripts.check_t43_expansion import check_t43_expansion
+
+    report = check_t43_expansion(ROOT)
+    failed = [item["name"] for item in report["checks"] if not item["ok"]]
+    balance = report["metrics"].get("projection", {}).get("balance", {})
+    oracle = report["metrics"].get("oracle", {})
+    detail = (
+        f"40 题 | 投影 {balance.get('total', 0)} 条 | max/min "
+        f"{balance.get('ratio') and round(balance['ratio'], 4)} | "
+        f"oracle 捕获 {oracle.get('mutation_caught', 0)}/{oracle.get('mutation_total', 0)} | "
+        f"正式产物零污染={'正式产物零污染' not in failed}"
+    )
+    if failed:
+        return Step("T43 能力扩展集", False, detail + " | 失败: " + "、".join(failed))
+    return Step("T43 能力扩展集", True, detail + " | 尚未并入 core")
+
+
 def step_risk_ownership() -> Step:
     """M1 责任入账：每条台账条目必须有责任角色，已签字的必须可追溯。
 
@@ -692,10 +718,11 @@ def step_risk_ownership() -> Step:
     - 派发表漏项导致 `owner=unassigned`（不允许"没人负责"静默过关）；
     - 签字无效：缺 `accept_reason` ／ 签字人不在名单 ／ 签字人就是 owner ／ 跨代未重签。
 
-    只报告：未签字的 Critical 条数。这是待办清单而不是门禁失败——把"还没签"当失败，
-    会逼出批量签字，签字随即失去意义（302 条全签等于免责模板）。
+    只报告：未签字的 Critical 条数，以及 K14 重复失败流程事故（open、N≥3、无有效豁免）。
+    这些都是待办/升级清单而不是门禁失败——把"还没签"当失败，会逼出批量签字，
+    签字随即失去意义（302 条全签等于免责模板）。
     """
-    from src.engine.ownership import assign_owner, ownership_summary
+    from src.engine.ownership import assign_owner, escalation_alerts, ownership_summary
 
     path = ROOT / "reports" / "risk_ledger.json"
     if not path.is_file():
@@ -706,12 +733,18 @@ def step_risk_ownership() -> Step:
     # 若直接读文件，旧台账会集体落成 unassigned，把"派发表漏项"和"还没回填"混为一谈。
     for entry in entries:
         assign_owner(entry)
-    summary = ownership_summary(entries, str(ledger.get("dataset_epoch") or ""))
+    current_epoch = str(ledger.get("dataset_epoch") or "")
+    summary = ownership_summary(entries, current_epoch)
     spread = " / ".join(f"{role} {n}" for role, n in summary["by_owner"].items() if n) or "（空）"
     detail = (
         f"{summary['total']} 条 · 已派发 {summary['total'] - len(summary['unassigned'])} 条 | {spread}"
         f" | 已签字 {summary['signed']} · 待签 Critical {len(summary['unsigned_critical'])}"
     )
+    incidents = escalation_alerts(entries, current_epoch)
+    if incidents:
+        by_owner = Counter(str(item.get("owner") or "unassigned") for item in incidents)
+        owners = " / ".join(f"{owner} {count}" for owner, count in sorted(by_owner.items()))
+        detail += f" | K14 重复失败流程事故 {len(incidents)} 条（仅报警：{owners}）"
     problems = []
     if summary["unassigned"]:
         problems.append(
@@ -887,6 +920,7 @@ def main() -> int:
         step_spec_leak(),
         step_case_lint(),
         step_fixture_ready(),
+        step_t43_expansion(),
         step_risk_ownership(),
         step_dry_run(),
     ]

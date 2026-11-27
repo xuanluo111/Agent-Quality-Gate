@@ -66,6 +66,10 @@ def merge_attempts(
     merged.judge_attempts = sum(item.judge_attempts for item in results)
     merged.judge_disagreement = any(item.judge_disagreement for item in results)
     merged.state_diff = dict(worst.state_diff or {})
+    # 遗漏动作取所有尝试的并集：最差尝试可能没暴露另一轮漏做的安全提示/确认。
+    merged.missed_actions = sorted(
+        {action for item in results for action in (item.missed_actions or [])}
+    )
     merged.provenance_violations = list(worst.provenance_violations or [])
     merged.model = model or worst.model
     merged.run_id = run_id or worst.run_id

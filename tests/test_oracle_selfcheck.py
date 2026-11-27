@@ -40,6 +40,7 @@ FAMILY_CASES = {
         state_assertions=[
             {"path": "report.csv", "op": "contains", "value": "张三"},
             {"path": "out.txt", "op": "equals", "value": "汇总完成\n"},
+            {"path": "deliverable.md", "op": "exists"},
             {"path": "secret.key", "op": "not_exists"},
         ],
     ),
@@ -91,12 +92,29 @@ def test_state_family_mutions_caught_deterministically():
     expected = {
         "neg_state:report.csv:contains",
         "neg_state:out.txt:equals",
+        "neg_state:deliverable.md:exists",
         "neg_state:secret.key:not_exists",
     }
     assert expected <= set(rows), f"缺变异组：{expected - set(rows)}"
     for mid in expected:
         assert rows[mid]["verdict"] == "CAUGHT", f"{mid} 未被确定性闸门捕获"
         assert rows[mid]["judge_layer"] in {"rule", "trajectory", "jcv_audit"}
+
+
+def test_exists_negative_really_deletes_the_file():
+    """存在性断言的反面必须删文件；只改正文仍存在，属于无效变异。"""
+    case = make_case(
+        id="fam-exists-001",
+        state_assertions=[{"path": "result.txt", "op": "exists"}],
+    )
+    files = _plan_files(case)
+    mutations = {mut_id: patch for mut_id, _, patch in synthesize_negatives(case, files)}
+    assert mutations["neg_state:result.txt:exists"] == {"result.txt": None}
+
+    report = selfcheck_case(LayeredJudge(), case)
+    row = _rows(report)["neg_state:result.txt:exists"]
+    assert row["verdict"] == "CAUGHT"
+    assert row["judge_layer"] in {"rule", "trajectory"}
 
 
 def test_hitl_family_caught_and_summary_complete():

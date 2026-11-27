@@ -123,6 +123,30 @@ def test_needs_acceptance_only_critical_open():
     assert not ow.needs_acceptance(make_entry(status="resolved"))
 
 
+def _signed_entry(**overrides):
+    entry = make_entry(
+        risk_accepted_by="xuanluo111",
+        accept_reason="已知风险，修复前排期接受",
+        accepted_epoch="e1",
+    )
+    entry.update(overrides)
+    return entry
+
+
+def test_is_waived_requires_valid_current_epoch_critical_acceptance():
+    assert ow.is_waived(_signed_entry(), "e1") is True
+    assert ow.is_waived(_signed_entry(status="regressed"), "e1") is True
+
+
+def test_is_waived_rejects_unsigned_invalid_expired_and_noncritical():
+    assert ow.is_waived(make_entry(), "e1") is False
+    assert ow.is_waived(_signed_entry(accepted_epoch="old"), "e1") is False
+    assert ow.is_waived(_signed_entry(risk_accepted_by="stranger"), "e1") is False
+    assert ow.is_waived(_signed_entry(risk_level="high"), "e1") is False
+    assert ow.is_waived(_signed_entry(status="resolved"), "e1") is False
+    assert ow.is_waived(_signed_entry(status="unknown"), "e1") is False
+
+
 # --------------------------------------------------------------------------
 # 汇总
 # --------------------------------------------------------------------------
@@ -140,6 +164,32 @@ def test_summary_separates_unassigned_and_invalid_from_unsigned():
     assert [item["state"] for item in summary["invalid_acceptances"]] == ["invalid_actor"]
     assert "spark-x2.5-4b::unsigned" in summary["unsigned_critical"]
     assert summary["needs_acceptance"] == 4
+
+
+def test_escalation_alerts_require_open_third_occurrence_and_no_valid_waiver():
+    entries = [
+        make_entry(case_id="alert", owner="Harness 编排层", occurrences=3),
+        make_entry(case_id="below", owner="Harness 编排层", occurrences=2),
+        make_entry(case_id="regressed", owner="Harness 编排层", occurrences=9, status="regressed"),
+        _signed_entry(case_id="waived", owner="Harness 编排层", occurrences=5),
+        _signed_entry(
+            case_id="expired",
+            owner="模型/工具调用层",
+            occurrences=4,
+            accepted_epoch="old",
+        ),
+        make_entry(case_id="bad-count", owner="Harness 编排层", occurrences="not-a-number"),
+    ]
+    alerts = ow.escalation_alerts(entries, "e1")
+    assert [item["case_id"] for item in alerts] == ["alert", "expired"]
+    assert alerts[0]["key"] == "spark-x2.5-4b::alert"
+    assert alerts[0]["occurrences"] == 3
+    assert alerts[1]["owner"] == "模型/工具调用层"
+
+
+def test_escalation_alerts_support_custom_threshold():
+    alerts = ow.escalation_alerts([make_entry(occurrences=2)], threshold=2)
+    assert len(alerts) == 1
 
 
 def test_summary_ignores_non_dict_rows():
@@ -212,6 +262,23 @@ def test_step_risk_ownership_fails_on_invalid_acceptance(monkeypatch, tmp_path):
     )
     step = verify.step_risk_ownership()
     assert not step.ok and "无效签字" in step.detail
+
+
+def test_step_risk_ownership_reports_k14_without_blocking(monkeypatch, tmp_path):
+    monkeypatch.setattr(verify, "ROOT", tmp_path)
+    (tmp_path / "reports").mkdir()
+    _write_ledger(
+        tmp_path / "reports" / "risk_ledger.json",
+        [
+            make_entry(case_id="repeat", owner="Harness 编排层", occurrences=3),
+            make_entry(case_id="waived", owner="Harness 编排层", occurrences=7,
+                       risk_accepted_by="xuanluo111", accept_reason="x", accepted_epoch="deff7501007cff61"),
+        ],
+    )
+    step = verify.step_risk_ownership()
+    assert step.ok
+    assert "K14 重复失败流程事故 1 条" in step.detail
+    assert "Harness 编排层 1" in step.detail
 
 
 def test_step_risk_ownership_passes_but_reports_unsigned_critical(monkeypatch, tmp_path):

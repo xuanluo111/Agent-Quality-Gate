@@ -146,6 +146,23 @@ def test_string_value_coerced_to_single_item_list():
     assert case.forbidden_literals == ["ACME-42"]
 
 
+def test_required_safety_notice_not_serialized_when_empty():
+    # K11：显式安全提示声明是 opt-in；空值不得进入数据集字节。
+    assert "required_safety_notice" not in _minimal_case().model_dump()
+
+
+def test_required_safety_notice_serialized_when_populated():
+    case = _minimal_case(required_safety_notice=["不可逆", "请先备份"])
+    assert case.model_dump()["required_safety_notice"] == ["不可逆", "请先备份"]
+
+
+def test_eval_result_rejects_unknown_missed_action():
+    from src.models.schema import EvalResult
+
+    with pytest.raises(ValidationError):
+        EvalResult(**_legacy_result_payload(), missed_actions=["invented_action"])
+
+
 def test_requires_abstraction_not_serialized_when_false():
     # 与 isaca_controls 同样的指纹保护：opt-in 布尔缺省 false 不得进 model_dump，
     # 否则重建会给存量用例添字段、污染 dataset_sha256。
